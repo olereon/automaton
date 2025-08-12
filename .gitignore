@@ -1,0 +1,121 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual Environment
+venv/
+env/
+ENV/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Testing
+.tox/
+.coverage
+.coverage.*
+.cache
+.pytest_cache/
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+
+# Logs
+*.log
+logs/
+*.log.*
+
+# Environment variables
+.env
+.env.local
+
+# ===========================================
+# Claude Flow / Development Infrastructure
+# ===========================================
+
+# Claude Flow executable files
+claude-flow
+claude-flow.bat
+claude-flow.ps1
+
+# Claude Flow configuration
+.claude/settings.local.json
+.mcp.json
+claude-flow.config.json
+CLAUDE.md
+
+# Claude Flow directories
+.swarm/
+.hive-mind/
+.claude-flow/
+.roo/
+.roomodes
+coordination/
+memory/claude-flow-data.json
+memory/sessions/*
+!memory/sessions/README.md
+memory/agents/*
+!memory/agents/README.md
+.claude/
+logs/
+
+# Claude Flow generated files
+hive-mind-prompt-*.txt
+*.db
+*.db-journal
+*.db-wal
+*.sqlite
+*.sqlite-journal
+*.sqlite-wal
+
+# ===========================================
+# Automaton Application Specific
+# ===========================================
+
+# Downloads directory (runtime files)
+downloads/*
+!downloads/.gitkeep
+
+# User configurations (keep examples)
+configs/*.json
+!configs/example_automation.json
+
+# Application logs
+app_logs/
+*.log.backup
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# User data
+user_data/
+sessions/
+cache/

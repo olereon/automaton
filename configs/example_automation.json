@@ -1,0 +1,14 @@
+{
+  "name": "Example Automation",
+  "url": "https://example.com",
+  "headless": false,
+  "viewport": {"width": 1280, "height": 720},
+  "actions": [
+    {
+      "type": "wait_for_element",
+      "selector": "body",
+      "timeout": 30000,
+      "description": "Wait for page load"
+    }
+  ]
+}

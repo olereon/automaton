@@ -1,0 +1,75 @@
+{
+  "name": "Example Web Automation",
+  "url": "https://example.com",
+  "headless": false,
+  "viewport": {
+    "width": 1280,
+    "height": 720
+  },
+  "actions": [
+    {
+      "type": "wait_for_element",
+      "selector": "#main-container",
+      "timeout": 30000,
+      "description": "Wait for main page to load"
+    },
+    {
+      "type": "expand_dialog",
+      "selector": "#settings-button",
+      "description": "Open settings dialog"
+    },
+    {
+      "type": "wait",
+      "value": 1000,
+      "description": "Wait for dialog animation"
+    },
+    {
+      "type": "toggle_setting",
+      "selector": "#enable-feature-checkbox",
+      "value": true,
+      "description": "Enable the feature"
+    },
+    {
+      "type": "input_text",
+      "selector": "#task-name-input",
+      "value": "Automated Task",
+      "description": "Enter task name"
+    },
+    {
+      "type": "upload_image",
+      "selector": "#file-upload-input",
+      "value": "/path/to/your/image.jpg",
+      "description": "Upload image file"
+    },
+    {
+      "type": "click_button",
+      "selector": "#start-process-button",
+      "description": "Start the processing"
+    },
+    {
+      "type": "wait",
+      "value": 5000,
+      "description": "Wait for processing to begin"
+    },
+    {
+      "type": "check_queue",
+      "selector": ".queue-item-status",
+      "value": "Completed",
+      "description": "Check if task is completed"
+    },
+    {
+      "type": "download_file",
+      "selector": ".download-result-button",
+      "description": "Download the processed file"
+    },
+    {
+      "type": "refresh_page",
+      "description": "Refresh the page"
+    },
+    {
+      "type": "switch_panel",
+      "selector": "#dashboard-tab",
+      "description": "Switch back to dashboard"
+    }
+  ]
+}

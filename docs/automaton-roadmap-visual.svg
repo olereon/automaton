@@ -1,0 +1,148 @@
+<svg viewBox="0 0 1200 800" xmlns="http://www.w3.org/2000/svg">
+  <!-- Background -->
+  <rect width="1200" height="800" fill="#f8f9fa"/>
+  
+  <!-- Title -->
+  <text x="600" y="40" font-family="Arial, sans-serif" font-size="28" font-weight="bold" text-anchor="middle" fill="#1a1a1a">
+    Web Automation Tool - Product Roadmap
+  </text>
+  
+  <!-- Timeline -->
+  <line x1="100" y1="100" x2="1100" y2="100" stroke="#ddd" stroke-width="2"/>
+  
+  <!-- Timeline markers -->
+  <g font-family="Arial, sans-serif" font-size="14" fill="#666">
+    <text x="100" y="90" text-anchor="middle">Now</text>
+    <text x="320" y="90" text-anchor="middle">Q3 2025</text>
+    <text x="540" y="90" text-anchor="middle">Q4 2025</text>
+    <text x="760" y="90" text-anchor="middle">Q1 2026</text>
+    <text x="980" y="90" text-anchor="middle">Q2 2026</text>
+    <text x="1100" y="90" text-anchor="middle">Q3 2026</text>
+  </g>
+  
+  <!-- Phase 1: Foundation Enhancement -->
+  <g transform="translate(100, 120)">
+    <rect x="0" y="0" width="200" height="140" rx="8" fill="#4CAF50" opacity="0.9"/>
+    <text x="100" y="25" font-family="Arial, sans-serif" font-size="16" font-weight="bold" text-anchor="middle" fill="white">
+      Phase 1: Foundation
+    </text>
+    <text x="10" y="45" font-family="Arial, sans-serif" font-size="12" fill="white">• Enhanced Error Handling</text>
+    <text x="10" y="65" font-family="Arial, sans-serif" font-size="12" fill="white">• Advanced Selectors</text>
+    <text x="10" y="85" font-family="Arial, sans-serif" font-size="12" fill="white">• Performance Optimization</text>
+    <text x="10" y="105" font-family="Arial, sans-serif" font-size="12" fill="white">• Debugging Tools</text>
+    <text x="100" y="130" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="white">30% ↓ Failed Automations</text>
+  </g>
+  
+  <!-- Phase 2: Intelligence Layer -->
+  <g transform="translate(320, 280)">
+    <rect x="0" y="0" width="200" height="140" rx="8" fill="#2196F3" opacity="0.9"/>
+    <text x="100" y="25" font-family="Arial, sans-serif" font-size="16" font-weight="bold" text-anchor="middle" fill="white">
+      Phase 2: Intelligence
+    </text>
+    <text x="10" y="45" font-family="Arial, sans-serif" font-size="12" fill="white">• AI Element Detection</text>
+    <text x="10" y="65" font-family="Arial, sans-serif" font-size="12" fill="white">• Natural Language</text>
+    <text x="10" y="85" font-family="Arial, sans-serif" font-size="12" fill="white">• Smart Wait Strategies</text>
+    <text x="10" y="105" font-family="Arial, sans-serif" font-size="12" fill="white">• Data Extraction AI</text>
+    <text x="100" y="130" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="white">50% ↓ Creation Time</text>
+  </g>
+  
+  <!-- Phase 3: Collaboration & Scale -->
+  <g transform="translate(540, 440)">
+    <rect x="0" y="0" width="200" height="140" rx="8" fill="#9C27B0" opacity="0.9"/>
+    <text x="100" y="25" font-family="Arial, sans-serif" font-size="16" font-weight="bold" text-anchor="middle" fill="white">
+      Phase 3: Collaboration
+    </text>
+    <text x="10" y="45" font-family="Arial, sans-serif" font-size="12" fill="white">• Team Features</text>
+    <text x="10" y="65" font-family="Arial, sans-serif" font-size="12" fill="white">• Cloud Execution</text>
+    <text x="10" y="85" font-family="Arial, sans-serif" font-size="12" fill="white">• Advanced Scheduling</text>
+    <text x="10" y="105" font-family="Arial, sans-serif" font-size="12" fill="white">• Analytics Dashboard</text>
+    <text x="100" y="130" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="white">10x ↑ Usage</text>
+  </g>
+  
+  <!-- Phase 4: Enterprise -->
+  <g transform="translate(760, 280)">
+    <rect x="0" y="0" width="200" height="140" rx="8" fill="#FF5722" opacity="0.9"/>
+    <text x="100" y="25" font-family="Arial, sans-serif" font-size="16" font-weight="bold" text-anchor="middle" fill="white">
+      Phase 4: Enterprise
+    </text>
+    <text x="10" y="45" font-family="Arial, sans-serif" font-size="12" fill="white">• Security & Compliance</text>
+    <text x="10" y="65" font-family="Arial, sans-serif" font-size="12" fill="white">• API & Integrations</text>
+    <text x="10" y="85" font-family="Arial, sans-serif" font-size="12" fill="white">• Workflow Orchestration</text>
+    <text x="10" y="105" font-family="Arial, sans-serif" font-size="12" fill="white">• Management Console</text>
+    <text x="100" y="130" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="white">200% ↑ Enterprise Adoption</text>
+  </g>
+  
+  <!-- Phase 5: Next Gen -->
+  <g transform="translate(980, 120)">
+    <rect x="0" y="0" width="200" height="140" rx="8" fill="#607D8B" opacity="0.9"/>
+    <text x="100" y="25" font-family="Arial, sans-serif" font-size="16" font-weight="bold" text-anchor="middle" fill="white">
+      Phase 5: Next Gen
+    </text>
+    <text x="10" y="45" font-family="Arial, sans-serif" font-size="12" fill="white">• Cognitive Automation</text>
+    <text x="10" y="65" font-family="Arial, sans-serif" font-size="12" fill="white">• Cross-App Support</text>
+    <text x="10" y="85" font-family="Arial, sans-serif" font-size="12" fill="white">• Advanced AI</text>
+    <text x="10" y="105" font-family="Arial, sans-serif" font-size="12" fill="white">• Plugin Ecosystem</text>
+    <text x="100" y="130" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="white">Market Leader Position</text>
+  </g>
+  
+  <!-- Current State Box -->
+  <g transform="translate(40, 620)">
+    <rect x="0" y="0" width="250" height="120" rx="8" fill="#fff" stroke="#ddd" stroke-width="2"/>
+    <text x="125" y="25" font-family="Arial, sans-serif" font-size="16" font-weight="bold" text-anchor="middle" fill="#333">
+      Current State (MVP)
+    </text>
+    <text x="10" y="45" font-family="Arial, sans-serif" font-size="12" fill="#666">✓ Dual Interface (GUI + CLI)</text>
+    <text x="10" y="65" font-family="Arial, sans-serif" font-size="12" fill="#666">✓ Core Action System</text>
+    <text x="10" y="85" font-family="Arial, sans-serif" font-size="12" fill="#666">✓ Configuration Management</text>
+    <text x="10" y="105" font-family="Arial, sans-serif" font-size="12" fill="#666">✓ Async Execution Engine</text>
+  </g>
+  
+  <!-- Key Metrics Box -->
+  <g transform="translate(320, 620)">
+    <rect x="0" y="0" width="250" height="120" rx="8" fill="#fff" stroke="#ddd" stroke-width="2"/>
+    <text x="125" y="25" font-family="Arial, sans-serif" font-size="16" font-weight="bold" text-anchor="middle" fill="#333">
+      Target Metrics (Year 1)
+    </text>
+    <text x="10" y="45" font-family="Arial, sans-serif" font-size="12" fill="#666">• 10,000 Monthly Active Users</text>
+    <text x="10" y="65" font-family="Arial, sans-serif" font-size="12" fill="#666">• 95% Success Rate</text>
+    <text x="10" y="85" font-family="Arial, sans-serif" font-size="12" fill="#666">• 10 hrs/week Time Saved</text>
+    <text x="10" y="105" font-family="Arial, sans-serif" font-size="12" fill="#666">• 5x ROI in 6 months</text>
+  </g>
+  
+  <!-- Innovation Focus Box -->
+  <g transform="translate(600, 620)">
+    <rect x="0" y="0" width="250" height="120" rx="8" fill="#fff" stroke="#ddd" stroke-width="2"/>
+    <text x="125" y="25" font-family="Arial, sans-serif" font-size="16" font-weight="bold" text-anchor="middle" fill="#333">
+      Innovation Focus
+    </text>
+    <text x="10" y="45" font-family="Arial, sans-serif" font-size="12" fill="#666">🤖 AI-Powered Automation</text>
+    <text x="10" y="65" font-family="Arial, sans-serif" font-size="12" fill="#666">☁️ Cloud-Native Architecture</text>
+    <text x="10" y="85" font-family="Arial, sans-serif" font-size="12" fill="#666">👥 Collaborative Workflows</text>
+    <text x="10" y="105" font-family="Arial, sans-serif" font-size="12" fill="#666">🔌 Extensible Platform</text>
+  </g>
+  
+  <!-- User Impact Box -->
+  <g transform="translate(880, 620)">
+    <rect x="0" y="0" width="280" height="120" rx="8" fill="#fff" stroke="#ddd" stroke-width="2"/>
+    <text x="140" y="25" font-family="Arial, sans-serif" font-size="16" font-weight="bold" text-anchor="middle" fill="#333">
+      User Experience Evolution
+    </text>
+    <text x="10" y="45" font-family="Arial, sans-serif" font-size="12" fill="#666">Today: Manual configuration</text>
+    <text x="10" y="65" font-family="Arial, sans-serif" font-size="12" fill="#666">Phase 2: Natural language creation</text>
+    <text x="10" y="85" font-family="Arial, sans-serif" font-size="12" fill="#666">Phase 3: Team collaboration</text>
+    <text x="10" y="105" font-family="Arial, sans-serif" font-size="12" fill="#666">Phase 5: Self-optimizing automation</text>
+  </g>
+  
+  <!-- Connection lines -->
+  <g stroke="#ddd" stroke-width="2" fill="none">
+    <path d="M 200 260 Q 250 340 320 350" stroke-dasharray="5,5"/>
+    <path d="M 420 420 Q 480 500 540 510" stroke-dasharray="5,5"/>
+    <path d="M 640 580 Q 700 500 760 420" stroke-dasharray="5,5"/>
+    <path d="M 860 420 Q 920 340 980 260" stroke-dasharray="5,5"/>
+  </g>
+  
+  <!-- Legend -->
+  <g transform="translate(50, 50)">
+    <text x="0" y="0" font-family="Arial, sans-serif" font-size="12" fill="#666">📊 Each phase builds on previous capabilities</text>
+  </g>
+</svg>
