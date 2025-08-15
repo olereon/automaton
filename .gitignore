@@ -85,14 +85,6 @@ memory/agents/*
 .claude/
 logs/
 
-# Claude Flow generated files
-hive-mind-prompt-*.txt
-*.db
-*.db-journal
-*.db-wal
-*.sqlite
-*.sqlite-journal
-*.sqlite-wal
 
 # ===========================================
 # Automaton Application Specific
@@ -102,9 +94,21 @@ hive-mind-prompt-*.txt
 downloads/*
 !downloads/.gitkeep
 
-# User configurations (keep examples)
+# User configurations and workflows (keep examples)
 configs/*.json
 !configs/example_automation.json
+
+# User workflow files (contain credentials and personal automations)
+workflows/
+!workflows/.gitkeep
+!workflows/README.md
+
+# Security-related files
+*.backup
+.automaton/
+*credentials*
+*secret*
+*password*
 
 # Application logs
 app_logs/
@@ -119,3 +123,28 @@ temp/
 user_data/
 sessions/
 cache/
+
+# Claude Flow generated files
+.claude/settings.local.json
+.mcp.json
+claude-flow.config.json
+.swarm/
+.hive-mind/
+memory/claude-flow-data.json
+memory/sessions/*
+!memory/sessions/README.md
+memory/agents/*
+!memory/agents/README.md
+coordination/memory_bank/*
+coordination/subtasks/*
+coordination/orchestration/*
+*.db
+*.db-journal
+*.db-wal
+*.sqlite
+*.sqlite-journal
+*.sqlite-wal
+claude-flow
+claude-flow.bat
+claude-flow.ps1
+hive-mind-prompt-*.txt

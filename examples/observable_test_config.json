@@ -1,0 +1,67 @@
+{
+  "name": "Observable Test - DuckDuckGo Search",
+  "url": "https://duckduckgo.com",
+  "headless": false,
+  "viewport": {
+    "width": 1280,
+    "height": 720
+  },
+  "actions": [
+    {
+      "type": "wait_for_element",
+      "selector": "input[name='q']",
+      "value": null,
+      "timeout": 10000,
+      "description": "Wait for search box to appear"
+    },
+    {
+      "type": "wait",
+      "selector": null,
+      "value": 2000,
+      "timeout": 30000,
+      "description": "Pause to observe the homepage"
+    },
+    {
+      "type": "click_button",
+      "selector": "input[name='q']",
+      "value": null,
+      "timeout": 30000,
+      "description": "Click on the search box"
+    },
+    {
+      "type": "input_text",
+      "selector": "input[name='q']",
+      "value": "web automation testing",
+      "timeout": 30000,
+      "description": "Type search term slowly"
+    },
+    {
+      "type": "wait",
+      "selector": null,
+      "value": 3000,
+      "timeout": 30000,
+      "description": "Pause to see the typed text"
+    },
+    {
+      "type": "click_button",
+      "selector": "button[type='submit']",
+      "value": null,
+      "timeout": 30000,
+      "description": "Click search button"
+    },
+    {
+      "type": "wait_for_element",
+      "selector": ".results",
+      "value": null,
+      "timeout": 15000,
+      "description": "Wait for search results to load"
+    },
+    {
+      "type": "wait",
+      "selector": null,
+      "value": 5000,
+      "timeout": 30000,
+      "description": "Pause to observe search results"
+    }
+  ]
+}

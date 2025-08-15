@@ -1,0 +1,43 @@
+{
+  "name": "Initial-check",
+  "url": "https://wan.video/generate",
+  "headless": false,
+  "viewport": {
+    "width": 1280,
+    "height": 720
+  },
+  "actions": [
+    {
+      "type": "click_button",
+      "selector": "div.sc-ldQIZo",
+      "value": null,
+      "timeout": 30000,
+      "description": "click-Setting"
+    },
+    {
+      "type": "wait",
+      "selector": null,
+      "value": 1000,
+      "timeout": 30000,
+      "description": "small-wait"
+    },
+    {
+      "type": "check_element",
+      "selector": ".sc-eDOMzu.gfvVdd",
+      "value": {
+        "check": "equals",
+        "value": "0",
+        "attribute": "text"
+      },
+      "timeout": 30000,
+      "description": "Check credit cost"
+    },
+    {
+      "type": "click_button",
+      "selector": "div.sc-ldQIZo.svrvo > div.sc-eDOMzu.gfvVdd > span",
+      "value": null,
+      "timeout": 30000,
+      "description": "click-submit"
+    }
+  ]
+}

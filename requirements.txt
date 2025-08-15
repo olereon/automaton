@@ -19,3 +19,9 @@ flake8>=6.0.0
 python-dotenv>=1.0.0  # For environment variables
 requests>=2.31.0      # For API integrations
 pillow>=10.0.0       # For image processing
+
+# Security dependencies
+cryptography>=41.0.0  # For secure credential storage
+
+# Performance monitoring
+psutil>=5.9.0  # For system resource monitoring

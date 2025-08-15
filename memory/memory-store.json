@@ -1,0 +1,10 @@
+{
+  "default": [
+    {
+      "key": "initial",
+      "value": "value",
+      "namespace": "default",
+      "timestamp": 1755034035628
+    }
+  ]
+}

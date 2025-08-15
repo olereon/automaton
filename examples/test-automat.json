@@ -1,0 +1,100 @@
+{
+  "name": "User Website Login",
+  "url": "https://wan.video/generate",
+  "headless": false,
+  "viewport": {
+    "width": 1280,
+    "height": 720
+  },
+  "actions": [
+    {
+      "type": "wait_for_element",
+      "selector": "input[placeholder=\"Email address\"]",
+      "value": null,
+      "timeout": 10000,
+      "description": "Wait for email input field to appear"
+    },
+    {
+      "type": "click_button",
+      "selector": "input[placeholder=\"Email address\"]",
+      "value": null,
+      "timeout": 10000,
+      "description": "Click on email field to focus it"
+    },
+    {
+      "type": "input_text",
+      "selector": "input[placeholder=\"Email address\"]",
+      "value": "shyraoleg@outlook.com",
+      "timeout": 10000,
+      "description": "Enter email address"
+    },
+    {
+      "type": "click_button",
+      "selector": "input[type=\"password\"]",
+      "value": null,
+      "timeout": 10000,
+      "description": "Click on password field to focus it"
+    },
+    {
+      "type": "input_text",
+      "selector": "input[type=\"password\"]",
+      "value": "Wanv!de025",
+      "timeout": 10000,
+      "description": "Enter password"
+    },
+    {
+      "type": "wait",
+      "selector": null,
+      "value": 1000,
+      "timeout": 30000,
+      "description": "Brief pause before clicking login"
+    },
+    {
+      "type": "click_button",
+      "selector": "button:has-text(\"Log in\")[type=\"submit\"]",
+      "value": null,
+      "timeout": 10000,
+      "description": "Click the login submit button"
+    },
+    {
+      "type": "wait",
+      "selector": null,
+      "value": 3000,
+      "timeout": 30000,
+      "description": "Wait for login to complete"
+    },
+    {
+      "type": "check_element",
+      "selector": "div.sc-ldQIZo.svrvo > div.sc-eDOMzu.gfvVdd > span",
+      "value": {
+        "check": "equals",
+        "value": "0",
+        "attribute": "text"
+      },
+      "timeout": 30000,
+      "description": "Check credit cost"
+    },
+    {
+      "type": "conditional_wait",
+      "selector": null,
+      "value": {
+        "condition": "check_failed",
+        "wait_time": 5000,
+        "max_retries": 2,
+        "retry_from_action": 0
+      },
+      "timeout": 30000,
+      "description": "Wait if not 0"
+    },
+    {
+      "type": "skip_if",
+      "selector": null,
+      "value": {
+        "condition": "check_passed",
+        "skip_count": 2
+      },
+      "timeout": 30000,
+      "description": "Skip if not 0"
+    }
+  ]
+}
