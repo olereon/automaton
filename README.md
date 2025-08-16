@@ -14,17 +14,32 @@ A lightweight and fast automation tool for executing repetitive web tasks with b
 
 ## Supported Actions
 
-- **Expand Dialog**: Click to expand dialogs or panels
-- **Input Text**: Fill text fields
+### Basic Actions
+- **Input Text**: Fill text fields with dynamic content
+- **Click Button**: Click any button or interactive element
 - **Upload Image**: Upload files to web forms
 - **Toggle Settings**: Check/uncheck checkboxes and switches
-- **Click Button**: Click any button element
-- **Check Queue**: Monitor task queues for completion
-- **Download File**: Download files when ready
-- **Refresh Page**: Reload the current page
-- **Switch Panel**: Navigate between different panels/tabs
 - **Wait**: Pause for specified duration
 - **Wait for Element**: Wait for elements to appear
+- **Refresh Page**: Reload the current page
+
+### Advanced Actions
+- **Check Element**: Validate element content with conditions (equals, less, greater)
+- **Set Variable**: Store values for use in other actions
+- **Increment Variable**: Increase numeric variables
+- **Log Message**: Record automation progress and debugging info
+
+### Flow Control
+- **IF/ELIF/ELSE**: Conditional execution based on check results
+- **WHILE Loops**: Repeat actions while conditions are met
+- **BREAK/CONTINUE**: Control loop execution
+- **Conditional Wait**: Retry actions with backoff strategies
+- **Skip If**: Skip actions based on conditions
+
+### Queue Management
+- **Queue Detection**: Monitor task queues with multiple detection strategies
+- **Queue Capacity Checking**: Ensure queue space before adding tasks
+- **Automated Task Creation**: Create multiple tasks until capacity is reached
 
 ## Installation
 
@@ -111,17 +126,53 @@ sequence = (builder
 builder.save_to_file("form_automation.json")
 ```
 
-### Example 2: File Processing Automation
+### Example 2: Queue Management with While Loop
 
 ```python
+# Automated queue management - create tasks until queue is full
 sequence = (builder
-    .add_expand_dialog("#upload-dialog")
+    .add_set_variable("max_tasks", "8")
+    .add_set_variable("task_count", "0")
+    
+    # Navigate to queue view
+    .add_click_button("[data-test-id='sidebar-menuitem-button-Favorites']")
+    .add_wait(2000)
+    
+    # Check initial queue status
+    .add_check_element(
+        selector=".sc-dMmcxd.cZTIpi",
+        check_type="less",
+        expected_value="${max_tasks}",
+        attribute="text"
+    )
+    
+    # WHILE loop - continue until queue is full
+    .add_while_begin("check_passed")
+    
+    # Create new task
+    .add_click_button(".creation-button")
     .add_upload_image("#file-input", "/path/to/image.jpg")
-    .add_toggle_setting("#enhance-option", True)
-    .add_click_button("#start-process")
-    .add_wait(5000)  # Wait 5 seconds
-    .add_check_queue(".queue-item", "Completed")
-    .add_download_file(".download-btn")
+    .add_input_text("#prompt-field", "Create amazing content")
+    .add_click_button("#submit-button")
+    .add_increment_variable("task_count", 1)
+    
+    # Check queue status again
+    .add_click_button("[data-test-id='sidebar-menuitem-button-Favorites']")
+    .add_wait(2000)
+    .add_check_element(
+        selector=".sc-dMmcxd.cZTIpi",
+        check_type="less",
+        expected_value="${max_tasks}",
+        attribute="text"
+    )
+    
+    # Exit if queue is full
+    .add_if_begin("check_failed")
+    .add_log_message("Queue is full - stopping automation", "logs/automation.log")
+    .add_break()
+    .add_if_end()
+    
+    .add_while_end()
     .build()
 )
 ```
@@ -156,6 +207,36 @@ Automation configurations are stored as JSON files:
       "type": "click_button",
       "selector": "#search-button",
       "description": "Click search"
+    },
+    {
+      "type": "check_element",
+      "selector": ".queue-counter",
+      "value": {
+        "check": "less",
+        "value": "8",
+        "attribute": "text"
+      },
+      "description": "Check if queue has space"
+    },
+    {
+      "type": "while_begin",
+      "value": {
+        "condition": "check_passed"
+      },
+      "description": "Loop while queue has space"
+    },
+    {
+      "type": "log_message",
+      "value": {
+        "message": "Creating task - queue has space",
+        "log_file": "logs/automation.log"
+      },
+      "description": "Log task creation"
+    },
+    {
+      "type": "while_end",
+      "value": {},
+      "description": "End while loop"
     }
   ]
 }
@@ -214,12 +295,12 @@ automation convert -i input.json -o output.yaml
 
 ## Advanced Usage
 
-### Custom Action Sequences
+### Complex Automation with Flow Control
 
-Create complex workflows by chaining actions:
+Create sophisticated workflows with conditional logic and loops:
 
 ```python
-# Login -> Navigate -> Process -> Download
+# Advanced automation with queue management and error handling
 sequence = (builder
     # Login flow
     .add_input_text("#username", "user@example.com")
@@ -227,19 +308,102 @@ sequence = (builder
     .add_click_button("#login-btn")
     .add_wait_for_element("#dashboard")
     
-    # Navigate to tool
-    .add_switch_panel("#tools-tab")
-    .add_click_button("#processor-tool")
+    # Initialize variables
+    .add_set_variable("max_attempts", "5")
+    .add_set_variable("current_attempt", "0")
+    .add_set_variable("queue_capacity", "8")
     
-    # Process files
+    # Check queue status with retry logic
+    .add_while_begin("check_passed")  # Retry loop
+    .add_increment_variable("current_attempt", 1)
+    
+    # Navigate to queue view
+    .add_click_button("[data-test-id='sidebar-menuitem-button-Favorites']")
+    .add_wait(2000)
+    
+    # Check if queue has space
+    .add_check_element(
+        selector=".queue-counter",
+        check_type="less",
+        expected_value="${queue_capacity}",
+        attribute="text"
+    )
+    
+    # If queue has space, create task
+    .add_if_begin("check_passed")
+    .add_log_message("Queue has space - creating task", "logs/automation.log")
+    .add_click_button(".creation-button")
     .add_upload_image("#file-upload", "image.jpg")
     .add_toggle_setting("#high-quality", True)
-    .add_click_button("#process-btn")
+    .add_input_text("#prompt", "Generate amazing content")
+    .add_click_button("#submit-btn")
+    .add_break()  # Exit retry loop on success
+    .add_if_end()
     
-    # Wait and download
-    .add_wait(10000)
-    .add_check_queue(".task-status", "Complete")
-    .add_download_file("#download-result")
+    # If queue is full, wait and retry
+    .add_if_begin("check_failed")
+    .add_log_message("Queue full - waiting before retry", "logs/automation.log")
+    .add_conditional_wait(
+        condition="check_failed",
+        wait_time=30000,  # Wait 30 seconds
+        max_retries=3
+    )
+    .add_if_end()
+    
+    # Check if max attempts reached
+    .add_check_element(
+        selector="body",  # Dummy check to use variable comparison
+        check_type="greater",
+        expected_value="${max_attempts}",
+        attribute="data-attempts"
+    )
+    .add_if_begin("check_passed")
+    .add_log_message("Max attempts reached - stopping", "logs/automation.log")
+    .add_break()
+    .add_if_end()
+    
+    .add_while_end()
+    .build()
+)
+```
+
+### Variable Management and Dynamic Content
+
+```python
+# Using variables for dynamic automation
+sequence = (builder
+    # Set up automation parameters
+    .add_set_variable("task_prefix", "Automation Task")
+    .add_set_variable("task_number", "1")
+    .add_set_variable("total_tasks", "0")
+    
+    # Create multiple tasks with dynamic names
+    .add_while_begin("check_passed")
+    
+    # Create task with dynamic title
+    .add_input_text("#task-title", "${task_prefix} #${task_number}")
+    .add_input_text("#description", "Automated task created on $(date)")
+    .add_click_button("#create-task")
+    
+    # Update counters
+    .add_increment_variable("task_number", 1)
+    .add_increment_variable("total_tasks", 1)
+    
+    # Log progress
+    .add_log_message(
+        "Created task ${task_number} - Total: ${total_tasks}",
+        "logs/task_creation.log"
+    )
+    
+    # Check if we should continue (example: stop at 5 tasks)
+    .add_check_element(
+        selector=".task-counter",
+        check_type="less",
+        expected_value="5",
+        attribute="text"
+    )
+    
+    .add_while_end()
     .build()
 )
 ```
@@ -282,12 +446,30 @@ asyncio.run(main())
 
 ## Tips for Reliable Automation
 
+### Selector Best Practices
 1. **Use Specific Selectors**: Prefer IDs and unique classes over generic selectors
-2. **Add Wait Actions**: Allow time for page loads and dynamic content
-3. **Test Selectors**: Use browser DevTools to verify selectors work
-4. **Handle Timing**: Use `wait_for_element` before interacting with dynamic content
-5. **Error Recovery**: Use `--continue-on-error` for non-critical actions
-6. **Debugging**: Run with `--show-browser` to see what's happening
+2. **Test Selectors**: Use browser DevTools to verify selectors work
+3. **Avoid Fragile Selectors**: Don't rely on deep nested structures that may change
+4. **Use data-test-id**: Prefer test-specific attributes when available
+
+### Timing and Synchronization
+5. **Add Wait Actions**: Allow time for page loads and dynamic content
+6. **Handle Timing**: Use `wait_for_element` before interacting with dynamic content
+7. **Queue Detection**: Use multiple detection strategies for reliable queue monitoring
+8. **Element Attribute Matching**: Use correct attributes (`text` for DIV content, `value` for inputs)
+
+### Flow Control and Error Handling
+9. **Conditional Logic**: Use IF/ELSE blocks for robust error handling
+10. **While Loops**: Implement retry logic with proper exit conditions
+11. **Variable Management**: Store state information for complex workflows
+12. **Break Conditions**: Always provide exit strategies for loops
+13. **Logging**: Add comprehensive logging for debugging and monitoring
+
+### Debugging and Development
+14. **Error Recovery**: Use `--continue-on-error` for non-critical actions
+15. **Debugging**: Run with `--show-browser` to see what's happening
+16. **Test Incrementally**: Build and test automations step by step
+17. **Use Log Files**: Monitor automation progress with detailed logging
 
 ## Performance Optimization
 
