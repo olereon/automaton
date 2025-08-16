@@ -39,6 +39,7 @@ try:
 except ImportError:
     print("Warning: Could not import automation modules. CLI-only mode activated.")
     WebAutomationEngine = None
+    AutomationSequenceBuilder = None
 
 
 class AutomationResult(Enum):
@@ -61,7 +62,7 @@ class AutomationRun:
     attempt_number: int = 1
     total_duration: Optional[float] = None
 
-    def finish(self, result: AutomationResult, tasks_created: int = 0, error_message: str = None):
+    def finish(self, result: AutomationResult, tasks_created: int = 0, error_message: Optional[str] = None):
         """Mark run as finished with results"""
         self.end_time = datetime.now()
         self.result = result
@@ -93,14 +94,14 @@ class AutomationScheduler:
         self.setup_logging()
 
     def setup_logging(self):
-        """Setup logging configuration"""
+        """Setup minimal logging configuration"""
         # Create logs directory if it doesn't exist
         log_path = Path(self.config.log_file)
         log_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # Configure logging
+        # Configure minimal logging - only errors and final results
         logging.basicConfig(
-            level=logging.INFO if self.config.verbose else logging.WARNING,
+            level=logging.ERROR,
             format='%(asctime)s - %(levelname)s - %(message)s',
             handlers=[
                 logging.FileHandler(self.config.log_file),
@@ -121,8 +122,6 @@ class AutomationScheduler:
                 "-c", config_file,
                 "--show-browser"  # For debugging
             ]
-
-            self.logger.info(f"Executing CLI command: {' '.join(cmd)}")
 
             # Run automation with timeout
             process = await asyncio.create_subprocess_exec(
@@ -146,9 +145,9 @@ class AutomationScheduler:
             stdout_text = stdout.decode('utf-8') if stdout else ""
             stderr_text = stderr.decode('utf-8') if stderr else ""
 
-            self.logger.info(f"CLI stdout: {stdout_text}")
+            # Only log errors
             if stderr_text:
-                self.logger.warning(f"CLI stderr: {stderr_text}")
+                self.logger.error(f"CLI automation error: {stderr_text}")
 
             # Extract task count from output (look for success indicators)
             tasks_created = self._extract_task_count(stdout_text)
@@ -182,6 +181,9 @@ class AutomationScheduler:
                 config_data = json.load(f)
 
             # Build automation sequence
+            if AutomationSequenceBuilder is None:
+                return AutomationResult.ERROR, 0, "Automation modules not available"
+            
             builder = AutomationSequenceBuilder.from_dict(config_data)
             automation_config = builder.build()
 
@@ -237,8 +239,7 @@ class AutomationScheduler:
                     max_count = max(max_count, max(numbers))
             
             return max_count
-        except Exception as e:
-            self.logger.warning(f"Could not extract task count: {e}")
+        except Exception:
             return 0
 
     def _extract_task_count_from_results(self, results: Dict[str, Any]) -> int:
@@ -263,8 +264,7 @@ class AutomationScheduler:
                 task_count = max(task_count, len(creation_actions))
             
             return task_count
-        except Exception as e:
-            self.logger.warning(f"Could not extract task count from results: {e}")
+        except Exception:
             return 0
 
     async def run_single_automation(self, config_file: str, attempt: int = 1) -> AutomationRun:
@@ -274,8 +274,6 @@ class AutomationScheduler:
             start_time=datetime.now(),
             attempt_number=attempt
         )
-
-        self.logger.info(f"🚀 Starting automation: {config_file} (attempt {attempt})")
 
         try:
             # Choose execution method
@@ -291,11 +289,9 @@ class AutomationScheduler:
             # Record results
             run.finish(result, tasks_created, message)
             
-            # Log results
-            if result == AutomationResult.SUCCESS:
-                self.logger.info(f"✅ SUCCESS: {config_file} - {tasks_created} tasks created")
-            else:
-                self.logger.warning(f"❌ {result.value.upper()}: {config_file} - {message}")
+            # Only log errors
+            if result != AutomationResult.SUCCESS:
+                self.logger.error(f"❌ {result.value.upper()}: {config_file} - {message}")
 
         except Exception as e:
             run.finish(AutomationResult.ERROR, 0, str(e))

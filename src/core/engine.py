@@ -11,6 +11,8 @@ from enum import Enum
 import logging
 
 from playwright.async_api import async_playwright, Page, Browser, ElementHandle
+import re
+import os
 
 # Configure logging first
 logging.basicConfig(level=logging.INFO)
@@ -33,6 +35,11 @@ try:
 except ImportError:
     PERFORMANCE_MONITORING_AVAILABLE = False
     logger.warning("Performance monitoring not available")
+
+
+class SecurityError(Exception):
+    """Custom exception for security violations"""
+    pass
 
 
 class BlockInfo:
@@ -674,8 +681,10 @@ class WebAutomationEngine:
                 
                 if file_input:
                     logger.info(f"Found file input: {file_input}")
+                    # Validate file path for security
+                    validated_path = self._validate_upload_path(action.value)
                     await self.page.set_input_files(
-                        file_input, action.value, timeout=action.timeout
+                        file_input, validated_path, timeout=action.timeout
                     )
                 else:
                     # Fallback: Click the element to trigger file dialog, then handle it
@@ -690,7 +699,9 @@ class WebAutomationEngine:
                             # Click using the original selector
                             await self.page.click(action.selector, timeout=action.timeout)
                         file_chooser = await fc_info.value
-                        await file_chooser.set_files(action.value)
+                        # Validate file path for security
+                        validated_path = self._validate_upload_path(action.value)
+                        await file_chooser.set_files(validated_path)
             elif action.type == ActionType.TOGGLE_SETTING:
                 element = await self.page.query_selector(action.selector)
                 if element:
@@ -1019,8 +1030,15 @@ class WebAutomationEngine:
                     await self.page.click(action.selector)
 
                 download = await download_info.value
-                # Save to downloads folder
-                download_path = Path("downloads") / download.suggested_filename
+                # Save to downloads folder with path validation
+                safe_filename = self._sanitize_filename(download.suggested_filename)
+                downloads_dir = Path("downloads").resolve()
+                download_path = downloads_dir / safe_filename
+                
+                # Validate path is within downloads directory (prevent traversal)
+                if not str(download_path.resolve()).startswith(str(downloads_dir)):
+                    raise SecurityError(f"Path traversal attempt detected: {download.suggested_filename}")
+                
                 download_path.parent.mkdir(exist_ok=True)
                 await download.save_as(download_path)
                 logger.info(f"Downloaded file to: {download_path}")
@@ -1268,20 +1286,27 @@ class WebAutomationEngine:
                 logger.info("Alternative page.click() succeeded")
             except Exception as e2:
                 logger.error(f"Alternative page.click() also failed: {str(e2)}")
-                # Try JavaScript click as last resort
+                # Try JavaScript click as last resort with safe selector
                 try:
-                    logger.info(f"Trying JavaScript click for: {selector}")
+                    # Sanitize selector to prevent JavaScript injection
+                    safe_selector = self._sanitize_css_selector(selector)
+                    logger.info(f"Trying JavaScript click for: {safe_selector}")
+                    
+                    # Use parameterized evaluation instead of string interpolation
                     await asyncio.wait_for(
                         self.page.evaluate(
-                            f"""
-                            const element = document.querySelector('{selector}');
-                            if (element) {{
-                                element.click();
-                                console.log('JavaScript click executed');
-                            }} else {{
-                                throw new Error('Element not found for JavaScript click');
-                            }}
-                        """
+                            """
+                            (selector) => {
+                                const element = document.querySelector(selector);
+                                if (element) {
+                                    element.click();
+                                    console.log('JavaScript click executed');
+                                } else {
+                                    throw new Error('Element not found for JavaScript click');
+                                }
+                            }
+                            """,
+                            safe_selector
                         ),
                         timeout=5.0,
                     )
@@ -1959,6 +1984,98 @@ class WebAutomationEngine:
                     return i  # Return to the WHILE_BEGIN
                 depth -= 1
         return 0  # Fallback to beginning
+    
+    def _sanitize_filename(self, filename: str) -> str:
+        """Sanitize filename to prevent path traversal attacks"""
+        if not filename:
+            return "download"
+        
+        # Remove path separators and dangerous characters
+        sanitized = re.sub(r'[<>:"/\\|?*\x00]', '_', filename)  # Include null bytes
+        sanitized = re.sub(r'\.\.', '_', sanitized)  # Remove .. sequences
+        sanitized = sanitized.strip('. ')  # Remove leading/trailing dots and spaces
+        
+        # Handle Windows reserved names
+        windows_reserved = {'con', 'prn', 'aux', 'nul', 'com1', 'com2', 'com3', 'com4', 
+                           'com5', 'com6', 'com7', 'com8', 'com9', 'lpt1', 'lpt2', 
+                           'lpt3', 'lpt4', 'lpt5', 'lpt6', 'lpt7', 'lpt8', 'lpt9'}
+        name_without_ext = os.path.splitext(sanitized)[0].lower()
+        if name_without_ext in windows_reserved:
+            sanitized = f"safe_{sanitized}"
+        
+        # Ensure filename is not empty after sanitization
+        if not sanitized:
+            return "download"
+        
+        # Limit filename length
+        if len(sanitized) > 255:
+            name, ext = os.path.splitext(sanitized)
+            sanitized = name[:250] + ext
+        
+        return sanitized
+    
+    def _sanitize_css_selector(self, selector: str) -> str:
+        """Sanitize CSS selector to prevent JavaScript injection"""
+        if not selector:
+            raise SecurityError("Empty selector not allowed")
+        
+        # Basic CSS selector validation - only allow safe characters (include single quotes)
+        safe_pattern = re.compile(r'^[a-zA-Z0-9\-_#.\[\]:="\'\s,>+~()]+$')
+        if not safe_pattern.match(selector):
+            raise SecurityError(f"Invalid characters in selector: {selector}")
+        
+        # Remove potentially dangerous patterns
+        dangerous_patterns = [
+            r'javascript:',
+            r'expression\(',
+            r'vbscript:',
+            r'on\w+\s*=',
+            r'<script',
+            r'</script',
+        ]
+        
+        for pattern in dangerous_patterns:
+            if re.search(pattern, selector, re.IGNORECASE):
+                raise SecurityError(f"Dangerous pattern detected in selector: {selector}")
+        
+        return selector
+    
+    def _validate_upload_path(self, file_path: str) -> str:
+        """Validate file upload path for security"""
+        if not file_path:
+            raise SecurityError("Empty file path not allowed")
+        
+        file_path_obj = Path(file_path)
+        
+        # Check if file exists
+        if not file_path_obj.exists():
+            raise SecurityError(f"File does not exist: {file_path}")
+        
+        # Check if it's actually a file (not directory)
+        if not file_path_obj.is_file():
+            raise SecurityError(f"Path is not a file: {file_path}")
+        
+        # Validate file extension (whitelist approach)
+        allowed_extensions = {
+            '.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp',  # Images
+            '.pdf', '.doc', '.docx', '.txt', '.rtf',  # Documents
+            '.mp4', '.avi', '.mov', '.wmv', '.flv',  # Videos
+            '.mp3', '.wav', '.ogg', '.m4a',  # Audio
+            '.zip', '.rar', '.7z', '.tar', '.gz',  # Archives
+            '.csv', '.xlsx', '.xls', '.json', '.xml'  # Data files
+        }
+        
+        file_ext = file_path_obj.suffix.lower()
+        if file_ext not in allowed_extensions:
+            raise SecurityError(f"File type not allowed: {file_ext}")
+        
+        # Check file size (max 100MB)
+        max_size = 100 * 1024 * 1024  # 100MB
+        if file_path_obj.stat().st_size > max_size:
+            raise SecurityError(f"File too large: {file_path_obj.stat().st_size} bytes")
+        
+        # Convert to absolute path to prevent traversal
+        return str(file_path_obj.resolve())
 
 
 class AutomationSequenceBuilder:
