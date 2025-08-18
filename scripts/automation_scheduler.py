@@ -25,6 +25,7 @@ import time
 import logging
 import argparse
 import subprocess
+import signal
 from pathlib import Path
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
@@ -36,10 +37,16 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 try:
     from core.engine import WebAutomationEngine, AutomationSequenceBuilder
+    from core.controller import AutomationController, AutomationState, ControlSignal
+    from core.keyboard_handler import create_keyboard_handler
 except ImportError:
     print("Warning: Could not import automation modules. CLI-only mode activated.")
     WebAutomationEngine = None
     AutomationSequenceBuilder = None
+    AutomationController = None
+    AutomationState = None
+    ControlSignal = None
+    create_keyboard_handler = None
 
 
 class AutomationResult(Enum):
@@ -85,13 +92,65 @@ class SchedulerConfig:
 
 
 class AutomationScheduler:
-    """Main automation scheduler class"""
+    """Main automation scheduler class with enhanced control"""
 
     def __init__(self, config: SchedulerConfig):
         self.config = config
         self.runs: List[AutomationRun] = []
         self.current_config_index = 0
+        
+        # Control system
+        self.controller = AutomationController() if AutomationController else None
+        self.is_paused = False
+        self.should_stop = False
+        self.current_automation_task: Optional[asyncio.Task] = None
+        
+        # Enhanced keyboard handling
+        self.keyboard_handler = create_keyboard_handler(advanced=True) if create_keyboard_handler else None
+        self._setup_control_handlers()
+        
         self.setup_logging()
+
+    def _setup_control_handlers(self):
+        """Setup enhanced control handlers for Ctrl+P and Ctrl+T"""
+        def keyboard_control_callback(command: str):
+            """Handle keyboard control commands"""
+            if command == 'toggle_pause':
+                if self.is_paused:
+                    print("\n▶️  Resuming scheduler...")
+                    self.resume_scheduler()
+                else:
+                    print("\n⏸️  Pausing scheduler...")
+                    self.pause_scheduler()
+            elif command == 'stop':
+                print("\n🛑 Stopping scheduler...")
+                self.stop_scheduler()
+            elif command == 'status':
+                self._print_status()
+        
+        # Setup keyboard handler
+        if self.keyboard_handler:
+            self.keyboard_handler.set_control_callback(keyboard_control_callback)
+        
+        # Keep basic signal handlers as fallback
+        def signal_handler(signum, frame):
+            signal_name = signal.Signals(signum).name
+            if signum == signal.SIGINT:  # Ctrl+C - fallback pause
+                print(f"\n⏸️  Received {signal_name} - Use Ctrl+P for pause/resume, Ctrl+T for stop")
+                if self.is_paused:
+                    self.resume_scheduler()
+                else:
+                    self.pause_scheduler()
+            elif signum == signal.SIGTERM:  # Termination
+                print(f"\n🛑 Received {signal_name} - Stopping scheduler...")
+                self.stop_scheduler()
+        
+        try:
+            signal.signal(signal.SIGINT, signal_handler)
+            signal.signal(signal.SIGTERM, signal_handler)
+        except ValueError:
+            # Signals not available (e.g., in some threading contexts)
+            pass
 
     def setup_logging(self):
         """Setup minimal logging configuration"""
@@ -152,9 +211,40 @@ class AutomationScheduler:
             # Extract task count from output (look for success indicators)
             tasks_created = self._extract_task_count(stdout_text)
             
+            # Check for specific FAILURE indicators (only for actual errors, not successful completion)
+            failure_indicators = [
+                "stop_automation",
+                "STOP_AUTOMATION", 
+                "Automation stopped",
+                "RuntimeError"
+            ]
+            
+            # Check for queue-related failures (only if no tasks were created)
+            queue_failure_indicators = [
+                "queue is full - popup detected",
+                "Queue is full - popup detected", 
+                "reached your video submission limit",
+                "You've reached your"
+            ]
+            
+            # Check if any failure indicator is present
+            output_lower = stdout_text.lower()
+            has_failure_indicator = any(indicator.lower() in output_lower for indicator in failure_indicators)
+            
+            # Check for queue failures only if no tasks were created
+            has_queue_failure = False
+            if tasks_created == 0:
+                has_queue_failure = any(indicator.lower() in output_lower for indicator in queue_failure_indicators)
+            
             # Determine result based on return code and output
             if process.returncode == 0:
-                if "success" in stdout_text.lower() or "completed" in stdout_text.lower():
+                if has_failure_indicator or has_queue_failure:
+                    # Only fail if we have actual failure indicators OR queue failure with 0 tasks
+                    if has_failure_indicator:
+                        return AutomationResult.FAILURE, tasks_created, "Automation stopped due to error condition"
+                    else:  # has_queue_failure and tasks_created == 0
+                        return AutomationResult.FAILURE, tasks_created, "Automation failed - queue already full (0 tasks created)"
+                elif "success" in stdout_text.lower() or "completed" in stdout_text.lower():
                     return AutomationResult.SUCCESS, tasks_created, "Automation completed successfully"
                 else:
                     return AutomationResult.FAILURE, tasks_created, "Automation completed with issues"
@@ -187,8 +277,8 @@ class AutomationScheduler:
             builder = AutomationSequenceBuilder.from_dict(config_data)
             automation_config = builder.build()
 
-            # Run automation
-            engine = WebAutomationEngine(automation_config)
+            # Run automation with controller
+            engine = WebAutomationEngine(automation_config, self.controller)
             
             # Run with timeout
             try:
@@ -205,11 +295,27 @@ class AutomationScheduler:
             tasks_created = self._extract_task_count_from_results(results)
             error_msg = None
 
-            if not success and results.get('errors'):
-                error_msg = '; '.join([err.get('error', 'Unknown error') for err in results['errors'][:3]])
+            # Check for STOP_AUTOMATION failures (only if no tasks were created)
+            errors = results.get('errors', [])
+            stop_automation_failure = False
+            if errors:
+                error_msg = '; '.join([err.get('error', 'Unknown error') for err in errors[:3]])
+                # Check if any error is from STOP_AUTOMATION, but only consider it failure if no tasks created
+                for error in errors:
+                    error_text = error.get('error', '').lower()
+                    if ('stop_automation' in error_text or 'automation stopped' in error_text):
+                        # Only consider STOP_AUTOMATION a failure if no tasks were created
+                        if tasks_created == 0:
+                            stop_automation_failure = True
+                        break
 
-            result = AutomationResult.SUCCESS if success else AutomationResult.FAILURE
-            message = "Automation completed successfully" if success else (error_msg or "Automation failed")
+            # Force failure if STOP_AUTOMATION was triggered with 0 tasks created
+            if stop_automation_failure:
+                result = AutomationResult.FAILURE
+                message = "Automation failed - queue already full (0 tasks created)"
+            else:
+                result = AutomationResult.SUCCESS if success else AutomationResult.FAILURE
+                message = "Automation completed successfully" if success else (error_msg or "Automation failed")
 
             return result, tasks_created, message
 
@@ -268,7 +374,7 @@ class AutomationScheduler:
             return 0
 
     async def run_single_automation(self, config_file: str, attempt: int = 1) -> AutomationRun:
-        """Run a single automation with the specified configuration"""
+        """Run a single automation with enhanced control support"""
         run = AutomationRun(
             config_file=config_file,
             start_time=datetime.now(),
@@ -276,55 +382,114 @@ class AutomationScheduler:
         )
 
         try:
-            # Choose execution method
+            # Check if scheduler should stop before starting
+            if self.should_stop:
+                run.finish(AutomationResult.ERROR, 0, "Scheduler stopped")
+                return run
+            
+            # Setup controller if available
+            if self.controller:
+                self.controller.start_automation()
+                self.controller.save_checkpoint(
+                    config_name=Path(config_file).stem,
+                    action_index=0,
+                    variables={},
+                    execution_context={"attempt": attempt, "config_file": config_file}
+                )
+            
+            self.logger.info(f"🚀 Starting automation: {config_file} (attempt {attempt})")
+            
+            # Create automation task
             if self.config.use_cli:
-                result, tasks_created, message = await self.run_automation_cli(
+                automation_coro = self.run_automation_cli(
                     config_file, self.config.timeout_seconds
                 )
             else:
-                result, tasks_created, message = await self.run_automation_direct(
+                automation_coro = self.run_automation_direct(
                     config_file, self.config.timeout_seconds
                 )
-
+            
+            self.current_automation_task = asyncio.create_task(automation_coro)
+            
+            # Wait for automation with control support
+            result, tasks_created, message = await self._run_with_control(self.current_automation_task)
+            
             # Record results
             run.finish(result, tasks_created, message)
             
-            # Only log errors
-            if result != AutomationResult.SUCCESS:
-                self.logger.error(f"❌ {result.value.upper()}: {config_file} - {message}")
+            # Log results
+            if result == AutomationResult.SUCCESS:
+                self.logger.info(f"✅ SUCCESS: {config_file} - {tasks_created} tasks created")
+            else:
+                self.logger.warning(f"❌ {result.value.upper()}: {config_file} - {message}")
 
         except Exception as e:
             run.finish(AutomationResult.ERROR, 0, str(e))
-            self.logger.error(f"💥 ERROR: {config_file} - {e}")
+            self.logger.error(f"💥 Exception in automation {config_file}: {e}")
+        finally:
+            self.current_automation_task = None
+            if self.controller:
+                self.controller.cleanup_checkpoints(Path(config_file).stem)
 
         self.runs.append(run)
         return run
 
     async def wait_with_countdown(self, wait_seconds: int, reason: str):
-        """Wait with countdown display"""
+        """Wait with countdown display and control support"""
         self.logger.info(f"⏳ Waiting {wait_seconds} seconds ({reason})...")
         
         if wait_seconds <= 0:
             return
 
-        # Show countdown for waits longer than 10 seconds
+        # Show countdown for waits longer than 10 seconds with control support
         if wait_seconds > 10:
             for remaining in range(wait_seconds, 0, -1):
+                # Check for stop signal
+                if self.should_stop:
+                    self.logger.info(f"🛑 Wait interrupted by stop signal")
+                    break
+                
+                # Handle pause
+                if self.is_paused:
+                    self.logger.info(f"⏸️ Wait paused at {remaining}s remaining")
+                    await self._wait_for_resume()
+                    self.logger.info(f"▶️ Wait resumed with {remaining}s remaining")
+                
                 if remaining % 60 == 0 or remaining <= 10:
                     mins, secs = divmod(remaining, 60)
                     if mins > 0:
                         self.logger.info(f"⏳ {mins}m {secs}s remaining...")
                     else:
                         self.logger.info(f"⏳ {secs}s remaining...")
+                
                 await asyncio.sleep(1)
         else:
-            await asyncio.sleep(wait_seconds)
+            # For shorter waits, just sleep with periodic control checks
+            elapsed = 0
+            while elapsed < wait_seconds:
+                if self.should_stop:
+                    break
+                
+                if self.is_paused:
+                    await self._wait_for_resume()
+                
+                sleep_time = min(1, wait_seconds - elapsed)
+                await asyncio.sleep(sleep_time)
+                elapsed += sleep_time
 
     async def process_config_file(self, config_file: str) -> bool:
-        """Process a single config file with retry logic"""
+        """Process a single config file with retry logic and control support"""
         self.logger.info(f"📁 Processing configuration: {config_file}")
         
         for attempt in range(1, self.config.max_retries + 1):
+            # Check if scheduler should stop
+            if self.should_stop:
+                self.logger.info(f"🛑 Stopping processing of {config_file} due to scheduler stop")
+                break
+            
+            # Handle pause state
+            await self._handle_pause_state(f"before processing {config_file} (attempt {attempt})")
+            
             run = await self.run_single_automation(config_file, attempt)
             
             if run.result == AutomationResult.SUCCESS:
@@ -344,42 +509,61 @@ class AutomationScheduler:
         return False
 
     async def run_scheduler(self):
-        """Main scheduler execution loop"""
+        """Main scheduler execution loop with enhanced control"""
         self.logger.info("🎬 Starting Automation Scheduler")
         self.logger.info(f"📋 Configurations to process: {len(self.config.config_files)}")
         self.logger.info(f"⏱️  Success wait time: {self.config.success_wait_time}s")
         self.logger.info(f"🔄 Failure wait time: {self.config.failure_wait_time}s")
         self.logger.info(f"🎯 Max retries per config: {self.config.max_retries}")
+        self.logger.info(f"🎮 Control: Ctrl+P=Pause/Resume, Ctrl+T=Stop")
+        
+        # Start keyboard monitoring
+        if self.keyboard_handler:
+            self.keyboard_handler.start_monitoring()
 
         start_time = datetime.now()
         successful_configs = 0
 
-        for i, config_file in enumerate(self.config.config_files):
-            self.current_config_index = i
-            
-            self.logger.info(f"\n{'='*60}")
-            self.logger.info(f"📄 Processing {i+1}/{len(self.config.config_files)}: {config_file}")
-            self.logger.info(f"{'='*60}")
-
-            # Check if config file exists
-            if not Path(config_file).exists():
-                self.logger.error(f"❌ Configuration file not found: {config_file}")
-                continue
-
-            # Process configuration
-            success = await self.process_config_file(config_file)
-            
-            if success:
-                successful_configs += 1
+        try:
+            for i, config_file in enumerate(self.config.config_files):
+                self.current_config_index = i
                 
-                # Wait before next config (if not the last one)
-                if i < len(self.config.config_files) - 1:
-                    await self.wait_with_countdown(
-                        self.config.success_wait_time,
-                        "before next configuration"
-                    )
-            else:
-                self.logger.error(f"💀 Skipping to next configuration after failures: {config_file}")
+                # Check if scheduler should stop
+                if self.should_stop:
+                    self.logger.info(f"🛑 Scheduler stopped at configuration {i+1}/{len(self.config.config_files)}")
+                    break
+                
+                # Handle pause state
+                await self._handle_pause_state(f"before configuration {i+1}/{len(self.config.config_files)}")
+                
+                self.logger.info(f"\n{'='*60}")
+                self.logger.info(f"📄 Processing {i+1}/{len(self.config.config_files)}: {config_file}")
+                self.logger.info(f"{'='*60}")
+
+                # Check if config file exists
+                if not Path(config_file).exists():
+                    self.logger.error(f"❌ Configuration file not found: {config_file}")
+                    continue
+
+                # Process configuration
+                success = await self.process_config_file(config_file)
+                
+                if success:
+                    successful_configs += 1
+                    
+                    # Wait before next config (if not the last one)
+                    if i < len(self.config.config_files) - 1:
+                        await self.wait_with_countdown(
+                            self.config.success_wait_time,
+                            "before next configuration"
+                        )
+                else:
+                    self.logger.error(f"💀 Skipping to next configuration after failures: {config_file}")
+
+        finally:
+            # Stop keyboard monitoring
+            if self.keyboard_handler:
+                self.keyboard_handler.stop_monitoring()
 
         # Generate final report
         end_time = datetime.now()
@@ -506,6 +690,122 @@ class AutomationScheduler:
             hours, remainder = divmod(seconds, 3600)
             mins, secs = divmod(remainder, 60)
             return f"{int(hours)}h {int(mins)}m {int(secs)}s"
+
+    # Control Methods
+    
+    def pause_scheduler(self):
+        """Pause the scheduler"""
+        if not self.is_paused:
+            self.is_paused = True
+            self.logger.info("⏸️ Scheduler paused - press Ctrl+P to resume")
+            if self.controller:
+                self.controller.pause_automation()
+        else:
+            self.resume_scheduler()
+    
+    def resume_scheduler(self):
+        """Resume the scheduler"""
+        if self.is_paused:
+            self.is_paused = False
+            self.logger.info("▶️ Scheduler resumed")
+            if self.controller:
+                self.controller.resume_automation()
+    
+    def stop_scheduler(self, emergency: bool = False):
+        """Stop the scheduler"""
+        self.should_stop = True
+        if emergency:
+            self.logger.warning("🚨 Emergency stop requested")
+        else:
+            self.logger.info("🛑 Graceful stop requested")
+        
+        # Cancel current automation task
+        if self.current_automation_task and not self.current_automation_task.done():
+            self.current_automation_task.cancel()
+        
+        if self.controller:
+            self.controller.stop_automation(emergency=emergency)
+        
+        # Resume if paused to allow stop processing
+        if self.is_paused:
+            self.is_paused = False
+    
+    def _print_status(self):
+        """Print current scheduler status"""
+        status = self.get_status()
+        print("\n" + "="*50)
+        print("📊 SCHEDULER STATUS")
+        print("="*50)
+        print(f"State: {'🟢 Running' if not self.is_paused and not self.should_stop else '⏸️ Paused' if self.is_paused else '🛑 Stopping'}")
+        print(f"Config: {self.current_config_index + 1}/{len(self.config.config_files)}")
+        print(f"Total Runs: {len(self.runs)}")
+        print(f"Success Rate: {sum(1 for run in self.runs if run.result == AutomationResult.SUCCESS)}/{len(self.runs)}")
+        if self.controller and status.get('automation'):
+            auto_status = status['automation']
+            if auto_status['progress']['total'] > 0:
+                print(f"Current Progress: {auto_status['progress']['completed']}/{auto_status['progress']['total']} ({auto_status['progress']['percentage']:.1f}%)")
+        print("="*50)
+    
+    async def _handle_pause_state(self, context: str = ""):
+        """Handle pause state with context information"""
+        if self.is_paused:
+            self.logger.info(f"⏸️ Scheduler paused {context}")
+            await self._wait_for_resume()
+            self.logger.info(f"▶️ Scheduler resumed {context}")
+    
+    async def _wait_for_resume(self):
+        """Wait for scheduler to be resumed"""
+        while self.is_paused and not self.should_stop:
+            await asyncio.sleep(0.5)
+    
+    async def _run_with_control(self, automation_task: asyncio.Task):
+        """Run automation task with control signal monitoring"""
+        try:
+            # Wait for either automation completion or control signals
+            while not automation_task.done():
+                if self.should_stop:
+                    automation_task.cancel()
+                    try:
+                        await automation_task
+                    except asyncio.CancelledError:
+                        pass
+                    return AutomationResult.ERROR, 0, "Stopped by scheduler"
+                
+                if self.is_paused:
+                    # Automation will handle its own pausing through controller
+                    await self._wait_for_resume()
+                
+                # Check every 100ms
+                await asyncio.sleep(0.1)
+            
+            # Get automation result
+            return await automation_task
+            
+        except asyncio.CancelledError:
+            return AutomationResult.ERROR, 0, "Cancelled"
+        except Exception as e:
+            return AutomationResult.ERROR, 0, str(e)
+    
+    def get_status(self) -> Dict[str, Any]:
+        """Get current scheduler status"""
+        controller_status = self.controller.get_status() if self.controller else None
+        
+        return {
+            "scheduler": {
+                "is_paused": self.is_paused,
+                "should_stop": self.should_stop,
+                "current_config_index": self.current_config_index,
+                "total_configs": len(self.config.config_files),
+                "total_runs": len(self.runs)
+            },
+            "automation": controller_status,
+            "config": {
+                "success_wait_time": self.config.success_wait_time,
+                "failure_wait_time": self.config.failure_wait_time,
+                "max_retries": self.config.max_retries,
+                "use_cli": self.config.use_cli
+            }
+        }
 
 
 def load_scheduler_config(config_file: str) -> SchedulerConfig:

@@ -163,6 +163,7 @@ class ActionType(Enum):
     WHILE_END = "while_end"  # End WHILE loop
     BREAK = "break"  # Break from loop
     CONTINUE = "continue"  # Continue loop
+    STOP_AUTOMATION = "stop_automation"  # Stop entire automation run
     # Regular actions
     DOWNLOAD_FILE = "download_file"
     REFRESH_PAGE = "refresh_page"
@@ -205,7 +206,7 @@ class AutomationConfig:
 class WebAutomationEngine:
     """Core automation engine for web interactions"""
 
-    def __init__(self, config: AutomationConfig):
+    def __init__(self, config: AutomationConfig, controller=None):
         self.config = config
         self.browser: Optional[Browser] = None
         self.page: Optional[Page] = None
@@ -217,6 +218,34 @@ class WebAutomationEngine:
         self.loop_stack = []  # Stack for nested loops
         self.log_files = {}  # Cache for log file handles
         self._outputs = {}  # Store outputs for analysis
+        
+        # Control system integration
+        self.controller = controller
+
+    # Control Methods
+    async def check_control_signals(self):
+        """Check for control signals (pause/stop) if controller is available"""
+        if not self.controller:
+            return
+        
+        # Handle pause - wait if paused
+        if await self.controller.check_should_pause():
+            logger.info("⏸️ Automation paused")
+            self.controller._update_state(self.controller.AutomationState.PAUSED if hasattr(self.controller, 'AutomationState') else "PAUSED")
+            await self.controller.wait_if_paused()
+            logger.info("▶️ Automation resumed")
+            if hasattr(self.controller, 'AutomationState'):
+                self.controller._update_state(self.controller.AutomationState.RUNNING)
+        
+        # Handle stop signals
+        if await self.controller.check_should_stop():
+            emergency = await self.controller.check_emergency_stop()
+            if emergency:
+                logger.warning("🚨 Emergency stop requested")
+                raise KeyboardInterrupt("Emergency stop requested")
+            else:
+                logger.info("🛑 Graceful stop requested")
+                raise KeyboardInterrupt("Automation stopped by user")
 
     def substitute_variables(self, value):
         """Replace variable placeholders in value strings with actual variable values"""
@@ -250,7 +279,7 @@ class WebAutomationEngine:
                     current_url = self.page.url
                     if current_url != self.config.url:
                         logger.info(f"Navigating from {current_url} to {self.config.url}")
-                        await self.page.goto(self.config.url, wait_until="networkidle")
+                        await self.page.goto(self.config.url, wait_until="domcontentloaded", timeout=60000)
                     else:
                         logger.info(f"Already on {self.config.url}, performing page state reset...")
                         # Reset page state for reused pages to ensure clean automation
@@ -265,7 +294,7 @@ class WebAutomationEngine:
                         )
                     self.page = await self.context.new_page()
                     # Navigate to the target URL for the new page
-                    await self.page.goto(self.config.url, wait_until="networkidle")
+                    await self.page.goto(self.config.url, wait_until="domcontentloaded", timeout=60000)
             else:
                 # No browser or browser was closed, create new one
                 await self._create_new_browser()
@@ -325,7 +354,7 @@ class WebAutomationEngine:
                 logger.warning(f"⚠️ Page responsiveness test failed after reset: {e}")
                 # Try refreshing the page as last resort
                 logger.info("Refreshing page as recovery...")
-                await self.page.reload(wait_until="networkidle", timeout=10000)
+                await self.page.reload(wait_until="domcontentloaded", timeout=30000)
 
             logger.info("✅ Page state reset completed")
 
@@ -536,7 +565,7 @@ class WebAutomationEngine:
             logger.info(f"Already on target URL: {self.config.url}")
         else:
             logger.info(f"Navigating to {self.config.url}")
-            await self.page.goto(self.config.url, wait_until="networkidle")
+            await self.page.goto(self.config.url, wait_until="domcontentloaded", timeout=60000)
         logger.info("=== NAVIGATION COMPLETED ===")
 
     async def execute_action(self, action: Action) -> Any:
@@ -614,10 +643,10 @@ class WebAutomationEngine:
                 # Click submit button
                 await self.page.click(login_data["submit_selector"], timeout=action.timeout)
                 # Wait for navigation or login completion
-                await self.page.wait_for_load_state("networkidle")
+                await self.page.wait_for_load_state("domcontentloaded", timeout=30000)
             elif action.type == ActionType.EXPAND_DIALOG:
                 await self.page.click(action.selector, timeout=action.timeout)
-                await self.page.wait_for_load_state("networkidle")
+                await self.page.wait_for_load_state("domcontentloaded", timeout=30000)
             elif action.type == ActionType.INPUT_TEXT:
                 await self.page.fill(action.selector, action.value, timeout=action.timeout)
             elif action.type == ActionType.UPLOAD_IMAGE:
@@ -744,116 +773,129 @@ class WebAutomationEngine:
                 self._action_result = completed
             elif action.type == ActionType.CHECK_ELEMENT:
                 logger.info("DEBUG: Entering CHECK_ELEMENT action path")
-                # Special handling for queue detection
-                if ".sc-dMmcxd.cZTIpi" in action.selector or "queue" in action.selector.lower():
-                    logger.info("DEBUG: Using enhanced queue detection method")
+                element = None
+                element_info = None
+                
+                # Always try the provided selector first
+                try:
+                    logger.info(f"DEBUG: Attempting to find element with provided selector: {action.selector}")
+                    element = await self.page.wait_for_selector(action.selector, timeout=action.timeout)
+                    logger.info(f"DEBUG: Successfully found element with provided selector")
+                except Exception as e:
+                    logger.warning(f"Provided selector failed: {action.selector} - {e}")
+                    element = None
+                
+                # If provided selector failed and this looks like a queue detection, try enhanced detection
+                if element is None and (".sc-dMmcxd.cZTIpi" in action.selector or "queue" in action.selector.lower()):
+                    logger.info("DEBUG: Using enhanced queue detection as fallback")
                     try:
-                        # First try to wait for the element with standard method
-                        element = await self.page.wait_for_selector(action.selector, timeout=action.timeout)
-                    except Exception as e:
-                        logger.warning(f"Standard selector failed: {e}, trying JavaScript evaluation")
-                        # Fallback: Use JavaScript to find queue value
-                        try:
-                            queue_value = await self.page.evaluate("""
-                                () => {
-                                    // Try multiple strategies to find queue value
-                                    let queueValue = null;
-                                    
-                                    // Strategy 1: Look for input with queue-related classes
-                                    const queueInputs = document.querySelectorAll('input[type="number"], input[class*="queue"], input[data-test*="queue"]');
-                                    for (const input of queueInputs) {
-                                        if (input.value && !isNaN(input.value)) {
-                                            queueValue = parseInt(input.value);
+                        queue_value = await self.page.evaluate("""
+                            () => {
+                                // Try multiple strategies to find queue value
+                                let queueValue = null;
+                                
+                                // Strategy 1: Look for input with queue-related classes
+                                const queueInputs = document.querySelectorAll('input[type="number"], input[class*="queue"], input[data-test*="queue"]');
+                                for (const input of queueInputs) {
+                                    if (input.value && !isNaN(input.value)) {
+                                        queueValue = parseInt(input.value);
+                                        break;
+                                    }
+                                }
+                                
+                                // Strategy 2: Look for elements with queue-related text or attributes
+                                if (queueValue === null) {
+                                    const allElements = document.querySelectorAll('*[class*="queue"], *[data-test*="queue"], *[id*="queue"]');
+                                    for (const el of allElements) {
+                                        const text = el.textContent || el.innerText || '';
+                                        const value = el.value || el.getAttribute('value') || '';
+                                        if (value && !isNaN(value)) {
+                                            queueValue = parseInt(value);
+                                            break;
+                                        }
+                                        // Look for numbers in text content (like "Queue: 3/8")
+                                        const match = text.match(/(\d+)/);
+                                        if (match) {
+                                            queueValue = parseInt(match[1]);
                                             break;
                                         }
                                     }
-                                    
-                                    // Strategy 2: Look for elements with queue-related text or attributes
-                                    if (queueValue === null) {
-                                        const allElements = document.querySelectorAll('*[class*="queue"], *[data-test*="queue"], *[id*="queue"]');
-                                        for (const el of allElements) {
-                                            const text = el.textContent || el.innerText || '';
-                                            const value = el.value || el.getAttribute('value') || '';
-                                            if (value && !isNaN(value)) {
-                                                queueValue = parseInt(value);
-                                                break;
-                                            }
-                                            // Look for numbers in text content (like "Queue: 3/8")
-                                            const match = text.match(/(\d+)/);
-                                            if (match) {
-                                                queueValue = parseInt(match[1]);
-                                                break;
-                                            }
-                                        }
-                                    }
-                                    
-                                    // Strategy 3: Look for the specific class we know about
-                                    if (queueValue === null) {
-                                        const specificElement = document.querySelector('.sc-dMmcxd.cZTIpi');
-                                        if (specificElement) {
-                                            queueValue = parseInt(specificElement.value || specificElement.textContent || '0');
-                                        }
-                                    }
-                                    
-                                    // Strategy 4: Look in DOM for hidden queue indicators
-                                    if (queueValue === null) {
-                                        const allSpans = document.querySelectorAll('span, div, input');
-                                        for (const span of allSpans) {
-                                            const text = span.textContent || span.innerText || span.value || '';
-                                            // Look for patterns like "3/8", "Queue: 3", or just numbers in context
-                                            if (text.match(/^\d+$/) && parseInt(text) >= 0 && parseInt(text) <= 8) {
-                                                queueValue = parseInt(text);
-                                                break;
-                                            }
-                                            const slashMatch = text.match(/(\d+)\/\d+/);
-                                            if (slashMatch) {
-                                                queueValue = parseInt(slashMatch[1]);
-                                                break;
-                                            }
-                                        }
-                                    }
-                                    
-                                    // Strategy 5: Check for any data attributes that might contain queue info
-                                    if (queueValue === null) {
-                                        const elementsWithData = document.querySelectorAll('*[data-queue], *[data-count], *[data-value]');
-                                        for (const el of elementsWithData) {
-                                            const dataQueue = el.getAttribute('data-queue') || el.getAttribute('data-count') || el.getAttribute('data-value');
-                                            if (dataQueue && !isNaN(dataQueue)) {
-                                                queueValue = parseInt(dataQueue);
-                                                break;
-                                            }
-                                        }
-                                    }
-                                    
-                                    console.log('Queue detection result:', queueValue);
-                                    return queueValue !== null ? queueValue : 0;
                                 }
-                            """)
-                            logger.info(f"JavaScript queue detection found value: {queue_value}")
-                            
-                            # Create a virtual element info for processing
-                            element_info = {
-                                'text': str(queue_value),
-                                'value': str(queue_value),
-                                'innerText': str(queue_value),
-                                'innerHTML': str(queue_value),
-                                'attributes': {'value': str(queue_value)}
+                                
+                                // Strategy 3: Look for the specific class we know about
+                                if (queueValue === null) {
+                                    const specificElement = document.querySelector('.sc-dMmcxd.cZTIpi');
+                                    if (specificElement) {
+                                        queueValue = parseInt(specificElement.value || specificElement.textContent || '0');
+                                    }
+                                }
+                                
+                                // Strategy 4: Look in DOM for hidden queue indicators
+                                if (queueValue === null) {
+                                    const allSpans = document.querySelectorAll('span, div, input');
+                                    for (const span of allSpans) {
+                                        const text = span.textContent || span.innerText || span.value || '';
+                                        // Look for patterns like "3/8", "Queue: 3", or just numbers in context
+                                        if (text.match(/^\d+$/) && parseInt(text) >= 0 && parseInt(text) <= 8) {
+                                            queueValue = parseInt(text);
+                                            break;
+                                        }
+                                        const slashMatch = text.match(/(\d+)\/\d+/);
+                                        if (slashMatch) {
+                                            queueValue = parseInt(slashMatch[1]);
+                                            break;
+                                        }
+                                    }
+                                }
+                                
+                                // Strategy 5: Check for any data attributes that might contain queue info
+                                if (queueValue === null) {
+                                    const elementsWithData = document.querySelectorAll('*[data-queue], *[data-count], *[data-value]');
+                                    for (const el of elementsWithData) {
+                                        const dataQueue = el.getAttribute('data-queue') || el.getAttribute('data-count') || el.getAttribute('data-value');
+                                        if (dataQueue && !isNaN(dataQueue)) {
+                                            queueValue = parseInt(dataQueue);
+                                            break;
+                                        }
+                                    }
+                                }
+                                
+                                console.log('Queue detection result:', queueValue);
+                                return queueValue !== null ? queueValue : 0;
                             }
-                            
-                        except Exception as js_error:
-                            logger.error(f"JavaScript queue detection failed: {js_error}")
-                            return {"success": False, "error": f"Queue element not found: {js_error}"}
-                else:
-                    # Standard element detection for non-queue elements
-                    element = await self.page.wait_for_selector(action.selector, timeout=action.timeout)
-                    if not element:
-                        logger.error(f"Element not found: {action.selector}")
-                        return {"success": False, "error": "Element not found"}
+                        """)
+                        logger.info(f"Enhanced queue detection found value: {queue_value}")
+                        
+                        # Create a virtual element info for processing
+                        element_info = {
+                            'text': str(queue_value),
+                            'value': str(queue_value),
+                            'innerText': str(queue_value),
+                            'innerHTML': str(queue_value),
+                            'attributes': {'value': str(queue_value)}
+                        }
+                        
+                    except Exception as js_error:
+                        logger.warning(f"Enhanced queue detection failed: {js_error}")
+                        logger.info("Assuming queue is empty (0) since no queue element found")
+                        # Create element_info for empty queue (queue = 0)
+                        element_info = {
+                            'text': '0',
+                            'value': '0',
+                            'innerText': '0',
+                            'innerHTML': '0',
+                            'attributes': {'value': '0'}
+                        }
+                
+                # If we still don't have an element and this is not queue detection, fail
+                if element is None and element_info is None:
+                    logger.error(f"Element not found with provided selector: {action.selector}")
+                    return {"success": False, "error": f"Element not found: {action.selector}"}
                     
                 # Get element properties (either from real element or virtual for queue)
-                if 'element_info' not in locals():
+                if element_info is None:
                     # Only call element.evaluate if we have a real element
-                    if 'element' in locals() and element:
+                    if element is not None:
                         element_info = await element.evaluate(
                             """
                         el => ({
@@ -869,7 +911,7 @@ class WebAutomationEngine:
                         """
                         )
                     else:
-                        # Fallback if no element is available
+                        # This should not happen due to earlier checks, but just in case
                         logger.error("No element or element_info available for check_element")
                         return {"success": False, "error": "No element data available"}
                 # Parse the check condition from action.value
@@ -1044,10 +1086,10 @@ class WebAutomationEngine:
                 logger.info(f"Downloaded file to: {download_path}")
                 return str(download_path)
             elif action.type == ActionType.REFRESH_PAGE:
-                await self.page.reload(wait_until="networkidle")
+                await self.page.reload(wait_until="domcontentloaded", timeout=30000)
             elif action.type == ActionType.SWITCH_PANEL:
                 await self.page.click(action.selector, timeout=action.timeout)
-                await self.page.wait_for_load_state("networkidle")
+                await self.page.wait_for_load_state("domcontentloaded", timeout=30000)
             elif action.type == ActionType.WAIT:
                 await asyncio.sleep(action.value / 1000)  # Convert to seconds
             elif action.type == ActionType.WAIT_FOR_ELEMENT:
@@ -1339,6 +1381,18 @@ class WebAutomationEngine:
                 logger.info(
                     f"=== Executing action {context.instruction_pointer + 1}/{len(self.config.actions)} ==="
                 )
+                
+                # Check for control signals (pause/stop)
+                await self.check_control_signals()
+                
+                # Update progress if controller available
+                if self.controller:
+                    self.controller._update_progress(
+                        context.instruction_pointer, 
+                        len(self.config.actions),
+                        f"Action {context.instruction_pointer + 1}/{len(self.config.actions)}"
+                    )
+                
                 if context.break_flag or context.continue_flag:
                     # Handle loop control
                     if context.break_flag:
@@ -1373,6 +1427,7 @@ class WebAutomationEngine:
                         ActionType.WHILE_END,
                         ActionType.BREAK,
                         ActionType.CONTINUE,
+                        ActionType.STOP_AUTOMATION,
                     ]:
                         await self._handle_block_action(action, context)
 
@@ -1492,6 +1547,7 @@ class WebAutomationEngine:
             ActionType.WHILE_END,
             ActionType.BREAK,
             ActionType.CONTINUE,
+            ActionType.STOP_AUTOMATION,
         ]:
             return await self._execute_control_action(action, context, results)
 
@@ -1536,6 +1592,9 @@ class WebAutomationEngine:
 
         elif action.type == ActionType.CONTINUE:
             return await self._handle_continue(action, context)
+        
+        elif action.type == ActionType.STOP_AUTOMATION:
+            return await self._handle_stop_automation(action, context)
 
         return None
 
@@ -1701,6 +1760,45 @@ class WebAutomationEngine:
         context.should_increment = False
         logger.info("BREAK: Exiting loop")
         return {"break": True}
+    
+    async def _handle_stop_automation_v2(self, action: Action, context: ExecutionContext):
+        """Handle STOP_AUTOMATION action - immediately terminate automation as failed"""
+        reason = action.value.get('reason', 'Stop automation requested') if action.value else 'Stop automation requested'
+        log_file = action.value.get('log_file') if action.value else None
+        
+        logger.error(f"STOP_AUTOMATION: {reason}")
+        
+        # Log to specified file if provided
+        if log_file:
+            try:
+                # Create a temporary LOG_MESSAGE action and execute it
+                from datetime import datetime
+                import os
+                
+                # Ensure logs directory exists
+                log_dir = os.path.dirname(log_file) if os.path.dirname(log_file) else "."
+                if log_dir != "." and not os.path.exists(log_dir):
+                    os.makedirs(log_dir, exist_ok=True)
+                
+                message_data = {
+                    "timestamp": datetime.now().isoformat(),
+                    "level": "ERROR",
+                    "message": reason
+                }
+                
+                # Append to log file
+                with open(log_file, 'a', encoding='utf-8') as f:
+                    f.write(f"{message_data['timestamp']} - {message_data['level']}: {message_data['message']}\n")
+                    
+                logger.info(f"Logged message to {log_file}: {reason}")
+            except Exception as e:
+                logger.warning(f"Failed to log to file {log_file}: {e}")
+        
+        # Set instruction pointer to end to exit main loop
+        context.instruction_pointer = len(self.config.actions)
+        context.should_increment = False
+        # Raise an exception to mark the automation as failed
+        raise RuntimeError(f"Automation stopped: {reason}")
 
     async def _handle_continue(self, action: Action, context: ExecutionContext):
         """Handle CONTINUE statement"""
@@ -1756,6 +1854,9 @@ class WebAutomationEngine:
 
         elif action.type == ActionType.CONTINUE:
             await self._handle_continue(action, context)
+            
+        elif action.type == ActionType.STOP_AUTOMATION:
+            await self._handle_stop_automation(action, context)
 
     async def _handle_if_begin(self, action, context):
         """Handle IF_BEGIN action"""
@@ -1875,6 +1976,45 @@ class WebAutomationEngine:
                 context.should_increment = False
                 return
         raise ValueError("CONTINUE used outside of loop")
+    
+    async def _handle_stop_automation(self, action: Action, context: ExecutionContext):
+        """Handle STOP_AUTOMATION action - immediately terminate automation as failed"""
+        reason = action.value.get('reason', 'Stop automation requested') if action.value else 'Stop automation requested'
+        log_file = action.value.get('log_file') if action.value else None
+        
+        logger.error(f"STOP_AUTOMATION: {reason}")
+        
+        # Log to specified file if provided
+        if log_file:
+            try:
+                # Create a temporary LOG_MESSAGE action and execute it
+                from datetime import datetime
+                import os
+                
+                # Ensure logs directory exists
+                log_dir = os.path.dirname(log_file) if os.path.dirname(log_file) else "."
+                if log_dir != "." and not os.path.exists(log_dir):
+                    os.makedirs(log_dir, exist_ok=True)
+                
+                message_data = {
+                    "timestamp": datetime.now().isoformat(),
+                    "level": "ERROR",
+                    "message": reason
+                }
+                
+                # Append to log file
+                with open(log_file, 'a', encoding='utf-8') as f:
+                    f.write(f"{message_data['timestamp']} - {message_data['level']}: {message_data['message']}\n")
+                    
+                logger.info(f"Logged message to {log_file}: {reason}")
+            except Exception as e:
+                logger.warning(f"Failed to log to file {log_file}: {e}")
+        
+        # Set instruction pointer to end to exit main loop
+        context.instruction_pointer = len(self.config.actions)
+        context.should_increment = False
+        # Raise an exception to mark the automation as failed
+        raise RuntimeError(f"Automation stopped: {reason}")
 
     def _should_execute_action(self, context):
         """Determine if the current action should be executed based on block context"""
