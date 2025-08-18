@@ -8,6 +8,7 @@ Supports sequential execution of configuration files with different wait times f
 Usage:
     python automation_scheduler.py --config scheduler_config.json
     python automation_scheduler.py --configs config1.json config2.json --success-wait 300 --failure-wait 60 --max-retries 3
+    python automation_scheduler.py --config scheduler_config.json --start-from 5  # Start from 5th config file
 
 Features:
 - Sequential execution of multiple automation configurations
@@ -16,6 +17,7 @@ Features:
 - Comprehensive logging and reporting
 - JSON configuration support
 - Real-time progress tracking
+- Start from specific config file index (convenient for resuming interrupted runs)
 """
 
 import sys
@@ -868,6 +870,7 @@ async def main():
     parser.add_argument('--use-direct', action='store_true', help='Use direct engine instead of CLI')
     parser.add_argument('--quiet', action='store_true', help='Quiet mode (less logging)')
     parser.add_argument('--create-example', action='store_true', help='Create example configuration')
+    parser.add_argument('--start-from', type=int, metavar='INDEX', help='Start from specified config file index (1-indexed, e.g., --start-from 3 starts from the 3rd config)')
 
     args = parser.parse_args()
 
@@ -881,7 +884,7 @@ async def main():
         if not Path(args.config).exists():
             print(f"Configuration file not found: {args.config}")
             print("Use --create-example to create an example configuration.")
-            return
+            sys.exit(1)
         config = load_scheduler_config(args.config)
     elif args.configs:
         config = SchedulerConfig(
@@ -897,13 +900,34 @@ async def main():
     else:
         print("Error: Must specify either --config or --configs")
         print("Use --help for usage information or --create-example for example configuration.")
-        return
+        sys.exit(1)
+
+    # Apply start-from filtering if specified
+    if args.start_from is not None:
+        start_index = args.start_from - 1  # Convert from 1-indexed to 0-indexed
+        
+        # Validate start index bounds
+        if start_index < 0:
+            print(f"Error: --start-from index must be 1 or greater (got {args.start_from})")
+            sys.exit(1)
+        elif start_index >= len(config.config_files):
+            print(f"Error: --start-from index {args.start_from} is beyond the number of config files ({len(config.config_files)})")
+            print(f"Available config files (1-{len(config.config_files)}):")
+            for i, cf in enumerate(config.config_files, 1):
+                print(f"  {i}. {cf}")
+            sys.exit(1)
+        
+        # Filter config files to start from specified index
+        original_count = len(config.config_files)
+        config.config_files = config.config_files[start_index:]
+        print(f"📍 Starting from config {args.start_from}/{original_count}: {config.config_files[0]}")
+        print(f"📋 Processing {len(config.config_files)} config files (skipping first {start_index})")
 
     # Validate configuration files exist
     missing_files = [f for f in config.config_files if not Path(f).exists()]
     if missing_files:
         print(f"Error: Configuration files not found: {missing_files}")
-        return
+        sys.exit(1)
 
     # Create and run scheduler
     scheduler = AutomationScheduler(config)
