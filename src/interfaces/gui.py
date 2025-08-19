@@ -65,14 +65,17 @@ class ModernButton(tk.Button):
         """Apply current theme to button"""
         gui = self._get_gui_instance()
         if not gui:
-            # Fallback to default colors
-            self.configure(bg='#007acc', fg='white', font=('Arial', 12))
+            # Fallback to default colors and proper font size
+            self.configure(bg='#007acc', fg='white', font=('Arial', 20, 'normal'))  # Default 20px minimum
             self.normal_color = '#007acc'
             self.hover_color = '#005a9e'
             return
             
         settings = gui.settings
-        font_size = max(10, settings.get('font_size', 20) - 6)  # Button font smaller than main
+        # Apply the same font scaling logic as TTK buttons - minimum 20px!
+        base_font_size = settings.get('font_size', 20)
+        min_font_size = 20
+        button_font_size = max(min_font_size, base_font_size)  # Use FULL font size for buttons
         
         if settings.get('dark_mode', False):
             bg_color = settings.get('custom_primary') or settings.get('dark_accent', '#007acc')
@@ -93,7 +96,13 @@ class ModernButton(tk.Button):
                 self.hover_color = '#b02a2a'
         
         self.normal_color = bg_color
-        self.configure(bg=bg_color, fg=fg_color, font=('Arial', font_size, 'bold'))
+        
+        # Calculate padding based on font size for bigger buttons
+        padx = max(20, int(button_font_size * 0.8))  # Horizontal padding
+        pady = max(10, int(button_font_size * 0.4))  # Vertical padding
+        
+        self.configure(bg=bg_color, fg=fg_color, font=('Arial', button_font_size, 'normal'),
+                      padx=padx, pady=pady)
         
     def _on_enter(self, event):
         """Handle mouse enter"""
@@ -147,6 +156,64 @@ class AutomationGUI:
         # Start log processor
         self.root.after(100, self._process_log_queue)
         
+    def _configure_ttk_fonts(self, base_font_size):
+        """Configure TTK widget fonts with proper scaling - ALL elements at least 20px"""
+        # ABSOLUTE MINIMUM: 20px for ALL UI elements as requested
+        min_font_size = 20
+        
+        # Get screen scaling factor for better adaptation
+        screen_width = self.root.winfo_screenwidth()
+        screen_height = self.root.winfo_screenheight()
+        
+        # Apply screen size scaling factor (for high DPI displays)
+        scale_factor = 1.0
+        if screen_width > 1920 or screen_height > 1080:  # High DPI screen
+            scale_factor = 1.1
+        elif screen_width < 1366:  # Lower resolution screen
+            scale_factor = 0.95
+            
+        # Apply scaling to base font size first
+        scaled_base = int(base_font_size * scale_factor)
+        
+        # Calculate font sizes - respect user's choice, minimal hierarchy
+        # When user sets 36px, they want BIG text everywhere!
+        title_size = max(min_font_size, scaled_base + 2)      # Just slightly larger than base
+        heading_size = max(min_font_size, scaled_base)        # Same as user's setting
+        label_size = max(min_font_size, scaled_base - 2)      # Slightly smaller but still big
+        button_size = max(min_font_size, scaled_base)         # SAME as user's setting - buttons must be readable!
+        entry_size = max(min_font_size, scaled_base - 2)      # Slightly smaller but still big
+        
+        # Configure custom styles with fonts and proper sizing
+        self.style.configure('Title.TLabel', font=('Arial', title_size, 'bold'))
+        self.style.configure('Heading.TLabel', font=('Arial', heading_size, 'bold'))
+        self.style.configure('TLabel', font=('Arial', label_size))
+        
+        # Button styling with LARGE padding for big, clickable buttons
+        button_padding_x = max(12, int(button_size * 0.8))  # Horizontal padding - make buttons wide
+        button_padding_y = max(8, int(button_size * 0.5))   # Vertical padding - make buttons tall
+        self.style.configure('TButton', 
+                           font=('Arial', button_size, 'normal'),
+                           padding=(button_padding_x, button_padding_y))
+        
+        # Entry and combobox with generous sizing for readability
+        entry_padding_x = max(8, int(entry_size * 0.6))
+        entry_padding_y = max(6, int(entry_size * 0.4))
+        self.style.configure('TEntry', 
+                           font=('Arial', entry_size),
+                           padding=(entry_padding_x, entry_padding_y))
+        self.style.configure('TCombobox', 
+                           font=('Arial', entry_size),
+                           padding=(entry_padding_x, entry_padding_y))
+        self.style.configure('TCheckbutton', font=('Arial', label_size))
+        
+        # Configure larger styles for specific dialogs - use even bigger fonts
+        large_combo_size = max(min_font_size + 2, scaled_base + 2)  # Larger than normal
+        large_check_size = max(min_font_size, scaled_base)          # Same as normal buttons
+        self.style.configure('Large.TCombobox', 
+                           font=('Arial', large_combo_size),
+                           padding=(entry_padding_x + 4, entry_padding_y + 2))
+        self.style.configure('Large.TCheckbutton', font=('Arial', large_check_size))
+
     def _setup_styles(self):
         """Configure custom styles"""
         # Configure colors
@@ -156,14 +223,8 @@ class AutomationGUI:
         # Get base font size
         base_font_size = self.settings.get('font_size', 20)
         
-        # Configure ttk styles with scalable fonts
-        self.style.configure('Title.TLabel', font=('Arial', base_font_size + 4, 'bold'))
-        self.style.configure('Heading.TLabel', font=('Arial', base_font_size, 'bold'))
-        self.style.configure('TLabel', font=('Arial', max(10, base_font_size - 4)))
-        self.style.configure('TButton', font=('Arial', max(10, base_font_size - 6)))
-        self.style.configure('TEntry', font=('Arial', max(10, base_font_size - 4)))
-        self.style.configure('TCombobox', font=('Arial', max(10, base_font_size - 4)))
-        self.style.configure('TCheckbutton', font=('Arial', max(10, base_font_size - 4)))
+        # Configure ttk styles with proper font scaling
+        self._configure_ttk_fonts(base_font_size)
         self.style.configure('Action.TFrame', relief=tk.RIDGE, borderwidth=1)
         
     def _setup_ui(self):
@@ -287,17 +348,19 @@ class AutomationGUI:
         resolution_option_frame.grid(row=0, column=1, sticky=(tk.W, tk.E), pady=5, padx=(10, 0))
         
         # Resolution options for different monitor types
+        # Using 320px width increments from 1600px to 2560px with appropriate heights (16:10 aspect ratio)
         self.resolution_options = [
-            ("1200x800", "1200x800 (HD Ready)"),
-            ("1440x900", "1440x900 (HD+)"),
-            ("1600x1000", "1600x1000 (UXGA)"),
-            ("1920x1200", "1920x1200 (Full HD)"),
-            ("2560x1600", "2560x1600 (2K)"),
-            ("3200x2000", "3200x2000 (3K)"),
-            ("3840x2400", "3840x2400 (4K)")
+            ("1600x1000", "1600x1000 (UXGA)"),           # Default - good for most modern screens
+            ("1920x1200", "1920x1200 (WUXGA)"),         # +320px width
+            ("2240x1400", "2240x1400 (2K+)"),           # +320px width  
+            ("2560x1600", "2560x1600 (WQXGA)"),         # +320px width - high-end displays
+            # Keep some legacy options for compatibility
+            ("1280x800", "1280x800 (WXGA - Small)"),    # Smaller option if needed
+            ("1440x900", "1440x900 (WXGA+ - Small)"),   # Another smaller option
+            ("3840x2400", "3840x2400 (4K - Ultra)")     # Ultra-high resolution option
         ]
         
-        current_resolution = self.settings.get('window_resolution', '1200x800')
+        current_resolution = self.settings.get('window_resolution', '1600x1000')  # New default is 1600x1000
         self.resolution_var = tk.StringVar(value=current_resolution)
         
         self.resolution_combo = ttk.Combobox(resolution_option_frame, textvariable=self.resolution_var,
@@ -388,7 +451,7 @@ class AutomationGUI:
         self.theme_preview_frame.grid_propagate(False)
         
         self.preview_title = tk.Label(self.theme_preview_frame, text="Sample Window", 
-                                     font=('Arial', 14, 'bold'))
+                                     font=('Arial', max(20, self.settings.get('font_size', 20) - 2), 'bold'))
         self.preview_title.pack(pady=10)
         
         self.preview_text = tk.Label(self.theme_preview_frame, 
@@ -418,7 +481,12 @@ class AutomationGUI:
         # Name label and entry
         ttk.Label(config_frame, text="Name:").grid(row=0, column=0, sticky=tk.W, pady=(5, 2))
         self.name_var = tk.StringVar()
-        name_entry = tk.Text(config_frame, width=25, height=3, wrap=tk.WORD, font=('Arial', 10))
+        # Calculate proper dimensions for main window text fields
+        main_field_height, main_field_width = self._calculate_input_dimensions()
+        main_field_height = max(2, int(main_field_height * 1.5))  # Slightly taller for multi-line
+        
+        name_entry = tk.Text(config_frame, width=main_field_width, height=main_field_height, 
+                           wrap=tk.WORD, font=('Arial', max(20, self.settings.get('font_size', 20) - 2)))
         name_entry.grid(row=1, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 15))
         
         # Bind the Text widget to the StringVar for compatibility
@@ -443,7 +511,8 @@ class AutomationGUI:
         # URL label and entry
         ttk.Label(config_frame, text="URL:").grid(row=2, column=0, sticky=tk.W, pady=(5, 2))
         self.url_var = tk.StringVar()
-        url_entry = tk.Text(config_frame, width=25, height=3, wrap=tk.WORD, font=('Arial', 10))
+        url_entry = tk.Text(config_frame, width=main_field_width, height=main_field_height, 
+                           wrap=tk.WORD, font=('Arial', max(20, self.settings.get('font_size', 20) - 2)))
         url_entry.grid(row=3, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 15))
         
         # Bind the Text widget to the StringVar for compatibility
@@ -496,7 +565,7 @@ class AutomationGUI:
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         
         self.actions_listbox = tk.Listbox(list_frame, yscrollcommand=scrollbar.set,
-                                         height=15, font=('Arial', 10))
+                                         height=15)
         self.actions_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.config(command=self.actions_listbox.yview)
         
@@ -524,10 +593,9 @@ class AutomationGUI:
         controls_frame = ttk.LabelFrame(parent, text="Controls", padding="10")
         controls_frame.grid(row=1, column=2, sticky=(tk.W, tk.E, tk.N, tk.S), padx=(5, 0))
         
-        # Run button
+        # Run button (ModernButton handles font sizing automatically)
         self.run_button = ModernButton(controls_frame, text="▶ Run Automation",
-                                      command=self._run_automation,
-                                      font=('Arial', 12, 'bold'))
+                                      command=self._run_automation)
         self.run_button.pack(fill=tk.X, pady=5)
         
         # Stop button
@@ -551,8 +619,7 @@ class AutomationGUI:
         self.progress_bar.pack(fill=tk.X, pady=5)
         
         # Status
-        self.status_label = ttk.Label(controls_frame, text="Ready", 
-                                    font=('Arial', 10))
+        self.status_label = ttk.Label(controls_frame, text="Ready")
         self.status_label.pack(pady=10)
         
         # Statistics
@@ -560,7 +627,7 @@ class AutomationGUI:
         stats_frame.pack(fill=tk.BOTH, expand=True, pady=10)
         
         self.stats_text = tk.Text(stats_frame, height=8, width=25, 
-                                 font=('Courier', 9))
+                                 font=('Courier', max(20, self.settings.get('font_size', 20) - 4)))
         self.stats_text.pack(fill=tk.BOTH, expand=True)
         self.stats_text.config(state=tk.DISABLED)
         
@@ -585,14 +652,58 @@ class AutomationGUI:
         ModernButton(log_frame, text="Clear Log", 
                     command=lambda: self.log_text.delete(1.0, tk.END)).pack(pady=5)
         
+    def _calculate_input_dimensions(self):
+        """Calculate proper input field dimensions based on font size"""
+        font_size = self.settings.get('font_size', 20)
+        
+        # For Text widgets: height = lines, width = characters
+        # Keep field height reasonable: 1-2 lines for single inputs
+        field_height_lines = 1  # Single line for most inputs
+        
+        # Width in characters - reasonable range regardless of font size
+        # Larger fonts need fewer characters to fill same visual space
+        if font_size <= 20:
+            field_width_chars = 35
+        elif font_size <= 30:
+            field_width_chars = 30
+        else:  # Large fonts (30+)
+            field_width_chars = 25
+        
+        return field_height_lines, field_width_chars
+    
+    def _calculate_entry_width(self):
+        """Calculate proper Entry widget width based on font size"""
+        font_size = self.settings.get('font_size', 20)
+        
+        # For Entry widgets: width = characters
+        # Adjust character count based on font size for visual consistency
+        if font_size <= 20:
+            entry_width_chars = 40
+        elif font_size <= 30:
+            entry_width_chars = 35
+        else:  # Large fonts (30+)
+            entry_width_chars = 30
+        
+        return entry_width_chars
+
     def _show_add_action_dialog(self):
         """Show dialog to add new action"""
         dialog = tk.Toplevel(self.root)
         dialog.title("Add Action")
         
-        # Set minimum and initial size - increased from 600x500 to 900x700
-        dialog.minsize(900, 700)
-        dialog.geometry("900x700")  # Much larger dialog size
+        # Calculate dialog size to accommodate all fields properly
+        font_size = self.settings.get('font_size', 20)
+        # Make dialogs large enough to show all content without compression
+        if font_size <= 20:
+            dialog_width, dialog_height = 800, 900
+        elif font_size <= 30:
+            dialog_width, dialog_height = 900, 1000
+        else:  # Large fonts (30+)
+            dialog_width, dialog_height = 1000, 1100
+        
+        # Set minimum size to ensure content is always visible
+        dialog.minsize(700, 800)
+        dialog.geometry(f"{dialog_width}x{dialog_height}")
         
         # Apply theme to dialog
         self._apply_dialog_theme(dialog)
@@ -601,36 +712,38 @@ class AutomationGUI:
         dialog.resizable(True, True)
         
         # Center dialog on parent window (after setting size)
-        self._center_dialog(dialog, force_size=(900, 700))
+        self._center_dialog(dialog)
         
         # Configure grid weights for proper scaling
         dialog.columnconfigure(1, weight=1)
         dialog.rowconfigure(1, weight=1)  # Allow fields frame to expand to push buttons down
         
         # Action type selection - increased height and font size
-        ttk.Label(dialog, text="Action Type:", font=('Arial', 14, 'bold')).grid(row=0, column=0, sticky=tk.W, 
+        ttk.Label(dialog, text="Action Type:").grid(row=0, column=0, sticky=tk.W, 
                                                    padx=20, pady=20)
         
         action_type_var = tk.StringVar()
         # Configure style for larger combobox
         combo_style = ttk.Style()
         combo_style.configure('Large.TCombobox', 
-                            padding=(10, 15, 10, 15),  # Increased padding for height
-                            font=('Arial', 22))  # Doubled font size from 11 to 22
+                            padding=(10, 15, 10, 15))  # Increased padding for height
+                            # Font handled by _configure_ttk_fonts method
         
         action_combo = ttk.Combobox(dialog, textvariable=action_type_var, 
                                    state='readonly', width=60, 
-                                   style='Large.TCombobox',
-                                   font=('Arial', 22))  # Doubled font size
+                                   style='Large.TCombobox')
         action_combo['values'] = [action.value for action in ActionType]
         action_combo.grid(row=0, column=1, padx=20, pady=20, sticky=(tk.W, tk.E))
         action_combo.current(0)
         
-        # Dynamic fields frame - adjusted padding and sticky to not expand vertically
+        # Dynamic fields frame - give it more space to expand
         fields_frame = ttk.Frame(dialog)
-        fields_frame.grid(row=1, column=0, columnspan=2, padx=25, pady=(10, 15), 
-                         sticky=(tk.W, tk.E, tk.N))  # Removed tk.S to prevent vertical expansion
+        fields_frame.grid(row=1, column=0, columnspan=2, padx=25, pady=(10, 20), 
+                         sticky=(tk.W, tk.E, tk.N, tk.S))  # Allow full expansion
         fields_frame.columnconfigure(1, weight=1)
+        # Allow fields frame to expand vertically
+        for i in range(10):  # Pre-configure several rows to expand
+            fields_frame.rowconfigure(i, weight=1)
         
         # Field variables
         field_vars = {}
@@ -642,16 +755,20 @@ class AutomationGUI:
                 widget.destroy()
             field_vars.clear()
             
+            # Get proper input field dimensions
+            field_height, field_width = self._calculate_input_dimensions()
+            
             action_type = ActionType(action_type_var.get())
             row = 0
             
             # Add fields based on action type
             if action_type == ActionType.LOGIN:
                 # Username field
-                ttk.Label(fields_frame, text="Username:", font=('Arial', 20, 'bold')).grid(row=row, column=0, 
+                ttk.Label(fields_frame, text="Username:").grid(row=row, column=0, 
                                                               sticky=tk.W, pady=10, padx=(0, 15))
                 field_vars['username'] = tk.StringVar()
-                username_text = tk.Text(fields_frame, width=60, height=1, font=('Arial', 24), wrap=tk.WORD)
+                username_text = tk.Text(fields_frame, width=field_width, height=field_height, 
+                                      wrap=tk.WORD, font=('Arial', max(20, self.settings.get('font_size', 20) - 2)))
                 username_text.grid(row=row, column=1, pady=10, sticky=(tk.W, tk.E))
                 
                 def update_username(*args):
@@ -662,10 +779,11 @@ class AutomationGUI:
                 row += 1
                 
                 # Password field
-                ttk.Label(fields_frame, text="Password:", font=('Arial', 20, 'bold')).grid(row=row, column=0, 
+                ttk.Label(fields_frame, text="Password:").grid(row=row, column=0, 
                                                               sticky=tk.W, pady=10, padx=(0, 15))
                 field_vars['password'] = tk.StringVar()
-                password_text = tk.Text(fields_frame, width=60, height=1, font=('Arial', 24), wrap=tk.WORD)
+                password_text = tk.Text(fields_frame, width=field_width, height=field_height, 
+                                      wrap=tk.WORD, font=('Arial', max(20, self.settings.get('font_size', 20) - 2)))
                 password_text.grid(row=row, column=1, pady=10, sticky=(tk.W, tk.E))
                 # Note: Text widget doesn't support show="*" like Entry, so password won't be masked
                 
@@ -677,10 +795,11 @@ class AutomationGUI:
                 row += 1
                 
                 # Username selector field
-                ttk.Label(fields_frame, text="Username Selector:", font=('Arial', 20, 'bold')).grid(row=row, column=0, 
+                ttk.Label(fields_frame, text="Username Selector:").grid(row=row, column=0, 
                                                                        sticky=tk.W, pady=10, padx=(0, 15))
                 field_vars['username_selector'] = tk.StringVar()
-                username_sel_text = tk.Text(fields_frame, width=60, height=1, font=('Arial', 24), wrap=tk.WORD)
+                username_sel_text = tk.Text(fields_frame, width=field_width, height=field_height, 
+                                           wrap=tk.WORD, font=('Arial', max(20, self.settings.get('font_size', 20) - 2)))
                 username_sel_text.grid(row=row, column=1, pady=10, sticky=(tk.W, tk.E))
                 
                 def update_username_sel(*args):
@@ -691,10 +810,11 @@ class AutomationGUI:
                 row += 1
                 
                 # Password selector field
-                ttk.Label(fields_frame, text="Password Selector:", font=('Arial', 20, 'bold')).grid(row=row, column=0, 
+                ttk.Label(fields_frame, text="Password Selector:").grid(row=row, column=0, 
                                                                        sticky=tk.W, pady=10, padx=(0, 15))
                 field_vars['password_selector'] = tk.StringVar()
-                password_sel_text = tk.Text(fields_frame, width=60, height=1, font=('Arial', 24), wrap=tk.WORD)
+                password_sel_text = tk.Text(fields_frame, width=field_width, height=field_height, 
+                                           wrap=tk.WORD, font=('Arial', max(20, self.settings.get('font_size', 20) - 2)))
                 password_sel_text.grid(row=row, column=1, pady=10, sticky=(tk.W, tk.E))
                 
                 def update_password_sel(*args):
@@ -705,10 +825,11 @@ class AutomationGUI:
                 row += 1
                 
                 # Submit button selector field
-                ttk.Label(fields_frame, text="Submit Button Selector:", font=('Arial', 20, 'bold')).grid(row=row, column=0, 
+                ttk.Label(fields_frame, text="Submit Button Selector:").grid(row=row, column=0, 
                                                                             sticky=tk.W, pady=10, padx=(0, 15))
                 field_vars['submit_selector'] = tk.StringVar()
-                submit_sel_text = tk.Text(fields_frame, width=60, height=1, font=('Arial', 24), wrap=tk.WORD)
+                submit_sel_text = tk.Text(fields_frame, width=field_width, height=field_height, 
+                                         wrap=tk.WORD, font=('Arial', max(20, self.settings.get('font_size', 20) - 2)))
                 submit_sel_text.grid(row=row, column=1, pady=10, sticky=(tk.W, tk.E))
                 
                 def update_submit_sel(*args):
@@ -720,10 +841,11 @@ class AutomationGUI:
                 
             elif action_type not in [ActionType.REFRESH_PAGE]:
                 if action_type not in [ActionType.WAIT, ActionType.LOGIN]:
-                    ttk.Label(fields_frame, text="Selector:", font=('Arial', 20, 'bold')).grid(row=row, column=0, 
+                    ttk.Label(fields_frame, text="Selector:").grid(row=row, column=0, 
                                                                   sticky=tk.W, pady=10, padx=(0, 15))
                     field_vars['selector'] = tk.StringVar()
-                    selector_text = tk.Text(fields_frame, width=60, height=1, font=('Arial', 24), wrap=tk.WORD)
+                    selector_text = tk.Text(fields_frame, width=field_width, height=field_height, 
+                                           wrap=tk.WORD, font=('Arial', max(20, self.settings.get('font_size', 20) - 2)))
                     selector_text.grid(row=row, column=1, pady=10, sticky=(tk.W, tk.E))
                     
                     def update_selector(*args):
@@ -735,10 +857,11 @@ class AutomationGUI:
                 
                 if action_type in [ActionType.INPUT_TEXT, ActionType.UPLOAD_IMAGE]:
                     label = "Text:" if action_type == ActionType.INPUT_TEXT else "File Path:"
-                    ttk.Label(fields_frame, text=label, font=('Arial', 20, 'bold')).grid(row=row, column=0, 
+                    ttk.Label(fields_frame, text=label).grid(row=row, column=0, 
                                                             sticky=tk.W, pady=10, padx=(0, 15))
                     field_vars['value'] = tk.StringVar()
-                    value_text = tk.Text(fields_frame, width=60, height=1, font=('Arial', 24), wrap=tk.WORD)
+                    value_text = tk.Text(fields_frame, width=field_width, height=field_height, 
+                                        wrap=tk.WORD, font=('Arial', max(20, self.settings.get('font_size', 20) - 2)))
                     value_text.grid(row=row, column=1, pady=10, sticky=(tk.W, tk.E))
                     
                     def update_value(*args):
@@ -748,14 +871,14 @@ class AutomationGUI:
                     value_text.bind('<KeyRelease>', lambda e: field_vars['value'].set(value_text.get("1.0", tk.END).strip()))
                     
                     if action_type == ActionType.UPLOAD_IMAGE:
-                        ttk.Button(fields_frame, text="Browse", font=('Arial', 11),
+                        ttk.Button(fields_frame, text="Browse",
                                   command=lambda: field_vars['value'].set(
                                       filedialog.askopenfilename()
                                   )).grid(row=row, column=2, padx=10, pady=10)
                     row += 1
                     
                 elif action_type == ActionType.TOGGLE_SETTING:
-                    ttk.Label(fields_frame, text="Enable:", font=('Arial', 20, 'bold')).grid(row=row, column=0, 
+                    ttk.Label(fields_frame, text="Enable:").grid(row=row, column=0, 
                                                                 sticky=tk.W, pady=10, padx=(0, 15))
                     field_vars['value'] = tk.BooleanVar()
                     check_frame = ttk.Frame(fields_frame)
@@ -766,7 +889,7 @@ class AutomationGUI:
                     
                 elif action_type == ActionType.CHECK_ELEMENT:
                     # Check type dropdown
-                    ttk.Label(fields_frame, text="Check Type:", font=('Arial', 20, 'bold')).grid(row=row, column=0, 
+                    ttk.Label(fields_frame, text="Check Type:").grid(row=row, column=0, 
                                                                 sticky=tk.W, pady=10, padx=(0, 15))
                     field_vars['check_type'] = tk.StringVar(value="equals")
                     check_types = ["equals", "not_equals", "greater", "less", "contains", "not_zero"]
@@ -777,10 +900,11 @@ class AutomationGUI:
                     row += 1
                     
                     # Expected value
-                    ttk.Label(fields_frame, text="Expected Value:", font=('Arial', 20, 'bold')).grid(row=row, column=0,
+                    ttk.Label(fields_frame, text="Expected Value:").grid(row=row, column=0,
                                                                 sticky=tk.W, pady=10, padx=(0, 15))
                     field_vars['expected_value'] = tk.StringVar()
-                    expected_text = tk.Text(fields_frame, width=60, height=1, font=('Arial', 24), wrap=tk.WORD)
+                    expected_text = tk.Text(fields_frame, width=field_width, height=field_height, 
+                                           wrap=tk.WORD, font=('Arial', max(20, self.settings.get('font_size', 20) - 2)))
                     expected_text.grid(row=row, column=1, pady=10, sticky=(tk.W, tk.E))
                     
                     def update_expected(*args):
@@ -791,10 +915,11 @@ class AutomationGUI:
                     row += 1
                     
                     # Attribute to check
-                    ttk.Label(fields_frame, text="Attribute:", font=('Arial', 20, 'bold')).grid(row=row, column=0,
+                    ttk.Label(fields_frame, text="Attribute:").grid(row=row, column=0,
                                                                 sticky=tk.W, pady=10, padx=(0, 15))
                     field_vars['attribute'] = tk.StringVar(value="text")
-                    attr_text = tk.Text(fields_frame, width=60, height=1, font=('Arial', 24), wrap=tk.WORD)
+                    attr_text = tk.Text(fields_frame, width=field_width, height=field_height, 
+                                       wrap=tk.WORD, font=('Arial', max(20, self.settings.get('font_size', 20) - 2)))
                     attr_text.grid(row=row, column=1, pady=10, sticky=(tk.W, tk.E))
                     attr_text.insert("1.0", "text")
                     
@@ -806,14 +931,15 @@ class AutomationGUI:
                     
                     # Attribute help text
                     ttk.Label(fields_frame, text="(e.g., text, value, data-count, aria-label)", 
-                             font=('Arial', 12), foreground='gray').grid(row=row+1, column=1, sticky=tk.W, pady=(0, 10))
+                             foreground='gray').grid(row=row+1, column=1, sticky=tk.W, pady=(0, 10))
                     row += 2
                     
                 elif action_type == ActionType.WAIT:
-                    ttk.Label(fields_frame, text="Wait (ms):", font=('Arial', 20, 'bold')).grid(row=row, column=0, 
+                    ttk.Label(fields_frame, text="Wait (ms):").grid(row=row, column=0, 
                                                                    sticky=tk.W, pady=10, padx=(0, 15))
                     field_vars['value'] = tk.StringVar(value="1000")
-                    wait_text = tk.Text(fields_frame, width=60, height=1, font=('Arial', 24), wrap=tk.WORD)
+                    wait_text = tk.Text(fields_frame, width=field_width, height=field_height, 
+                                       wrap=tk.WORD, font=('Arial', max(20, self.settings.get('font_size', 20) - 2)))
                     wait_text.grid(row=row, column=1, pady=10, sticky=(tk.W, tk.E))
                     wait_text.insert("1.0", "1000")
                     
@@ -825,10 +951,11 @@ class AutomationGUI:
                     row += 1
             
             # Description field (always present)
-            ttk.Label(fields_frame, text="Description:", font=('Arial', 20, 'bold')).grid(row=row, column=0, 
+            ttk.Label(fields_frame, text="Description:").grid(row=row, column=0, 
                                                              sticky=tk.W, pady=10, padx=(0, 15))
             field_vars['description'] = tk.StringVar()
-            desc_text = tk.Text(fields_frame, width=60, height=1, font=('Arial', 24), wrap=tk.WORD)
+            desc_text = tk.Text(fields_frame, width=field_width, height=field_height, 
+                               wrap=tk.WORD, font=('Arial', max(20, self.settings.get('font_size', 20) - 2)))
             desc_text.grid(row=row, column=1, pady=10, sticky=(tk.W, tk.E))
             
             def update_desc(*args):
@@ -932,15 +1059,32 @@ class AutomationGUI:
         try:
             dialog = tk.Toplevel(self.root)
             dialog.title("Edit Action")
-            dialog.geometry("600x700")
+            
+            # Calculate dialog size to accommodate all fields properly (same as Add Action)
+            font_size = self.settings.get('font_size', 20)
+            if font_size <= 20:
+                dialog_width, dialog_height = 800, 900
+            elif font_size <= 30:
+                dialog_width, dialog_height = 900, 1000
+            else:  # Large fonts (30+)
+                dialog_width, dialog_height = 1000, 1100
+            
+            dialog.geometry(f"{dialog_width}x{dialog_height}")
+            dialog.minsize(700, 800)
             dialog.transient(self.root)
             
             # Add protocol handler to prevent dialog from closing unexpectedly
             dialog.protocol("WM_DELETE_WINDOW", dialog.destroy)
             
-            # Main frame
-            main_frame = ttk.Frame(dialog, padding="20")
-            main_frame.pack(fill=tk.BOTH, expand=True)
+            # Apply theme to dialog
+            self._apply_dialog_theme(dialog)
+            
+            # Make dialog resizable
+            dialog.resizable(True, True)
+            
+            # Configure grid weights for proper scaling
+            dialog.columnconfigure(1, weight=1)
+            dialog.rowconfigure(1, weight=1)
             
             # Action type (read-only) - with error handling
             try:
@@ -953,46 +1097,109 @@ class AutomationGUI:
                 dialog.destroy()
                 return
             
-            ttk.Label(main_frame, text="Action Type:", font=("Segoe UI", 10, "bold")).pack(anchor=tk.W, pady=(0, 5))
-            type_label = ttk.Label(main_frame, text=action_type.value, 
-                                  foreground="gray", font=("Segoe UI", 10))
-            type_label.pack(anchor=tk.W, pady=(0, 10))
+            # Action type display
+            ttk.Label(dialog, text="Action Type:").grid(row=0, column=0, sticky=tk.W, 
+                                                       padx=20, pady=20)
+            type_label = ttk.Label(dialog, text=action_type.value, style='Heading.TLabel')
+            type_label.grid(row=0, column=1, sticky=tk.W, padx=20, pady=20)
             
-            # Scrollable frame for fields
-            canvas = tk.Canvas(main_frame, height=400)
-            scrollbar = ttk.Scrollbar(main_frame, orient="vertical", command=canvas.yview)
-            scrollable_frame = ttk.Frame(canvas)
+            # Main content frame using pack layout like Add Action
+            main_frame = ttk.Frame(dialog, padding="20")
+            main_frame.grid(row=1, column=0, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S), padx=10, pady=10)
+            main_frame.columnconfigure(0, weight=1)
+            main_frame.rowconfigure(0, weight=1)
+            
+            # Create a simple form for editing
+            form_frame = ttk.Frame(main_frame)
+            form_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+            
+            # Get proper entry width
+            entry_width = self._calculate_entry_width()
             
             # Dictionary to store field variables
             field_vars = {}
             
-            try:
-                # Create fields based on action type
-                self._create_action_fields(scrollable_frame, action_type, field_vars, action_data)
-            except Exception as e:
-                messagebox.showerror("Error", f"Failed to create fields: {str(e)}")
-                dialog.destroy()
-                return
+            # Description field (always present)
+            ttk.Label(form_frame, text="Description:").pack(anchor=tk.W, pady=(0, 5))
+            field_vars['description'] = tk.StringVar()
+            if action_data and action_data.get('description'):
+                field_vars['description'].set(action_data['description'])
+            ttk.Entry(form_frame, textvariable=field_vars['description'], width=entry_width).pack(anchor=tk.W, pady=(0, 15), fill=tk.X)
             
-            # Configure scrollable area
-            scrollable_frame.bind(
-                "<Configure>",
-                lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
-            )
+            # Add specific fields based on action type
+            # Most action types need a selector field
+            actions_with_selector = [
+                ActionType.CLICK_BUTTON, ActionType.INPUT_TEXT, ActionType.TOGGLE_SETTING,
+                ActionType.EXPAND_DIALOG, ActionType.UPLOAD_IMAGE, ActionType.CHECK_QUEUE,
+                ActionType.CHECK_ELEMENT, ActionType.DOWNLOAD_FILE, ActionType.SWITCH_PANEL,
+                ActionType.WAIT_FOR_ELEMENT
+            ]
             
-            canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
-            canvas.configure(yscrollcommand=scrollbar.set)
+            if action_type in actions_with_selector:
+                ttk.Label(form_frame, text="Selector:").pack(anchor=tk.W, pady=(0, 5))
+                field_vars['selector'] = tk.StringVar()
+                if action_data and action_data.get('selector'):
+                    field_vars['selector'].set(action_data['selector'])
+                ttk.Entry(form_frame, textvariable=field_vars['selector'], width=entry_width).pack(anchor=tk.W, pady=(0, 10), fill=tk.X)
+                
+                if action_type == ActionType.INPUT_TEXT:
+                    ttk.Label(form_frame, text="Value:").pack(anchor=tk.W, pady=(0, 5))
+                    field_vars['value'] = tk.StringVar()
+                    if action_data and action_data.get('value'):
+                        field_vars['value'].set(action_data['value'])
+                    ttk.Entry(form_frame, textvariable=field_vars['value'], width=entry_width).pack(anchor=tk.W, pady=(0, 10), fill=tk.X)
+                elif action_type == ActionType.TOGGLE_SETTING:
+                    ttk.Label(form_frame, text="Enable:").pack(anchor=tk.W, pady=(0, 5))
+                    field_vars['value'] = tk.BooleanVar()
+                    if action_data and 'value' in action_data:
+                        field_vars['value'].set(action_data['value'])
+                    else:
+                        field_vars['value'].set(True)
+                    enable_check = ttk.Checkbutton(form_frame, text="Yes (checked) / No (unchecked)", 
+                                                  variable=field_vars['value'])
+                    enable_check.pack(anchor=tk.W, pady=(0, 10))
+                elif action_type == ActionType.CHECK_ELEMENT:
+                    # For CHECK_ELEMENT, show a read-only note about the check configuration
+                    if action_data and action_data.get('value'):
+                        check_info = action_data['value']
+                        check_type = check_info.get('check', 'unknown')
+                        expected = check_info.get('value', '')
+                        attribute = check_info.get('attribute', 'text')
+                        info_text = f"Check: {check_type}, Expected: {expected}, Attribute: {attribute}"
+                        ttk.Label(form_frame, text="Check Configuration:").pack(anchor=tk.W, pady=(5, 2))
+                        ttk.Label(form_frame, text=info_text, foreground="gray").pack(anchor=tk.W, pady=(0, 10))
             
-            canvas.pack(side="left", fill="both", expand=True, pady=(0, 10))
-            scrollbar.pack(side="right", fill="y", pady=(0, 10))
+            elif action_type == ActionType.WAIT:
+                ttk.Label(form_frame, text="Wait Time (ms):").pack(anchor=tk.W, pady=(0, 5))
+                field_vars['value'] = tk.StringVar()
+                if action_data and action_data.get('value'):
+                    field_vars['value'].set(str(action_data['value']))
+                else:
+                    field_vars['value'].set('1000')
+                ttk.Entry(form_frame, textvariable=field_vars['value'], width=entry_width).pack(anchor=tk.W, pady=(0, 10), fill=tk.X)
             
-            # Update canvas scroll region after widget creation
-            scrollable_frame.update_idletasks()
-            canvas.configure(scrollregion=canvas.bbox("all"))
+            elif action_type in [ActionType.IF_BEGIN, ActionType.ELIF, ActionType.WHILE_BEGIN, 
+                                ActionType.CONDITIONAL_WAIT, ActionType.SKIP_IF]:
+                # Show read-only information for complex conditional actions
+                if action_data and action_data.get('value'):
+                    cond_info = action_data['value']
+                    condition = cond_info.get('condition', 'unknown')
+                    info_text = f"Condition: {condition}"
+                    
+                    if action_type == ActionType.CONDITIONAL_WAIT:
+                        wait_time = cond_info.get('wait_time', 5000)
+                        max_retries = cond_info.get('max_retries', 3)
+                        info_text += f"\nWait: {wait_time}ms, Max Retries: {max_retries}"
+                    elif action_type == ActionType.SKIP_IF:
+                        skip_count = cond_info.get('skip_count', 1)
+                        info_text += f"\nSkip Count: {skip_count}"
+                    
+                    ttk.Label(form_frame, text="Conditional Configuration:").pack(anchor=tk.W, pady=(5, 2))
+                    ttk.Label(form_frame, text=info_text, foreground="gray").pack(anchor=tk.W, pady=(0, 10))
         
             # Button frame
-            button_frame = ttk.Frame(main_frame)
-            button_frame.pack(fill=tk.X, pady=(20, 0))
+            button_frame = ttk.Frame(dialog)
+            button_frame.grid(row=2, column=0, columnspan=2, padx=20, pady=20, sticky=(tk.W, tk.E))
             
             def save_action():
                 """Save the edited action"""
@@ -1003,57 +1210,33 @@ class AutomationGUI:
                         'description': field_vars.get('description', tk.StringVar()).get()
                     }
                     
-                    # Handle different action types
-                    if action_type == ActionType.LOGIN:
-                        login_data = {
-                            'username': field_vars['username'].get(),
-                            'password': field_vars['password'].get(),
-                            'username_selector': field_vars['username_selector'].get(),
-                            'password_selector': field_vars['password_selector'].get(),
-                            'submit_selector': field_vars['submit_selector'].get()
-                        }
-                        updated_data['value'] = login_data
-                    elif action_type == ActionType.CHECK_ELEMENT:
-                        check_data = {
-                            'check': field_vars['check_type'].get(),
-                            'value': field_vars['expected_value'].get(),
-                            'attribute': field_vars['attribute'].get()
-                        }
-                        updated_data['selector'] = field_vars.get('selector', tk.StringVar()).get()
-                        updated_data['value'] = check_data
-                    elif action_type in [ActionType.IF_BEGIN, ActionType.ELIF, ActionType.WHILE_BEGIN]:
-                        # Handle conditional block actions
-                        condition_data = {
-                            'condition': field_vars['condition'].get()
-                        }
-                        updated_data['value'] = condition_data
-                    elif action_type in [ActionType.CONDITIONAL_WAIT]:
-                        # Handle conditional wait
-                        conditional_data = {
-                            'condition': field_vars['condition'].get(),
-                            'wait_time': int(field_vars['wait_time'].get() or 5000),
-                            'max_retries': int(field_vars['max_retries'].get() or 3),
-                            'retry_from_action': int(field_vars['retry_from_action'].get() or 0)
-                        }
-                        updated_data['value'] = conditional_data
-                    elif action_type in [ActionType.SKIP_IF]:
-                        # Handle skip if
-                        skip_data = {
-                            'condition': field_vars['condition'].get(),
-                            'skip_count': int(field_vars['skip_count'].get() or 1)
-                        }
-                        updated_data['value'] = skip_data
-                    else:
-                        # Handle standard actions
-                        if 'selector' in field_vars:
-                            updated_data['selector'] = field_vars['selector'].get()
-                        if 'value' in field_vars:
+                    # Handle basic field types that are available in the simplified edit form
+                    if 'selector' in field_vars:
+                        updated_data['selector'] = field_vars['selector'].get()
+                    
+                    if 'value' in field_vars:
+                        if isinstance(field_vars['value'], tk.BooleanVar):
+                            # Handle boolean values for toggle_setting
+                            updated_data['value'] = field_vars['value'].get()
+                        else:
                             value = field_vars['value'].get()
-                            if isinstance(field_vars['value'], tk.BooleanVar):
-                                value = field_vars['value'].get()
-                            elif action_type == ActionType.WAIT:
-                                value = int(value) if value else 1000
-                            updated_data['value'] = value
+                            if action_type == ActionType.WAIT:
+                                try:
+                                    updated_data['value'] = int(value) if value else 1000
+                                except ValueError:
+                                    updated_data['value'] = 1000
+                            else:
+                                updated_data['value'] = value
+                    
+                    # Preserve original complex data structures for advanced action types
+                    if action_data and 'value' in action_data and isinstance(action_data['value'], dict):
+                        # Keep the original value structure but allow description updates
+                        if action_type not in [ActionType.CLICK_BUTTON, ActionType.INPUT_TEXT, ActionType.WAIT]:
+                            updated_data['value'] = action_data['value']
+                            
+                    # Preserve original selector for complex actions
+                    if action_data and 'selector' in action_data and 'selector' not in field_vars:
+                        updated_data['selector'] = action_data['selector']
                     
                     # Update the action data
                     self.actions_data[index] = updated_data
@@ -1073,12 +1256,9 @@ class AutomationGUI:
             ModernButton(button_frame, text="Cancel", command=dialog.destroy).pack(side=tk.LEFT, padx=10)
             
             # Center dialog on parent window
-            dialog.update_idletasks()
-            x = (dialog.winfo_screenwidth() - dialog.winfo_width()) // 2
-            y = (dialog.winfo_screenheight() - dialog.winfo_height()) // 2
-            dialog.geometry(f"+{x}+{y}")
+            self._center_dialog(dialog)
             
-            # Don't grab_set to prevent freezing
+            # Focus on dialog
             dialog.focus_set()
             
         except Exception as e:
@@ -1132,20 +1312,23 @@ class AutomationGUI:
     def _create_action_fields(self, parent, action_type, field_vars, action_data=None):
         """Create form fields based on action type for add/edit dialogs"""
         
+        # Get proper entry width for current font size
+        entry_width = self._calculate_entry_width()
+        
         # Common description field
-        ttk.Label(parent, text="Description:", font=("Segoe UI", 10, "bold")).pack(anchor=tk.W, pady=(0, 5))
+        ttk.Label(parent, text="Description:").pack(anchor=tk.W, pady=(0, 5))
         field_vars['description'] = tk.StringVar()
         if action_data and action_data.get('description'):
             field_vars['description'].set(action_data['description'])
-        ttk.Entry(parent, textvariable=field_vars['description'], width=50).pack(anchor=tk.W, pady=(0, 15))
+        ttk.Entry(parent, textvariable=field_vars['description'], width=entry_width).pack(anchor=tk.W, pady=(0, 15))
         
         # Block control actions (IF/WHILE/ELSE)
         if action_type in [ActionType.IF_BEGIN, ActionType.ELIF, ActionType.WHILE_BEGIN]:
-            ttk.Label(parent, text="Condition:", font=("Segoe UI", 10, "bold")).pack(anchor=tk.W, pady=(0, 5))
+            ttk.Label(parent, text="Condition:").pack(anchor=tk.W, pady=(0, 5))
             field_vars['condition'] = tk.StringVar()
             condition_combo = ttk.Combobox(parent, textvariable=field_vars['condition'], 
                                          values=['check_passed', 'check_failed', 'value_equals', 'value_not_equals'],
-                                         state='readonly', width=47)
+                                         state='readonly', width=entry_width)
             condition_combo.pack(anchor=tk.W, pady=(0, 5))
             
             # Set default/current value
@@ -1160,7 +1343,7 @@ class AutomationGUI:
                        "• check_failed: Execute if last check returned false\n" \
                        "• value_equals: Execute if actual equals expected\n" \
                        "• value_not_equals: Execute if actual differs from expected"
-            ttk.Label(parent, text=help_text, font=("Segoe UI", 8), foreground="gray").pack(anchor=tk.W, pady=(0, 15))
+            ttk.Label(parent, text=help_text, foreground="gray").pack(anchor=tk.W, pady=(0, 15))
         
         elif action_type in [ActionType.ELSE, ActionType.IF_END, ActionType.WHILE_END, ActionType.BREAK, ActionType.CONTINUE]:
             # These actions don't need additional configuration
@@ -1169,27 +1352,27 @@ class AutomationGUI:
         
         elif action_type == ActionType.CONDITIONAL_WAIT:
             # Condition dropdown
-            ttk.Label(parent, text="Condition:", font=("Segoe UI", 10, "bold")).pack(anchor=tk.W, pady=(0, 5))
+            ttk.Label(parent, text="Condition:").pack(anchor=tk.W, pady=(0, 5))
             field_vars['condition'] = tk.StringVar()
             condition_combo = ttk.Combobox(parent, textvariable=field_vars['condition'],
                                          values=['check_failed', 'check_passed', 'value_equals', 'value_not_equals'],
-                                         state='readonly', width=47)
+                                         state='readonly', width=entry_width)
             condition_combo.pack(anchor=tk.W, pady=(0, 10))
             
             # Wait time
-            ttk.Label(parent, text="Wait Time (ms):", font=("Segoe UI", 10, "bold")).pack(anchor=tk.W, pady=(0, 5))
+            ttk.Label(parent, text="Wait Time (ms):").pack(anchor=tk.W, pady=(0, 5))
             field_vars['wait_time'] = tk.StringVar()
-            ttk.Entry(parent, textvariable=field_vars['wait_time'], width=50).pack(anchor=tk.W, pady=(0, 10))
+            ttk.Entry(parent, textvariable=field_vars['wait_time'], width=entry_width).pack(anchor=tk.W, pady=(0, 10))
             
             # Max retries
-            ttk.Label(parent, text="Max Retries:", font=("Segoe UI", 10, "bold")).pack(anchor=tk.W, pady=(0, 5))
+            ttk.Label(parent, text="Max Retries:").pack(anchor=tk.W, pady=(0, 5))
             field_vars['max_retries'] = tk.StringVar()
-            ttk.Entry(parent, textvariable=field_vars['max_retries'], width=50).pack(anchor=tk.W, pady=(0, 10))
+            ttk.Entry(parent, textvariable=field_vars['max_retries'], width=entry_width).pack(anchor=tk.W, pady=(0, 10))
             
             # Retry from action
-            ttk.Label(parent, text="Retry From Action Index:", font=("Segoe UI", 10, "bold")).pack(anchor=tk.W, pady=(0, 5))
+            ttk.Label(parent, text="Retry From Action Index:").pack(anchor=tk.W, pady=(0, 5))
             field_vars['retry_from_action'] = tk.StringVar()
-            ttk.Entry(parent, textvariable=field_vars['retry_from_action'], width=50).pack(anchor=tk.W, pady=(0, 10))
+            ttk.Entry(parent, textvariable=field_vars['retry_from_action'], width=entry_width).pack(anchor=tk.W, pady=(0, 10))
             
             # Set defaults/current values
             if action_data and action_data.get('value'):
@@ -1206,17 +1389,17 @@ class AutomationGUI:
         
         elif action_type == ActionType.SKIP_IF:
             # Condition dropdown
-            ttk.Label(parent, text="Condition:", font=("Segoe UI", 10, "bold")).pack(anchor=tk.W, pady=(0, 5))
+            ttk.Label(parent, text="Condition:").pack(anchor=tk.W, pady=(0, 5))
             field_vars['condition'] = tk.StringVar()
             condition_combo = ttk.Combobox(parent, textvariable=field_vars['condition'],
                                          values=['check_passed', 'check_failed', 'value_equals', 'value_not_equals'],
-                                         state='readonly', width=47)
+                                         state='readonly', width=entry_width)
             condition_combo.pack(anchor=tk.W, pady=(0, 10))
             
             # Skip count
-            ttk.Label(parent, text="Skip Count:", font=("Segoe UI", 10, "bold")).pack(anchor=tk.W, pady=(0, 5))
+            ttk.Label(parent, text="Skip Count:").pack(anchor=tk.W, pady=(0, 5))
             field_vars['skip_count'] = tk.StringVar()
-            ttk.Entry(parent, textvariable=field_vars['skip_count'], width=50).pack(anchor=tk.W, pady=(0, 10))
+            ttk.Entry(parent, textvariable=field_vars['skip_count'], width=entry_width).pack(anchor=tk.W, pady=(0, 10))
             
             # Set defaults/current values
             if action_data and action_data.get('value'):
@@ -1229,29 +1412,29 @@ class AutomationGUI:
         
         elif action_type == ActionType.LOGIN:
             # Username
-            ttk.Label(parent, text="Username:", font=("Segoe UI", 10, "bold")).pack(anchor=tk.W, pady=(0, 5))
+            ttk.Label(parent, text="Username:").pack(anchor=tk.W, pady=(0, 5))
             field_vars['username'] = tk.StringVar()
-            ttk.Entry(parent, textvariable=field_vars['username'], width=50).pack(anchor=tk.W, pady=(0, 10))
+            ttk.Entry(parent, textvariable=field_vars['username'], width=entry_width).pack(anchor=tk.W, pady=(0, 10))
             
             # Password
-            ttk.Label(parent, text="Password:", font=("Segoe UI", 10, "bold")).pack(anchor=tk.W, pady=(0, 5))
+            ttk.Label(parent, text="Password:").pack(anchor=tk.W, pady=(0, 5))
             field_vars['password'] = tk.StringVar()
-            ttk.Entry(parent, textvariable=field_vars['password'], show="*", width=50).pack(anchor=tk.W, pady=(0, 10))
+            ttk.Entry(parent, textvariable=field_vars['password'], show="*", width=entry_width).pack(anchor=tk.W, pady=(0, 10))
             
             # Username selector
-            ttk.Label(parent, text="Username Selector:", font=("Segoe UI", 10, "bold")).pack(anchor=tk.W, pady=(0, 5))
+            ttk.Label(parent, text="Username Selector:").pack(anchor=tk.W, pady=(0, 5))
             field_vars['username_selector'] = tk.StringVar()
-            ttk.Entry(parent, textvariable=field_vars['username_selector'], width=50).pack(anchor=tk.W, pady=(0, 10))
+            ttk.Entry(parent, textvariable=field_vars['username_selector'], width=entry_width).pack(anchor=tk.W, pady=(0, 10))
             
             # Password selector
-            ttk.Label(parent, text="Password Selector:", font=("Segoe UI", 10, "bold")).pack(anchor=tk.W, pady=(0, 5))
+            ttk.Label(parent, text="Password Selector:").pack(anchor=tk.W, pady=(0, 5))
             field_vars['password_selector'] = tk.StringVar()
-            ttk.Entry(parent, textvariable=field_vars['password_selector'], width=50).pack(anchor=tk.W, pady=(0, 10))
+            ttk.Entry(parent, textvariable=field_vars['password_selector'], width=entry_width).pack(anchor=tk.W, pady=(0, 10))
             
             # Submit selector
-            ttk.Label(parent, text="Submit Selector:", font=("Segoe UI", 10, "bold")).pack(anchor=tk.W, pady=(0, 5))
+            ttk.Label(parent, text="Submit Selector:").pack(anchor=tk.W, pady=(0, 5))
             field_vars['submit_selector'] = tk.StringVar()
-            ttk.Entry(parent, textvariable=field_vars['submit_selector'], width=50).pack(anchor=tk.W, pady=(0, 10))
+            ttk.Entry(parent, textvariable=field_vars['submit_selector'], width=entry_width).pack(anchor=tk.W, pady=(0, 10))
             
             # Set current values if editing
             if action_data and action_data.get('value'):
@@ -1264,29 +1447,29 @@ class AutomationGUI:
         
         elif action_type == ActionType.CHECK_ELEMENT:
             # Selector
-            ttk.Label(parent, text="Selector:", font=("Segoe UI", 10, "bold")).pack(anchor=tk.W, pady=(0, 5))
+            ttk.Label(parent, text="Selector:").pack(anchor=tk.W, pady=(0, 5))
             field_vars['selector'] = tk.StringVar()
-            ttk.Entry(parent, textvariable=field_vars['selector'], width=50).pack(anchor=tk.W, pady=(0, 10))
+            ttk.Entry(parent, textvariable=field_vars['selector'], width=entry_width).pack(anchor=tk.W, pady=(0, 10))
             
             # Check type
-            ttk.Label(parent, text="Check Type:", font=("Segoe UI", 10, "bold")).pack(anchor=tk.W, pady=(0, 5))
+            ttk.Label(parent, text="Check Type:").pack(anchor=tk.W, pady=(0, 5))
             field_vars['check_type'] = tk.StringVar()
             check_combo = ttk.Combobox(parent, textvariable=field_vars['check_type'],
                                      values=['equals', 'not_equals', 'greater', 'less', 'contains', 'not_zero'],
-                                     state='readonly', width=47)
+                                     state='readonly', width=entry_width)
             check_combo.pack(anchor=tk.W, pady=(0, 10))
             
             # Expected value
-            ttk.Label(parent, text="Expected Value:", font=("Segoe UI", 10, "bold")).pack(anchor=tk.W, pady=(0, 5))
+            ttk.Label(parent, text="Expected Value:").pack(anchor=tk.W, pady=(0, 5))
             field_vars['expected_value'] = tk.StringVar()
-            ttk.Entry(parent, textvariable=field_vars['expected_value'], width=50).pack(anchor=tk.W, pady=(0, 10))
+            ttk.Entry(parent, textvariable=field_vars['expected_value'], width=entry_width).pack(anchor=tk.W, pady=(0, 10))
             
             # Attribute
-            ttk.Label(parent, text="Attribute:", font=("Segoe UI", 10, "bold")).pack(anchor=tk.W, pady=(0, 5))
+            ttk.Label(parent, text="Attribute:").pack(anchor=tk.W, pady=(0, 5))
             field_vars['attribute'] = tk.StringVar()
             attribute_combo = ttk.Combobox(parent, textvariable=field_vars['attribute'],
                                          values=['text', 'value', 'data-count', 'data-status', 'aria-valuenow', 'href', 'title'],
-                                         width=47)
+                                         width=entry_width)
             attribute_combo.pack(anchor=tk.W, pady=(0, 10))
             
             # Set current values if editing
@@ -1305,19 +1488,19 @@ class AutomationGUI:
         else:
             # Standard actions (wait, click, input, etc.)
             if action_type in [ActionType.CLICK_BUTTON, ActionType.INPUT_TEXT, ActionType.WAIT_FOR_ELEMENT]:
-                ttk.Label(parent, text="Selector:", font=("Segoe UI", 10, "bold")).pack(anchor=tk.W, pady=(0, 5))
+                ttk.Label(parent, text="Selector:").pack(anchor=tk.W, pady=(0, 5))
                 field_vars['selector'] = tk.StringVar()
                 if action_data and action_data.get('selector'):
                     field_vars['selector'].set(action_data['selector'])
-                ttk.Entry(parent, textvariable=field_vars['selector'], width=50).pack(anchor=tk.W, pady=(0, 10))
+                ttk.Entry(parent, textvariable=field_vars['selector'], width=entry_width).pack(anchor=tk.W, pady=(0, 10))
             
             if action_type in [ActionType.INPUT_TEXT, ActionType.WAIT]:
                 value_label = "Text:" if action_type == ActionType.INPUT_TEXT else "Duration (ms):"
-                ttk.Label(parent, text=value_label, font=("Segoe UI", 10, "bold")).pack(anchor=tk.W, pady=(0, 5))
+                ttk.Label(parent, text=value_label).pack(anchor=tk.W, pady=(0, 5))
                 field_vars['value'] = tk.StringVar()
                 if action_data and action_data.get('value'):
                     field_vars['value'].set(str(action_data['value']))
-                ttk.Entry(parent, textvariable=field_vars['value'], width=50).pack(anchor=tk.W, pady=(0, 10))
+                ttk.Entry(parent, textvariable=field_vars['value'], width=entry_width).pack(anchor=tk.W, pady=(0, 10))
         
     def _delete_action(self):
         """Delete selected action"""
@@ -1438,10 +1621,18 @@ class AutomationGUI:
             
     def _build_config_from_ui(self) -> AutomationConfig:
         """Build AutomationConfig from UI state"""
+        # Get the selected resolution and convert to viewport
+        resolution = self.settings.get('window_resolution', '1600x1000')
+        try:
+            width, height = map(int, resolution.split('x'))
+        except:
+            width, height = 1600, 1000  # Default fallback
+        
         config = AutomationConfig(
             name=self.name_var.get(),
             url=self.url_var.get(),
             headless=self.headless_var.get(),
+            viewport={"width": width, "height": height},
             actions=[]
         )
         
@@ -1451,7 +1642,7 @@ class AutomationGUI:
                     type=action_data['type'],
                     selector=action_data.get('selector'),
                     value=action_data.get('value'),
-                    timeout=action_data.get('timeout', 30000),
+                    timeout=action_data.get('timeout', 10000),
                     description=action_data.get('description')
                 )
                 config.actions.append(action)
@@ -1806,13 +1997,7 @@ Errors: {len(results.get('errors', []))}
         font_size = self.settings.get('font_size', 20)
         
         # Update ALL ttk styles with new font size
-        self.style.configure('Title.TLabel', font=('Arial', font_size + 4, 'bold'))
-        self.style.configure('Heading.TLabel', font=('Arial', font_size, 'bold'))
-        self.style.configure('TLabel', font=('Arial', max(10, font_size - 4)))
-        self.style.configure('TButton', font=('Arial', max(10, font_size - 6)))
-        self.style.configure('TEntry', font=('Arial', max(10, font_size - 4)))
-        self.style.configure('TCombobox', font=('Arial', max(10, font_size - 4)))
-        self.style.configure('TCheckbutton', font=('Arial', max(10, font_size - 4)))
+        self._configure_ttk_fonts(font_size)
         
         # Apply dark mode if enabled
         if self.settings.get('dark_mode', False):
@@ -1839,16 +2024,19 @@ Errors: {len(results.get('errors', []))}
         # Configure ttk styles for professional dark theme - preserving fonts
         font_size = self.settings.get('font_size', 20)
         
+        # Re-apply font configurations first
+        self._configure_ttk_fonts(font_size)
+        
+        # Then apply color configurations
         self.style.configure('TFrame', background=bg_main)
-        self.style.configure('TLabel', background=bg_main, foreground=text_color,
-                           font=('Arial', max(10, font_size - 4)))
+        self.style.configure('TLabel', background=bg_main, foreground=text_color)
         self.style.configure('TLabelFrame', background=bg_main, foreground=text_bright, 
                             borderwidth=1, relief='solid')
         self.style.configure('TLabelFrame.Label', background=bg_main, foreground=text_bright)
         
         # Improved button styling
         self.style.configure('TButton', background=bg_surface, foreground=text_color,
-                           borderwidth=1, relief='solid', font=('Arial', max(10, font_size - 6)))
+                           borderwidth=1, relief='solid')
         self.style.map('TButton', 
                       background=[('active', accent_color), ('pressed', bg_input)])
         
@@ -1859,13 +2047,12 @@ Errors: {len(results.get('errors', []))}
         self.style.configure('TEntry', 
                            background=input_bg, foreground=input_fg,
                            borderwidth=1, relief='solid', insertcolor=input_fg,
-                           font=('Arial', max(10, font_size - 4)),
                            fieldbackground=input_bg, selectbackground='#6b7d7b',
                            selectforeground='#ffffff')
         
         self.style.configure('TCombobox', 
                            background=input_bg, foreground=input_fg,
-                           borderwidth=1, relief='solid', font=('Arial', max(10, font_size - 4)),
+                           borderwidth=1, relief='solid',
                            fieldbackground=input_bg, selectbackground='#6b7d7b',
                            selectforeground='#ffffff', arrowcolor=input_fg)
         
@@ -1878,7 +2065,7 @@ Errors: {len(results.get('errors', []))}
                       selectforeground=[('readonly', '#ffffff')])
         
         self.style.configure('TCheckbutton', background=bg_main, foreground=text_color,
-                           font=('Arial', max(10, font_size - 4)))
+                           font=('Arial', max(20, font_size - 2)))
         self.style.configure('TScale', background=bg_main, troughcolor=bg_input)
         
         # Notebook styling
@@ -1914,16 +2101,19 @@ Errors: {len(results.get('errors', []))}
         # Configure ttk styles for professional light theme - preserving fonts
         font_size = self.settings.get('font_size', 20)
         
+        # Re-apply font configurations first
+        self._configure_ttk_fonts(font_size)
+        
+        # Then apply color configurations
         self.style.configure('TFrame', background=bg_main)
-        self.style.configure('TLabel', background=bg_main, foreground=text_color,
-                           font=('Arial', max(10, font_size - 4)))
+        self.style.configure('TLabel', background=bg_main, foreground=text_color)
         self.style.configure('TLabelFrame', background=bg_main, foreground=text_bright,
                            borderwidth=1, relief='solid')
         self.style.configure('TLabelFrame.Label', background=bg_main, foreground=text_bright)
         
         # Improved button styling
         self.style.configure('TButton', background=bg_surface, foreground=text_color,
-                           borderwidth=1, relief='solid', font=('Arial', max(10, font_size - 6)))
+                           borderwidth=1, relief='solid')
         self.style.map('TButton',
                       background=[('active', accent_color), ('pressed', '#e1e1e1')])
         
@@ -1934,13 +2124,13 @@ Errors: {len(results.get('errors', []))}
         self.style.configure('TEntry', 
                            background=light_input_bg, foreground=light_input_fg,
                            borderwidth=1, relief='solid', insertcolor=light_input_fg,
-                           font=('Arial', max(10, font_size - 4)),
+                           
                            fieldbackground=light_input_bg, selectbackground='#0078d4',
                            selectforeground='#ffffff')
                            
         self.style.configure('TCombobox', 
                            background=light_input_bg, foreground=light_input_fg,
-                           borderwidth=1, relief='solid', font=('Arial', max(10, font_size - 4)),
+                           borderwidth=1, relief='solid',
                            fieldbackground=light_input_bg, selectbackground='#0078d4',
                            selectforeground='#ffffff', arrowcolor=light_input_fg)
         
@@ -1953,7 +2143,7 @@ Errors: {len(results.get('errors', []))}
                       selectforeground=[('readonly', '#ffffff')])
         
         self.style.configure('TCheckbutton', background=bg_main, foreground=text_color,
-                           font=('Arial', max(10, font_size - 4)))
+                           font=('Arial', max(20, font_size - 2)))
         self.style.configure('TScale', background=bg_main, troughcolor=bg_surface)
         
         # Notebook styling
@@ -1983,7 +2173,7 @@ Errors: {len(results.get('errors', []))}
                 fg=text_bright,
                 selectbackground=bg_surface,
                 selectforeground=text_bright,
-                font=('Arial', max(10, self.settings.get('font_size', 20) - 4))
+                font=('Arial', max(20, self.settings.get('font_size', 20) - 2))
             )
             
         # Update log text area
@@ -2017,7 +2207,7 @@ Errors: {len(results.get('errors', []))}
                 insertbackground=text_bright,
                 selectbackground=bg_surface,
                 selectforeground=text_bright,
-                font=('Arial', max(10, self.settings.get('font_size', 20) - 4))
+                font=('Arial', max(20, self.settings.get('font_size', 20) - 2))
             )
             
         if hasattr(self, 'url_entry'):
@@ -2027,7 +2217,7 @@ Errors: {len(results.get('errors', []))}
                 insertbackground=text_bright,
                 selectbackground=bg_surface,
                 selectforeground=text_bright,
-                font=('Arial', max(10, self.settings.get('font_size', 20) - 4))
+                font=('Arial', max(20, self.settings.get('font_size', 20) - 2))
             )
             
         # Update all ModernButton instances
@@ -2059,13 +2249,7 @@ Errors: {len(results.get('errors', []))}
         self.settings['font_size'] = font_size
         
         # Update ALL ttk styles comprehensively
-        self.style.configure('Title.TLabel', font=('Arial', font_size + 4, 'bold'))
-        self.style.configure('Heading.TLabel', font=('Arial', font_size, 'bold'))
-        self.style.configure('TLabel', font=('Arial', max(10, font_size - 4)))
-        self.style.configure('TButton', font=('Arial', max(10, font_size - 6)))
-        self.style.configure('TEntry', font=('Arial', max(10, font_size - 4)))
-        self.style.configure('TCombobox', font=('Arial', max(10, font_size - 4)))
-        self.style.configure('TCheckbutton', font=('Arial', max(10, font_size - 4)))
+        self._configure_ttk_fonts(font_size)
         
         # Force update of all ttk widgets
         self._force_ttk_update()
@@ -2073,15 +2257,15 @@ Errors: {len(results.get('errors', []))}
         # Update all tkinter widgets that don't use ttk styles
         try:
             if hasattr(self, 'actions_listbox'):
-                self.actions_listbox.config(font=('Arial', max(10, font_size - 4)))
+                self.actions_listbox.config(font=('Arial', max(20, font_size - 2)))
             if hasattr(self, 'log_text'):
                 self.log_text.config(font=('Courier', max(9, font_size - 6)))
             if hasattr(self, 'stats_text'):
                 self.stats_text.config(font=('Courier', max(9, font_size - 6)))
             if hasattr(self, 'name_entry'):
-                self.name_entry.config(font=('Arial', max(10, font_size - 4)))
+                self.name_entry.config(font=('Arial', max(20, font_size - 2)))
             if hasattr(self, 'url_entry'):
-                self.url_entry.config(font=('Arial', max(10, font_size - 4)))
+                self.url_entry.config(font=('Arial', max(20, font_size - 2)))
         except:
             pass  # Ignore errors if widgets don't exist yet
             
@@ -2124,8 +2308,8 @@ Errors: {len(results.get('errors', []))}
             
     def _apply_saved_resolution(self):
         """Apply the saved resolution on startup"""
-        resolution = self.settings.get('window_resolution', '1200x800')
-        if resolution != '1200x800':  # Only apply if different from default
+        resolution = self.settings.get('window_resolution', '1600x1000')
+        if resolution != '1600x1000':  # Only apply if different from default
             try:
                 width, height = map(int, resolution.split('x'))
                 # Get screen dimensions to ensure window fits
@@ -2143,8 +2327,8 @@ Errors: {len(results.get('errors', []))}
                 
             except Exception as e:
                 # Fall back to default if there's an error
-                self.root.geometry("1200x800")
-                self.settings['window_resolution'] = '1200x800'
+                self.root.geometry("1600x1000")
+                self.settings['window_resolution'] = '1600x1000'
             
     def _force_ttk_update(self):
         """Force update of all ttk widgets by refreshing their styles"""

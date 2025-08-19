@@ -200,7 +200,7 @@ class AutomationConfig:
 
     def __post_init__(self):
         if self.viewport is None:
-            self.viewport = {"width": 1280, "height": 720}
+            self.viewport = {"width": 1600, "height": 1000}  # Updated default to match GUI default
 
 
 class WebAutomationEngine:
