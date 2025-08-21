@@ -1,0 +1,62 @@
+{
+  "test_run": {
+    "timestamp": "2025-08-19 23:11:09",
+    "duration": 0.004076719284057617,
+    "total_suites": 4,
+    "passed_suites": 4,
+    "failed_suites": 0,
+    "success_rate": 100.0
+  },
+  "test_suites": {
+    "Core Functionality": {
+      "success": true,
+      "duration": 0.00013303756713867188,
+      "error": null
+    },
+    "Edge Cases & Stress": {
+      "success": true,
+      "duration": 0.0030901432037353516,
+      "error": null
+    },
+    "UI Interactions": {
+      "success": true,
+      "duration": 0.00012946128845214844,
+      "error": null
+    },
+    "Validation & Persistence": {
+      "success": true,
+      "duration": 0.0007135868072509766,
+      "error": null
+    }
+  },
+  "coverage": {
+    "action_types": 27,
+    "field_types": [
+      "text",
+      "numeric",
+      "boolean",
+      "dropdown",
+      "selector"
+    ],
+    "validation_types": [
+      "required",
+      "format",
+      "dependency",
+      "range"
+    ],
+    "interaction_types": [
+      "click",
+      "type",
+      "select",
+      "toggle"
+    ]
+  },
+  "quality_gates": {
+    "robustness": true,
+    "security": true,
+    "usability": true,
+    "reliability": true,
+    "performance": true,
+    "accessibility": true
+  }
+}
