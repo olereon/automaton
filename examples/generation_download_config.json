@@ -1,0 +1,51 @@
+{
+  "name": "Generation Download Automation",
+  "url": "https://your-generation-site.com",
+  "headless": false,
+  "viewport": {
+    "width": 1600,
+    "height": 1000
+  },
+  "actions": [
+    {
+      "type": "login",
+      "value": {
+        "username": "your_username",
+        "password": "your_password",
+        "username_selector": "#username",
+        "password_selector": "#password",
+        "submit_selector": "#login-button"
+      },
+      "timeout": 30000,
+      "description": "Login to the generation platform"
+    },
+    {
+      "type": "wait",
+      "value": 3000,
+      "description": "Wait for page to load after login"
+    },
+    {
+      "type": "start_generation_downloads",
+      "value": {
+        "max_downloads": 25,
+        "downloads_folder": "/home/olereon/workspace/github.com/olereon/automaton/downloads/vids",
+        "logs_folder": "/home/olereon/workspace/github.com/olereon/automaton/logs",
+        "download_timeout": 120000,
+        "verification_timeout": 30000,
+        "retry_attempts": 3,
+        "completed_task_selector": "div[id$='__8']",
+        "thumbnail_selector": ".thumbnail-item",
+        "download_button_selector": "[data-spm-anchor-id='a2ty_o02.30365920.0.i1.6daf47258YB5qi']",
+        "download_no_watermark_selector": "[data-spm-anchor-id='a2ty_o02.30365920.0.i2.6daf47258YB5qi']",
+        "generation_date_selector": ".sc-eWXuyo.gwshYN",
+        "prompt_selector": "span[aria-describedby]"
+      },
+      "timeout": 300000,
+      "description": "Start automated generation downloads"
+    },
+    {
+      "type": "check_generation_status",
+      "description": "Check final download status"
+    }
+  ]
+}

@@ -1109,93 +1109,29 @@ class AutomationGUI:
             main_frame.columnconfigure(0, weight=1)
             main_frame.rowconfigure(0, weight=1)
             
-            # Create a simple form for editing
-            form_frame = ttk.Frame(main_frame)
-            form_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+            # Create scrollable canvas for all fields (same as Add Action)
+            canvas = tk.Canvas(main_frame, highlightthickness=0)
+            scrollbar = ttk.Scrollbar(main_frame, orient="vertical", command=canvas.yview)
+            form_frame = ttk.Frame(canvas)
             
-            # Get proper entry width
-            entry_width = self._calculate_entry_width()
+            # Configure scrolling
+            form_frame.bind(
+                "<Configure>",
+                lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+            )
+            
+            canvas.create_window((0, 0), window=form_frame, anchor="nw")
+            canvas.configure(yscrollcommand=scrollbar.set)
+            
+            # Pack canvas and scrollbar
+            canvas.pack(side="left", fill="both", expand=True)
+            scrollbar.pack(side="right", fill="y")
             
             # Dictionary to store field variables
             field_vars = {}
             
-            # Description field (always present)
-            ttk.Label(form_frame, text="Description:").pack(anchor=tk.W, pady=(0, 5))
-            field_vars['description'] = tk.StringVar()
-            if action_data and action_data.get('description'):
-                field_vars['description'].set(action_data['description'])
-            ttk.Entry(form_frame, textvariable=field_vars['description'], width=entry_width).pack(anchor=tk.W, pady=(0, 15), fill=tk.X)
-            
-            # Add specific fields based on action type
-            # Most action types need a selector field
-            actions_with_selector = [
-                ActionType.CLICK_BUTTON, ActionType.INPUT_TEXT, ActionType.TOGGLE_SETTING,
-                ActionType.EXPAND_DIALOG, ActionType.UPLOAD_IMAGE, ActionType.CHECK_QUEUE,
-                ActionType.CHECK_ELEMENT, ActionType.DOWNLOAD_FILE, ActionType.SWITCH_PANEL,
-                ActionType.WAIT_FOR_ELEMENT
-            ]
-            
-            if action_type in actions_with_selector:
-                ttk.Label(form_frame, text="Selector:").pack(anchor=tk.W, pady=(0, 5))
-                field_vars['selector'] = tk.StringVar()
-                if action_data and action_data.get('selector'):
-                    field_vars['selector'].set(action_data['selector'])
-                ttk.Entry(form_frame, textvariable=field_vars['selector'], width=entry_width).pack(anchor=tk.W, pady=(0, 10), fill=tk.X)
-                
-                if action_type == ActionType.INPUT_TEXT:
-                    ttk.Label(form_frame, text="Value:").pack(anchor=tk.W, pady=(0, 5))
-                    field_vars['value'] = tk.StringVar()
-                    if action_data and action_data.get('value'):
-                        field_vars['value'].set(action_data['value'])
-                    ttk.Entry(form_frame, textvariable=field_vars['value'], width=entry_width).pack(anchor=tk.W, pady=(0, 10), fill=tk.X)
-                elif action_type == ActionType.TOGGLE_SETTING:
-                    ttk.Label(form_frame, text="Enable:").pack(anchor=tk.W, pady=(0, 5))
-                    field_vars['value'] = tk.BooleanVar()
-                    if action_data and 'value' in action_data:
-                        field_vars['value'].set(action_data['value'])
-                    else:
-                        field_vars['value'].set(True)
-                    enable_check = ttk.Checkbutton(form_frame, text="Yes (checked) / No (unchecked)", 
-                                                  variable=field_vars['value'])
-                    enable_check.pack(anchor=tk.W, pady=(0, 10))
-                elif action_type == ActionType.CHECK_ELEMENT:
-                    # For CHECK_ELEMENT, show a read-only note about the check configuration
-                    if action_data and action_data.get('value'):
-                        check_info = action_data['value']
-                        check_type = check_info.get('check', 'unknown')
-                        expected = check_info.get('value', '')
-                        attribute = check_info.get('attribute', 'text')
-                        info_text = f"Check: {check_type}, Expected: {expected}, Attribute: {attribute}"
-                        ttk.Label(form_frame, text="Check Configuration:").pack(anchor=tk.W, pady=(5, 2))
-                        ttk.Label(form_frame, text=info_text, foreground="gray").pack(anchor=tk.W, pady=(0, 10))
-            
-            elif action_type == ActionType.WAIT:
-                ttk.Label(form_frame, text="Wait Time (ms):").pack(anchor=tk.W, pady=(0, 5))
-                field_vars['value'] = tk.StringVar()
-                if action_data and action_data.get('value'):
-                    field_vars['value'].set(str(action_data['value']))
-                else:
-                    field_vars['value'].set('1000')
-                ttk.Entry(form_frame, textvariable=field_vars['value'], width=entry_width).pack(anchor=tk.W, pady=(0, 10), fill=tk.X)
-            
-            elif action_type in [ActionType.IF_BEGIN, ActionType.ELIF, ActionType.WHILE_BEGIN, 
-                                ActionType.CONDITIONAL_WAIT, ActionType.SKIP_IF]:
-                # Show read-only information for complex conditional actions
-                if action_data and action_data.get('value'):
-                    cond_info = action_data['value']
-                    condition = cond_info.get('condition', 'unknown')
-                    info_text = f"Condition: {condition}"
-                    
-                    if action_type == ActionType.CONDITIONAL_WAIT:
-                        wait_time = cond_info.get('wait_time', 5000)
-                        max_retries = cond_info.get('max_retries', 3)
-                        info_text += f"\nWait: {wait_time}ms, Max Retries: {max_retries}"
-                    elif action_type == ActionType.SKIP_IF:
-                        skip_count = cond_info.get('skip_count', 1)
-                        info_text += f"\nSkip Count: {skip_count}"
-                    
-                    ttk.Label(form_frame, text="Conditional Configuration:").pack(anchor=tk.W, pady=(5, 2))
-                    ttk.Label(form_frame, text=info_text, foreground="gray").pack(anchor=tk.W, pady=(0, 10))
+            # Use the same comprehensive field creation method as Add Action
+            self._create_action_fields(form_frame, action_type, field_vars, action_data)
         
             # Button frame
             button_frame = ttk.Frame(dialog)
@@ -1204,39 +1140,8 @@ class AutomationGUI:
             def save_action():
                 """Save the edited action"""
                 try:
-                    # Create updated action data
-                    updated_data = {
-                        'type': action_type,
-                        'description': field_vars.get('description', tk.StringVar()).get()
-                    }
-                    
-                    # Handle basic field types that are available in the simplified edit form
-                    if 'selector' in field_vars:
-                        updated_data['selector'] = field_vars['selector'].get()
-                    
-                    if 'value' in field_vars:
-                        if isinstance(field_vars['value'], tk.BooleanVar):
-                            # Handle boolean values for toggle_setting
-                            updated_data['value'] = field_vars['value'].get()
-                        else:
-                            value = field_vars['value'].get()
-                            if action_type == ActionType.WAIT:
-                                try:
-                                    updated_data['value'] = int(value) if value else 1000
-                                except ValueError:
-                                    updated_data['value'] = 1000
-                            else:
-                                updated_data['value'] = value
-                    
-                    # Preserve original complex data structures for advanced action types
-                    if action_data and 'value' in action_data and isinstance(action_data['value'], dict):
-                        # Keep the original value structure but allow description updates
-                        if action_type not in [ActionType.CLICK_BUTTON, ActionType.INPUT_TEXT, ActionType.WAIT]:
-                            updated_data['value'] = action_data['value']
-                            
-                    # Preserve original selector for complex actions
-                    if action_data and 'selector' in action_data and 'selector' not in field_vars:
-                        updated_data['selector'] = action_data['selector']
+                    # Create updated action data using the same logic as Add Action
+                    updated_data = self._collect_action_data(action_type, field_vars)
                     
                     # Update the action data
                     self.actions_data[index] = updated_data
@@ -1265,6 +1170,162 @@ class AutomationGUI:
             messagebox.showerror("Error", f"Failed to create edit dialog: {str(e)}")
             if 'dialog' in locals():
                 dialog.destroy()
+    
+    def _collect_action_data(self, action_type, field_vars):
+        """Collect action data from field variables (same logic as Add Action)"""
+        # Create base action data
+        action_data = {
+            'type': action_type,
+            'description': field_vars.get('description', tk.StringVar()).get()
+        }
+        
+        # Add timeout if present
+        if 'timeout' in field_vars:
+            try:
+                timeout_value = field_vars['timeout'].get()
+                action_data['timeout'] = int(timeout_value) if timeout_value else 2000
+            except (ValueError, AttributeError):
+                action_data['timeout'] = 2000
+        
+        # Handle specific action types
+        if action_type == ActionType.LOGIN:
+            # Handle login action with special value structure
+            login_data = {
+                'username': field_vars.get('username', tk.StringVar()).get(),
+                'password': field_vars.get('password', tk.StringVar()).get(),
+                'username_selector': field_vars.get('username_selector', tk.StringVar()).get(),
+                'password_selector': field_vars.get('password_selector', tk.StringVar()).get(),
+                'submit_selector': field_vars.get('submit_selector', tk.StringVar()).get()
+            }
+            action_data['value'] = login_data
+            
+        elif action_type == ActionType.CHECK_ELEMENT:
+            # Handle check element action with special value structure
+            check_data = {
+                'check': field_vars.get('check_type', tk.StringVar()).get(),
+                'value': field_vars.get('expected_value', tk.StringVar()).get(),
+                'attribute': field_vars.get('attribute', tk.StringVar()).get()
+            }
+            action_data['selector'] = field_vars.get('selector', tk.StringVar()).get()
+            action_data['value'] = check_data
+            
+        elif action_type == ActionType.CONDITIONAL_WAIT:
+            # Handle conditional wait with complex value structure
+            conditional_data = {
+                'condition': field_vars.get('condition', tk.StringVar()).get(),
+                'wait_time': int(field_vars.get('wait_time', tk.StringVar()).get() or 5000),
+                'max_retries': int(field_vars.get('max_retries', tk.StringVar()).get() or 3),
+                'retry_from_action': field_vars.get('retry_from_action', tk.StringVar()).get(),
+                'retry_delay': int(field_vars.get('retry_delay', tk.StringVar()).get() or 1000)
+            }
+            action_data['value'] = conditional_data
+            
+        elif action_type == ActionType.SKIP_IF:
+            # Handle skip if with complex value structure
+            skip_data = {
+                'condition': field_vars.get('condition', tk.StringVar()).get(),
+                'skip_count': int(field_vars.get('skip_count', tk.StringVar()).get() or 1),
+                'reason': field_vars.get('reason', tk.StringVar()).get()
+            }
+            action_data['value'] = skip_data
+            
+        elif action_type in [ActionType.IF_BEGIN, ActionType.ELIF, ActionType.WHILE_BEGIN]:
+            # Handle conditional blocks
+            condition_data = {
+                'condition': field_vars.get('condition', tk.StringVar()).get()
+            }
+            action_data['value'] = condition_data
+            
+        elif action_type == ActionType.SET_VARIABLE:
+            # Handle set variable action
+            var_data = {
+                'variable': field_vars.get('variable', tk.StringVar()).get(),
+                'value': field_vars.get('value', tk.StringVar()).get()
+            }
+            action_data['value'] = var_data
+            
+        elif action_type == ActionType.INCREMENT_VARIABLE:
+            # Handle increment variable action
+            inc_data = {
+                'variable': field_vars.get('variable', tk.StringVar()).get(),
+                'amount': int(field_vars.get('amount', tk.StringVar()).get() or 1)
+            }
+            action_data['value'] = inc_data
+            
+        elif action_type == ActionType.LOG_MESSAGE:
+            # Handle log message action
+            log_data = {
+                'message': field_vars.get('message', tk.StringVar()).get(),
+                'log_file': field_vars.get('log_file', tk.StringVar()).get(),
+                'level': field_vars.get('level', tk.StringVar()).get()
+            }
+            action_data['value'] = log_data
+        
+        elif action_type == ActionType.START_GENERATION_DOWNLOADS:
+            # Handle start generation downloads action
+            config_data = {
+                'max_downloads': int(field_vars.get('max_downloads', tk.StringVar()).get() or 50),
+                'downloads_folder': field_vars.get('downloads_folder', tk.StringVar()).get(),
+                'completed_task_selector': field_vars.get('completed_task_selector', tk.StringVar()).get(),
+                'logs_folder': '/home/olereon/workspace/github.com/olereon/automaton/logs',
+                'download_timeout': 120000,
+                'verification_timeout': 30000,
+                'retry_attempts': 3,
+                'thumbnail_selector': '.thumbnail-item',
+                'download_button_selector': "[data-spm-anchor-id='a2ty_o02.30365920.0.i1.6daf47258YB5qi']",
+                'download_no_watermark_selector': "[data-spm-anchor-id='a2ty_o02.30365920.0.i2.6daf47258YB5qi']",
+                'generation_date_selector': '.sc-eWXuyo.gwshYN',
+                'prompt_selector': 'span[aria-describedby]'
+            }
+            action_data['value'] = config_data
+        
+        elif action_type in [ActionType.STOP_GENERATION_DOWNLOADS, ActionType.CHECK_GENERATION_STATUS]:
+            # These actions don't need additional data
+            pass
+        
+        elif action_type == ActionType.TOGGLE_SETTING:
+            # Handle toggle setting action
+            action_data['selector'] = field_vars.get('selector', tk.StringVar()).get()
+            action_data['value'] = field_vars.get('value', tk.BooleanVar()).get()
+        
+        elif action_type == ActionType.EXPAND_DIALOG:
+            # Handle expand dialog action
+            action_data['selector'] = field_vars.get('selector', tk.StringVar()).get()
+        
+        elif action_type == ActionType.CHECK_QUEUE:
+            # Handle check queue action
+            action_data['selector'] = field_vars.get('selector', tk.StringVar()).get()
+            action_data['value'] = field_vars.get('value', tk.StringVar()).get()
+        
+        elif action_type == ActionType.DOWNLOAD_FILE:
+            # Handle download file action
+            action_data['selector'] = field_vars.get('selector', tk.StringVar()).get()
+        
+        elif action_type == ActionType.SWITCH_PANEL:
+            # Handle switch panel action
+            action_data['selector'] = field_vars.get('selector', tk.StringVar()).get()
+        
+        elif action_type in [ActionType.REFRESH_PAGE, ActionType.STOP_AUTOMATION]:
+            # These actions don't need additional data
+            pass
+            
+        else:
+            # Handle standard actions with selector and value
+            if 'selector' in field_vars:
+                action_data['selector'] = field_vars['selector'].get()
+                
+            if 'value' in field_vars:
+                value = field_vars['value'].get()
+                if isinstance(field_vars['value'], tk.BooleanVar):
+                    value = field_vars['value'].get()
+                elif action_type == ActionType.WAIT:
+                    try:
+                        value = int(value) if value else 1000
+                    except ValueError:
+                        value = 1000
+                action_data['value'] = value
+        
+        return action_data
     
     def _update_action_display(self, index, action_data):
         """Update the display text for an action in the listbox"""
@@ -1332,7 +1393,7 @@ class AutomationGUI:
             condition_combo.pack(anchor=tk.W, pady=(0, 5))
             
             # Set default/current value
-            if action_data and action_data.get('value', {}).get('condition'):
+            if action_data and action_data.get('value') and isinstance(action_data['value'], dict) and action_data['value'].get('condition'):
                 field_vars['condition'].set(action_data['value']['condition'])
             else:
                 field_vars['condition'].set('check_passed')
@@ -1374,6 +1435,11 @@ class AutomationGUI:
             field_vars['retry_from_action'] = tk.StringVar()
             ttk.Entry(parent, textvariable=field_vars['retry_from_action'], width=entry_width).pack(anchor=tk.W, pady=(0, 10))
             
+            # Retry delay
+            ttk.Label(parent, text="Retry Delay (ms):").pack(anchor=tk.W, pady=(0, 5))
+            field_vars['retry_delay'] = tk.StringVar()
+            ttk.Entry(parent, textvariable=field_vars['retry_delay'], width=entry_width).pack(anchor=tk.W, pady=(0, 10))
+            
             # Set defaults/current values
             if action_data and action_data.get('value'):
                 value_data = action_data['value']
@@ -1381,11 +1447,13 @@ class AutomationGUI:
                 field_vars['wait_time'].set(str(value_data.get('wait_time', 5000)))
                 field_vars['max_retries'].set(str(value_data.get('max_retries', 3)))
                 field_vars['retry_from_action'].set(str(value_data.get('retry_from_action', 0)))
+                field_vars['retry_delay'].set(str(value_data.get('retry_delay', 1000)))
             else:
                 field_vars['condition'].set('check_failed')
                 field_vars['wait_time'].set('5000')
                 field_vars['max_retries'].set('3')
                 field_vars['retry_from_action'].set('0')
+                field_vars['retry_delay'].set('1000')
         
         elif action_type == ActionType.SKIP_IF:
             # Condition dropdown
@@ -1401,14 +1469,21 @@ class AutomationGUI:
             field_vars['skip_count'] = tk.StringVar()
             ttk.Entry(parent, textvariable=field_vars['skip_count'], width=entry_width).pack(anchor=tk.W, pady=(0, 10))
             
+            # Reason
+            ttk.Label(parent, text="Reason:").pack(anchor=tk.W, pady=(0, 5))
+            field_vars['reason'] = tk.StringVar()
+            ttk.Entry(parent, textvariable=field_vars['reason'], width=entry_width).pack(anchor=tk.W, pady=(0, 10))
+            
             # Set defaults/current values
             if action_data and action_data.get('value'):
                 value_data = action_data['value']
                 field_vars['condition'].set(value_data.get('condition', 'check_passed'))
                 field_vars['skip_count'].set(str(value_data.get('skip_count', 1)))
+                field_vars['reason'].set(value_data.get('reason', ''))
             else:
                 field_vars['condition'].set('check_passed')
                 field_vars['skip_count'].set('1')
+                field_vars['reason'].set('')
         
         elif action_type == ActionType.LOGIN:
             # Username
@@ -1485,6 +1560,190 @@ class AutomationGUI:
                 field_vars['check_type'].set('equals')
                 field_vars['attribute'].set('text')
         
+        elif action_type == ActionType.UPLOAD_IMAGE:
+            # Selector
+            ttk.Label(parent, text="Selector:").pack(anchor=tk.W, pady=(0, 5))
+            field_vars['selector'] = tk.StringVar()
+            if action_data and action_data.get('selector'):
+                field_vars['selector'].set(action_data['selector'])
+            ttk.Entry(parent, textvariable=field_vars['selector'], width=entry_width).pack(anchor=tk.W, pady=(0, 10))
+            
+            # File path
+            ttk.Label(parent, text="File Path:").pack(anchor=tk.W, pady=(0, 5))
+            field_vars['file_path'] = tk.StringVar()
+            if action_data and action_data.get('value'):
+                field_vars['file_path'].set(str(action_data['value']))
+            
+            file_frame = ttk.Frame(parent)
+            file_frame.pack(anchor=tk.W, pady=(0, 10), fill=tk.X)
+            ttk.Entry(file_frame, textvariable=field_vars['file_path'], width=entry_width-10).pack(side=tk.LEFT, fill=tk.X, expand=True)
+            
+            def browse_file():
+                filename = filedialog.askopenfilename(
+                    title="Select image file",
+                    filetypes=[("Image files", "*.png *.jpg *.jpeg *.gif *.bmp"), ("All files", "*.*")]
+                )
+                if filename:
+                    field_vars['file_path'].set(filename)
+            
+            ttk.Button(file_frame, text="Browse", command=browse_file).pack(side=tk.RIGHT, padx=(5, 0))
+            
+        elif action_type in [ActionType.SET_VARIABLE, ActionType.INCREMENT_VARIABLE]:
+            # Variable name
+            ttk.Label(parent, text="Variable Name:").pack(anchor=tk.W, pady=(0, 5))
+            field_vars['variable'] = tk.StringVar()
+            ttk.Entry(parent, textvariable=field_vars['variable'], width=entry_width).pack(anchor=tk.W, pady=(0, 10))
+            
+            # Value or Amount
+            if action_type == ActionType.SET_VARIABLE:
+                ttk.Label(parent, text="Value:").pack(anchor=tk.W, pady=(0, 5))
+                field_vars['value'] = tk.StringVar()
+            else:  # INCREMENT_VARIABLE
+                ttk.Label(parent, text="Amount:").pack(anchor=tk.W, pady=(0, 5))
+                field_vars['amount'] = tk.StringVar()
+                
+            var_field = field_vars.get('value') if action_type == ActionType.SET_VARIABLE else field_vars.get('amount')
+            if action_data and action_data.get('value'):
+                if action_type == ActionType.SET_VARIABLE:
+                    field_vars['value'].set(str(action_data['value'].get('value', '')))
+                else:
+                    field_vars['amount'].set(str(action_data['value'].get('amount', '1')))
+            ttk.Entry(parent, textvariable=var_field, width=entry_width).pack(anchor=tk.W, pady=(0, 10))
+            
+            # Set current values if editing
+            if action_data and action_data.get('value'):
+                var_data = action_data['value']
+                field_vars['variable'].set(var_data.get('variable', ''))
+                
+        elif action_type == ActionType.LOG_MESSAGE:
+            # Message
+            ttk.Label(parent, text="Message:").pack(anchor=tk.W, pady=(0, 5))
+            field_vars['message'] = tk.StringVar()
+            ttk.Entry(parent, textvariable=field_vars['message'], width=entry_width).pack(anchor=tk.W, pady=(0, 10))
+            
+            # Log file
+            ttk.Label(parent, text="Log File:").pack(anchor=tk.W, pady=(0, 5))
+            field_vars['log_file'] = tk.StringVar()
+            ttk.Entry(parent, textvariable=field_vars['log_file'], width=entry_width).pack(anchor=tk.W, pady=(0, 10))
+            
+            # Level
+            ttk.Label(parent, text="Level:").pack(anchor=tk.W, pady=(0, 5))
+            field_vars['level'] = tk.StringVar()
+            level_combo = ttk.Combobox(parent, textvariable=field_vars['level'],
+                                     values=['info', 'warning', 'error', 'debug'],
+                                     state='readonly', width=entry_width)
+            level_combo.pack(anchor=tk.W, pady=(0, 10))
+            
+            # Set current values if editing
+            if action_data and action_data.get('value'):
+                log_data = action_data['value']
+                field_vars['message'].set(log_data.get('message', ''))
+                field_vars['log_file'].set(log_data.get('log_file', ''))
+                field_vars['level'].set(log_data.get('level', 'info'))
+            else:
+                field_vars['level'].set('info')
+        
+        elif action_type == ActionType.START_GENERATION_DOWNLOADS:
+            # Max downloads
+            ttk.Label(parent, text="Max Downloads:").pack(anchor=tk.W, pady=(0, 5))
+            field_vars['max_downloads'] = tk.StringVar()
+            ttk.Entry(parent, textvariable=field_vars['max_downloads'], width=entry_width).pack(anchor=tk.W, pady=(0, 10))
+            
+            # Downloads folder
+            ttk.Label(parent, text="Downloads Folder:").pack(anchor=tk.W, pady=(0, 5))
+            field_vars['downloads_folder'] = tk.StringVar()
+            folder_frame = ttk.Frame(parent)
+            folder_frame.pack(anchor=tk.W, pady=(0, 10), fill=tk.X)
+            ttk.Entry(folder_frame, textvariable=field_vars['downloads_folder'], width=entry_width-10).pack(side=tk.LEFT, fill=tk.X, expand=True)
+            
+            def browse_folder():
+                from tkinter import filedialog
+                folder = filedialog.askdirectory(title="Select Downloads Folder")
+                if folder:
+                    field_vars['downloads_folder'].set(folder)
+            
+            ttk.Button(folder_frame, text="Browse", command=browse_folder).pack(side=tk.RIGHT, padx=(5, 0))
+            
+            # Completed task selector
+            ttk.Label(parent, text="Completed Task Selector:").pack(anchor=tk.W, pady=(0, 5))
+            field_vars['completed_task_selector'] = tk.StringVar()
+            ttk.Entry(parent, textvariable=field_vars['completed_task_selector'], width=entry_width).pack(anchor=tk.W, pady=(0, 10))
+            
+            # Set current values if editing
+            if action_data and action_data.get('value'):
+                config_data = action_data['value']
+                field_vars['max_downloads'].set(str(config_data.get('max_downloads', 50)))
+                field_vars['downloads_folder'].set(config_data.get('downloads_folder', '/home/olereon/workspace/github.com/olereon/automaton/downloads/vids'))
+                field_vars['completed_task_selector'].set(config_data.get('completed_task_selector', "div[id$='__8']"))
+            else:
+                field_vars['max_downloads'].set('50')
+                field_vars['downloads_folder'].set('/home/olereon/workspace/github.com/olereon/automaton/downloads/vids')
+                field_vars['completed_task_selector'].set("div[id$='__8']")
+        
+        elif action_type in [ActionType.STOP_GENERATION_DOWNLOADS, ActionType.CHECK_GENERATION_STATUS]:
+            # These actions don't need additional fields
+            ttk.Label(parent, text="No additional configuration needed for this action type.", 
+                     font=("Segoe UI", 10), foreground="gray").pack(anchor=tk.W, pady=(0, 15))
+        
+        elif action_type == ActionType.TOGGLE_SETTING:
+            # Selector field
+            ttk.Label(parent, text="Selector:").pack(anchor=tk.W, pady=(0, 5))
+            field_vars['selector'] = tk.StringVar()
+            if action_data and action_data.get('selector'):
+                field_vars['selector'].set(action_data['selector'])
+            ttk.Entry(parent, textvariable=field_vars['selector'], width=entry_width).pack(anchor=tk.W, pady=(0, 10))
+            
+            # Enable checkbox
+            ttk.Label(parent, text="Enable:").pack(anchor=tk.W, pady=(0, 5))
+            field_vars['value'] = tk.BooleanVar()
+            if action_data and action_data.get('value') is not None:
+                field_vars['value'].set(bool(action_data['value']))
+            ttk.Checkbutton(parent, variable=field_vars['value']).pack(anchor=tk.W, pady=(0, 10))
+        
+        elif action_type == ActionType.EXPAND_DIALOG:
+            # Selector field
+            ttk.Label(parent, text="Selector:").pack(anchor=tk.W, pady=(0, 5))
+            field_vars['selector'] = tk.StringVar()
+            if action_data and action_data.get('selector'):
+                field_vars['selector'].set(action_data['selector'])
+            ttk.Entry(parent, textvariable=field_vars['selector'], width=entry_width).pack(anchor=tk.W, pady=(0, 10))
+        
+        elif action_type == ActionType.CHECK_QUEUE:
+            # Selector field
+            ttk.Label(parent, text="Selector:").pack(anchor=tk.W, pady=(0, 5))
+            field_vars['selector'] = tk.StringVar()
+            if action_data and action_data.get('selector'):
+                field_vars['selector'].set(action_data['selector'])
+            ttk.Entry(parent, textvariable=field_vars['selector'], width=entry_width).pack(anchor=tk.W, pady=(0, 10))
+            
+            # Expected Status
+            ttk.Label(parent, text="Expected Status:").pack(anchor=tk.W, pady=(0, 5))
+            field_vars['value'] = tk.StringVar()
+            if action_data and action_data.get('value'):
+                field_vars['value'].set(str(action_data['value']))
+            ttk.Entry(parent, textvariable=field_vars['value'], width=entry_width).pack(anchor=tk.W, pady=(0, 10))
+        
+        elif action_type == ActionType.DOWNLOAD_FILE:
+            # Selector field
+            ttk.Label(parent, text="Selector:").pack(anchor=tk.W, pady=(0, 5))
+            field_vars['selector'] = tk.StringVar()
+            if action_data and action_data.get('selector'):
+                field_vars['selector'].set(action_data['selector'])
+            ttk.Entry(parent, textvariable=field_vars['selector'], width=entry_width).pack(anchor=tk.W, pady=(0, 10))
+        
+        elif action_type == ActionType.SWITCH_PANEL:
+            # Selector field
+            ttk.Label(parent, text="Panel Selector:").pack(anchor=tk.W, pady=(0, 5))
+            field_vars['selector'] = tk.StringVar()
+            if action_data and action_data.get('selector'):
+                field_vars['selector'].set(action_data['selector'])
+            ttk.Entry(parent, textvariable=field_vars['selector'], width=entry_width).pack(anchor=tk.W, pady=(0, 10))
+        
+        elif action_type in [ActionType.REFRESH_PAGE, ActionType.STOP_AUTOMATION]:
+            # These actions don't need additional fields
+            ttk.Label(parent, text="No additional configuration needed for this action type.", 
+                     font=("Segoe UI", 10), foreground="gray").pack(anchor=tk.W, pady=(0, 15))
+        
         else:
             # Standard actions (wait, click, input, etc.)
             if action_type in [ActionType.CLICK_BUTTON, ActionType.INPUT_TEXT, ActionType.WAIT_FOR_ELEMENT]:
@@ -1501,6 +1760,18 @@ class AutomationGUI:
                 if action_data and action_data.get('value'):
                     field_vars['value'].set(str(action_data['value']))
                 ttk.Entry(parent, textvariable=field_vars['value'], width=entry_width).pack(anchor=tk.W, pady=(0, 10))
+        
+        # Add timeout field for all action types (except simple block controls and actions that don't need timeout)
+        if action_type not in [ActionType.ELSE, ActionType.IF_END, ActionType.WHILE_END, 
+                              ActionType.BREAK, ActionType.CONTINUE, ActionType.STOP_AUTOMATION, 
+                              ActionType.REFRESH_PAGE]:
+            ttk.Label(parent, text="Timeout (ms):").pack(anchor=tk.W, pady=(10, 5))
+            field_vars['timeout'] = tk.StringVar()
+            if action_data and action_data.get('timeout'):
+                field_vars['timeout'].set(str(action_data['timeout']))
+            else:
+                field_vars['timeout'].set('2000')  # Default timeout
+            ttk.Entry(parent, textvariable=field_vars['timeout'], width=entry_width).pack(anchor=tk.W, pady=(0, 15))
         
     def _delete_action(self):
         """Delete selected action"""

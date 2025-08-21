@@ -36,6 +36,15 @@ except ImportError:
     PERFORMANCE_MONITORING_AVAILABLE = False
     logger.warning("Performance monitoring not available")
 
+# Import download manager
+try:
+    from utils.download_manager import DownloadManager, DownloadConfig, create_download_manager
+
+    DOWNLOAD_MANAGER_AVAILABLE = True
+except ImportError:
+    DOWNLOAD_MANAGER_AVAILABLE = False
+    logger.warning("Download manager not available")
+
 
 class SecurityError(Exception):
     """Custom exception for security violations"""
@@ -174,6 +183,10 @@ class ActionType(Enum):
     SET_VARIABLE = "set_variable"
     INCREMENT_VARIABLE = "increment_variable"
     LOG_MESSAGE = "log_message"
+    # Generation download actions
+    START_GENERATION_DOWNLOADS = "start_generation_downloads"
+    STOP_GENERATION_DOWNLOADS = "stop_generation_downloads"
+    CHECK_GENERATION_STATUS = "check_generation_status"
 
 
 @dataclass
@@ -203,10 +216,36 @@ class AutomationConfig:
             self.viewport = {"width": 1600, "height": 1000}  # Updated default to match GUI default
 
 
-class WebAutomationEngine:
+# Import generation download handlers
+try:
+    from core.generation_download_handlers import GenerationDownloadHandlers
+    GENERATION_DOWNLOAD_AVAILABLE = True
+except ImportError:
+    GENERATION_DOWNLOAD_AVAILABLE = False
+    logger.warning("Generation download handlers not available")
+    
+    # Create a dummy base class if not available
+    class GenerationDownloadHandlers:
+        def __init_generation_downloads__(self):
+            pass
+        
+        async def _handle_start_generation_downloads(self, action):
+            raise NotImplementedError("Generation download handlers not available")
+        
+        async def _handle_stop_generation_downloads(self, action):
+            raise NotImplementedError("Generation download handlers not available")
+        
+        async def _handle_check_generation_status(self, action):
+            raise NotImplementedError("Generation download handlers not available")
+
+
+class WebAutomationEngine(GenerationDownloadHandlers):
     """Core automation engine for web interactions"""
 
     def __init__(self, config: AutomationConfig, controller=None):
+        # Initialize parent class
+        super().__init__()
+        
         self.config = config
         self.browser: Optional[Browser] = None
         self.page: Optional[Page] = None
@@ -221,6 +260,16 @@ class WebAutomationEngine:
         
         # Control system integration
         self.controller = controller
+        
+        # Initialize download manager
+        self.download_manager = None
+        if DOWNLOAD_MANAGER_AVAILABLE:
+            self.download_manager = create_download_manager()
+            logger.info(f"Download manager initialized: {self.download_manager.config.base_download_path}")
+        
+        # Initialize generation downloads if available
+        if GENERATION_DOWNLOAD_AVAILABLE:
+            self.__init_generation_downloads__()
 
     # Control Methods
     async def check_control_signals(self):
@@ -1067,7 +1116,29 @@ class WebAutomationEngine:
                     return {"skip": False}
 
             elif action.type == ActionType.DOWNLOAD_FILE:
-                # Start download
+                # Use new download manager if available
+                if self.download_manager:
+                    try:
+                        # Use the enhanced download manager
+                        expected_filename = action.value if isinstance(action.value, str) else None
+                        download_info = await self.download_manager.handle_playwright_download(
+                            self.page, 
+                            action.selector, 
+                            expected_filename=expected_filename,
+                            timeout=action.timeout
+                        )
+                        logger.info(f"Download completed: {download_info.file_path} ({download_info.file_size} bytes)")
+                        return {
+                            "file_path": download_info.file_path,
+                            "filename": download_info.filename,
+                            "file_size": download_info.file_size,
+                            "status": download_info.status
+                        }
+                    except Exception as e:
+                        logger.error(f"Enhanced download failed, falling back to basic method: {e}")
+                        # Fall through to basic method
+                
+                # Fallback to basic download method
                 async with self.page.expect_download(timeout=action.timeout) as download_info:
                     await self.page.click(action.selector)
 
@@ -1172,6 +1243,18 @@ class WebAutomationEngine:
                 except Exception as log_error:
                     logger.error(f"Failed to write to log file {log_file}: {log_error}")
                     return {"error": str(log_error)}
+                    
+            elif action.type == ActionType.START_GENERATION_DOWNLOADS:
+                # Start the generation download automation
+                return await self._handle_start_generation_downloads(action)
+                
+            elif action.type == ActionType.STOP_GENERATION_DOWNLOADS:
+                # Stop the generation download automation
+                return await self._handle_stop_generation_downloads(action)
+                
+            elif action.type == ActionType.CHECK_GENERATION_STATUS:
+                # Check the status of generation downloads
+                return await self._handle_check_generation_status(action)
                     
         except Exception as e:
             error_details = {
