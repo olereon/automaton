@@ -64,7 +64,7 @@ def login_config():
                     "password_selector": "input[type='password']",
                     "submit_selector": "button[type='submit']"
                 },
-                timeout=30000,
+                timeout=10000,
                 description="Login with secure credentials"
             )
         ]

@@ -51,10 +51,10 @@ async def queue_with_retry_example():
         # Step 2: Conditional wait and retry if queue is full
         .add_conditional_wait(
             condition="check_failed",  # Retry if check failed (queue >= 8)
-            wait_time=30000,  # Wait 30 seconds
+            wait_time=10000,  # Wait 10 seconds
             max_retries=5,  # Try up to 5 times
             retry_from_action=2,  # Retry from the check (action index 2)
-            description="Wait 30s and retry if queue is full"
+            description="Wait 10s and retry if queue is full"
         )
         
         # Step 3: If we get here, queue has space - add new task
@@ -246,10 +246,10 @@ async def scheduled_retry_example():
         # If full, schedule next retry
         .add_conditional_wait(
             condition="check_failed",
-            wait_time=300000,  # Wait 5 minutes
+            wait_time=100000,  # Wait 100 seconds (reduced from 5 min)
             max_retries=12,  # Retry for 1 hour
             retry_from_action=1,
-            description="Retry every 5 minutes"
+            description="Retry every 100 seconds"
         )
         
         # Process if space available

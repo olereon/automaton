@@ -10,6 +10,7 @@ The Automation Scheduler is a powerful Python script that manages sequential exe
 - **Sequential Execution**: Process multiple automation configurations in order
 - **Retry Logic**: Configurable retry attempts for failed automations
 - **Smart Timing**: Different wait times for success and failure scenarios
+- **Scheduled Start**: Schedule automations to start at specific times and dates
 - **Comprehensive Logging**: Detailed execution tracking and reporting
 - **Multiple Interfaces**: Support for both CLI and direct engine execution
 - **Task Counting**: Automatic detection and reporting of created tasks
@@ -18,7 +19,8 @@ The Automation Scheduler is a powerful Python script that manages sequential exe
 
 ### 🎯 Use Cases
 - **Batch Processing**: Run multiple automation workflows automatically
-- **Scheduled Operations**: Execute automations with precise timing
+- **Scheduled Operations**: Execute automations at specific times and dates
+- **Daily/Weekly Tasks**: Schedule recurring automations for specific times
 - **Queue Management**: Create multiple tasks across different time periods
 - **Testing & Validation**: Automated testing of multiple configurations
 - **Production Workflows**: Reliable execution with error handling and retries
@@ -47,6 +49,17 @@ scripts/automation_scheduler.py
 ```bash
 python scripts/automation_scheduler.py --config configs/scheduler_config.json
 ```
+
+#### Schedule for Specific Time
+```bash
+# Run at 2:30 PM today
+python scripts/automation_scheduler.py --config configs/scheduler_config.json --time 14:30:00
+
+# Run on specific date at 9 AM
+python scripts/automation_scheduler.py --config configs/scheduler_config.json --date 2024-12-25 --time 09:00:00
+```
+
+> **Note**: For detailed information about date and time scheduling, see [SCHEDULER_DATETIME_GUIDE.md](SCHEDULER_DATETIME_GUIDE.md)
 
 #### Direct Configuration via Command Line
 ```bash

@@ -9,6 +9,8 @@ Usage:
     python automation_scheduler.py --config scheduler_config.json
     python automation_scheduler.py --configs config1.json config2.json --success-wait 300 --failure-wait 60 --max-retries 3
     python automation_scheduler.py --config scheduler_config.json --start-from 5  # Start from 5th config file
+    python automation_scheduler.py --config scheduler_config.json --time 14:30:00  # Start at 2:30 PM today
+    python automation_scheduler.py --config scheduler_config.json --date 2024-12-25 --time 09:00:00  # Start at specific date and time
 
 Features:
 - Sequential execution of multiple automation configurations
@@ -18,6 +20,8 @@ Features:
 - JSON configuration support
 - Real-time progress tracking
 - Start from specific config file index (convenient for resuming interrupted runs)
+- Schedule automation to start at specific time (HH:mm:ss)
+- Schedule automation to start on specific date (YYYY-MM-dd)
 """
 
 import sys
@@ -91,6 +95,8 @@ class SchedulerConfig:
     log_file: str = "logs/automation_scheduler.log"
     use_cli: bool = True
     verbose: bool = True
+    scheduled_time: Optional[str] = None  # Time in HH:mm:ss format
+    scheduled_date: Optional[str] = None  # Date in YYYY-MM-dd format
 
 
 class AutomationScheduler:
@@ -512,6 +518,9 @@ class AutomationScheduler:
 
     async def run_scheduler(self):
         """Main scheduler execution loop with enhanced control"""
+        # Wait for scheduled time if specified
+        await self._wait_for_scheduled_time()
+        
         self.logger.info("🎬 Starting Automation Scheduler")
         self.logger.info(f"📋 Configurations to process: {len(self.config.config_files)}")
         self.logger.info(f"⏱️  Success wait time: {self.config.success_wait_time}s")
@@ -805,9 +814,110 @@ class AutomationScheduler:
                 "success_wait_time": self.config.success_wait_time,
                 "failure_wait_time": self.config.failure_wait_time,
                 "max_retries": self.config.max_retries,
-                "use_cli": self.config.use_cli
+                "use_cli": self.config.use_cli,
+                "scheduled_time": self.config.scheduled_time,
+                "scheduled_date": self.config.scheduled_date
             }
         }
+    
+    async def _wait_for_scheduled_time(self):
+        """Wait until the scheduled time to start automation"""
+        if not self.config.scheduled_time and not self.config.scheduled_date:
+            return
+        
+        try:
+            now = datetime.now()
+            
+            # Parse scheduled date and time
+            if self.config.scheduled_date:
+                # Parse date in YYYY-MM-dd format
+                scheduled_date = datetime.strptime(self.config.scheduled_date, "%Y-%m-%d").date()
+            else:
+                # Use today's date if no date specified
+                scheduled_date = now.date()
+            
+            if self.config.scheduled_time:
+                # Parse time in HH:mm:ss format
+                time_parts = self.config.scheduled_time.split(':')
+                if len(time_parts) == 3:
+                    hour, minute, second = map(int, time_parts)
+                elif len(time_parts) == 2:
+                    hour, minute = map(int, time_parts)
+                    second = 0
+                else:
+                    raise ValueError(f"Invalid time format: {self.config.scheduled_time}. Use HH:mm:ss or HH:mm")
+                
+                # Create scheduled datetime
+                scheduled_datetime = datetime.combine(scheduled_date, datetime.min.time())
+                scheduled_datetime = scheduled_datetime.replace(hour=hour, minute=minute, second=second)
+            else:
+                # If only date is specified, start at midnight
+                scheduled_datetime = datetime.combine(scheduled_date, datetime.min.time())
+            
+            # Calculate wait time
+            wait_seconds = (scheduled_datetime - now).total_seconds()
+            
+            if wait_seconds <= 0:
+                self.logger.info(f"⚠️  Scheduled time {scheduled_datetime.strftime('%Y-%m-%d %H:%M:%S')} has already passed. Starting immediately.")
+                return
+            
+            self.logger.info(f"⏰ Scheduler will start at: {scheduled_datetime.strftime('%Y-%m-%d %H:%M:%S')}")
+            self.logger.info(f"⏳ Waiting {self._format_duration(wait_seconds)} until scheduled time...")
+            
+            # Show countdown for long waits
+            if wait_seconds > 60:
+                # Check every minute and update countdown
+                while wait_seconds > 0:
+                    # Check for stop signal
+                    if self.should_stop:
+                        self.logger.info(f"🛑 Scheduled wait interrupted by stop signal")
+                        return
+                    
+                    # Handle pause
+                    if self.is_paused:
+                        self.logger.info(f"⏸️ Scheduled wait paused")
+                        await self._wait_for_resume()
+                        self.logger.info(f"▶️ Scheduled wait resumed")
+                        # Recalculate wait time after resume
+                        now = datetime.now()
+                        wait_seconds = (scheduled_datetime - now).total_seconds()
+                        if wait_seconds <= 0:
+                            break
+                    
+                    # Display countdown
+                    if wait_seconds > 3600:
+                        # For waits longer than an hour, check every 5 minutes
+                        sleep_time = min(300, wait_seconds)
+                    elif wait_seconds > 600:
+                        # For waits longer than 10 minutes, check every minute
+                        sleep_time = min(60, wait_seconds)
+                    else:
+                        # For shorter waits, check every 10 seconds
+                        sleep_time = min(10, wait_seconds)
+                    
+                    await asyncio.sleep(sleep_time)
+                    
+                    # Update remaining time
+                    now = datetime.now()
+                    wait_seconds = (scheduled_datetime - now).total_seconds()
+                    
+                    # Show periodic updates
+                    if wait_seconds > 0:
+                        if int(wait_seconds) % 300 == 0 or wait_seconds <= 60:
+                            self.logger.info(f"⏳ {self._format_duration(wait_seconds)} remaining until scheduled start...")
+            else:
+                # For short waits, just sleep
+                await asyncio.sleep(wait_seconds)
+            
+            self.logger.info(f"✅ Scheduled time reached. Starting automation...")
+            
+        except ValueError as e:
+            self.logger.error(f"❌ Invalid scheduled time or date format: {e}")
+            self.logger.error("Use --time HH:mm:ss for time and --date YYYY-MM-dd for date")
+            raise
+        except Exception as e:
+            self.logger.error(f"❌ Error processing scheduled time: {e}")
+            raise
 
 
 def load_scheduler_config(config_file: str) -> SchedulerConfig:
@@ -824,7 +934,9 @@ def load_scheduler_config(config_file: str) -> SchedulerConfig:
             timeout_seconds=config_data.get('timeout_seconds', 1800),
             log_file=config_data.get('log_file', 'logs/automation_scheduler.log'),
             use_cli=config_data.get('use_cli', True),
-            verbose=config_data.get('verbose', True)
+            verbose=config_data.get('verbose', True),
+            scheduled_time=config_data.get('scheduled_time', None),
+            scheduled_date=config_data.get('scheduled_date', None)
         )
     except Exception as e:
         raise ValueError(f"Failed to load scheduler configuration: {e}")
@@ -844,7 +956,9 @@ def create_example_scheduler_config():
         "timeout_seconds": 1800,   # 30 minutes timeout per automation
         "log_file": "logs/automation_scheduler.log",
         "use_cli": True,           # Use CLI interface (recommended)
-        "verbose": True            # Detailed logging
+        "verbose": True,           # Detailed logging
+        "scheduled_time": None,    # Optional: Time to start (HH:mm:ss)
+        "scheduled_date": None     # Optional: Date to start (YYYY-MM-dd)
     }
     
     config_file = Path("configs/scheduler_config.json")
@@ -871,6 +985,8 @@ async def main():
     parser.add_argument('--quiet', action='store_true', help='Quiet mode (less logging)')
     parser.add_argument('--create-example', action='store_true', help='Create example configuration')
     parser.add_argument('--start-from', type=int, metavar='INDEX', help='Start from specified config file index (1-indexed, e.g., --start-from 3 starts from the 3rd config)')
+    parser.add_argument('--time', type=str, metavar='HH:MM:SS', help='Schedule start time (e.g., 14:30:00 for 2:30 PM). Defaults to current day if --date not specified')
+    parser.add_argument('--date', type=str, metavar='YYYY-MM-DD', help='Schedule start date (e.g., 2024-12-25). Used with --time for specific datetime')
 
     args = parser.parse_args()
 
@@ -886,6 +1002,11 @@ async def main():
             print("Use --create-example to create an example configuration.")
             sys.exit(1)
         config = load_scheduler_config(args.config)
+        # Override scheduled time/date from command line if provided
+        if args.time:
+            config.scheduled_time = args.time
+        if args.date:
+            config.scheduled_date = args.date
     elif args.configs:
         config = SchedulerConfig(
             config_files=args.configs,
@@ -895,12 +1016,44 @@ async def main():
             timeout_seconds=args.timeout,
             log_file=args.log_file,
             use_cli=not args.use_direct,
-            verbose=not args.quiet
+            verbose=not args.quiet,
+            scheduled_time=args.time,
+            scheduled_date=args.date
         )
     else:
         print("Error: Must specify either --config or --configs")
         print("Use --help for usage information or --create-example for example configuration.")
         sys.exit(1)
+    
+    # Validate scheduled time and date formats if provided
+    if args.time:
+        try:
+            # Validate time format
+            time_parts = args.time.split(':')
+            if len(time_parts) not in [2, 3]:
+                raise ValueError("Time must be in HH:MM or HH:MM:SS format")
+            hour, minute = int(time_parts[0]), int(time_parts[1])
+            if hour < 0 or hour > 23:
+                raise ValueError("Hour must be between 0 and 23")
+            if minute < 0 or minute > 59:
+                raise ValueError("Minute must be between 0 and 59")
+            if len(time_parts) == 3:
+                second = int(time_parts[2])
+                if second < 0 or second > 59:
+                    raise ValueError("Second must be between 0 and 59")
+        except ValueError as e:
+            print(f"Error: Invalid time format '{args.time}': {e}")
+            print("Use format HH:MM:SS (e.g., 14:30:00) or HH:MM (e.g., 14:30)")
+            sys.exit(1)
+    
+    if args.date:
+        try:
+            # Validate date format
+            datetime.strptime(args.date, "%Y-%m-%d")
+        except ValueError:
+            print(f"Error: Invalid date format '{args.date}'")
+            print("Use format YYYY-MM-DD (e.g., 2024-12-25)")
+            sys.exit(1)
 
     # Apply start-from filtering if specified
     if args.start_from is not None:

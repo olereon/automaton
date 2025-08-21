@@ -96,7 +96,7 @@ def main():
     {
       "type": "wait_for_element",
       "selector": "body",
-      "timeout": 30000,
+      "timeout": 10000,
       "description": "Wait for page load"
     }
   ]

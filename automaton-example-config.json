@@ -10,7 +10,7 @@
     {
       "type": "wait_for_element",
       "selector": "#main-container",
-      "timeout": 30000,
+      "timeout": 10000,
       "description": "Wait for main page to load"
     },
     {

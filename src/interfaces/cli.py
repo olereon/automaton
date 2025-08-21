@@ -83,7 +83,7 @@ Examples:
         add_parser.add_argument('--selector', help='CSS selector for the element')
         add_parser.add_argument('--value', help='Value for the action')
         add_parser.add_argument('--description', help='Description of the action')
-        add_parser.add_argument('--timeout', type=int, default=30000,
+        add_parser.add_argument('--timeout', type=int, default=10000,
                               help='Timeout in milliseconds')
         
         # List actions command
@@ -388,7 +388,7 @@ Examples:
                 type=ActionType(action_data['type']),
                 selector=action_data.get('selector'),
                 value=action_data.get('value'),
-                timeout=action_data.get('timeout', 30000),
+                timeout=action_data.get('timeout', 10000),
                 description=action_data.get('description')
             ))
             

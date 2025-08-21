@@ -24,7 +24,7 @@ class SelectorFinder:
         """Start browser and navigate to target URL"""
         playwright = await async_playwright().start()
         self.browser = await playwright.chromium.launch(headless=False)
-        context = await self.browser.new_context(viewport={"width": 1280, "height": 720})
+        context = await self.browser.new_context(viewport={"width": 2560, "height": 1600})
         self.page = await context.new_page()
         
         print(f"🌐 Opening: {url}")
