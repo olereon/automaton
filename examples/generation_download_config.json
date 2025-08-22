@@ -33,7 +33,7 @@
         "download_timeout": 12000,
         "verification_timeout": 30000,
         "retry_attempts": 3,
-        "completed_task_selector": "div[id$='__8']",
+        "completed_task_selector": "div[id$='__9']",
         "thumbnail_selector": ".thumsItem, .thumbnail-item",
         "button_panel_selector": ".sc-eYHxxX.fmURBt",
         "download_icon_href": "#icon-icon_tongyong_20px_xiazai",
@@ -41,8 +41,8 @@
         "download_no_watermark_text": "Download without Watermark",
         "download_button_selector": "[data-spm-anchor-id='a2ty_o02.30365920.0.i1.6daf47258YB5qi']",
         "download_no_watermark_selector": ".sc-fbUgXY.hMAwvg",
-        "generation_date_selector": ".sc-eWXuyo.gwshYN",
-        "prompt_selector": "span[aria-describedby]"
+        "generation_date_selector": ".sc-eJlwcH.gjlyBM span.sc-cSMkSB.hUjUPD:nth-child(2)",
+        "prompt_selector": ".sc-jJRqov.cxtNJi span[aria-describedby]"
       },
       "timeout": 300000,
       "description": "Start automated generation downloads"

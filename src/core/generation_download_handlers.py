@@ -51,8 +51,10 @@ class GenerationDownloadHandlers:
                     "[data-spm-anchor-id='a2ty_o02.30365920.0.i1.6daf47258YB5qi']"),
                 download_no_watermark_selector=config_data.get('download_no_watermark_selector',
                     ".sc-fbUgXY.hMAwvg"),  # Updated default to the new selector
-                generation_date_selector=config_data.get('generation_date_selector', '.sc-eWXuyo.gwshYN'),
-                prompt_selector=config_data.get('prompt_selector', 'span[aria-describedby]')
+                generation_date_selector=config_data.get('generation_date_selector', 
+                    '.sc-eJlwcH.gjlyBM span.sc-cSMkSB.hUjUPD:nth-child(2)'),
+                prompt_selector=config_data.get('prompt_selector', 
+                    '.sc-jJRqov.cxtNJi span[aria-describedby]')
             )
             
             # Initialize the generation download manager

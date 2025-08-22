@@ -57,8 +57,8 @@ class GenerationDownloadConfig:
     download_button_selector: str = "[data-spm-anchor-id='a2ty_o02.30365920.0.i1.6daf47258YB5qi']"
     download_no_watermark_selector: str = "[data-spm-anchor-id='a2ty_o02.30365920.0.i2.6daf47258YB5qi']"
     
-    generation_date_selector: str = ".sc-eWXuyo.gwshYN"
-    prompt_selector: str = "span[aria-describedby]"
+    generation_date_selector: str = ".sc-eJlwcH.gjlyBM span.sc-cSMkSB.hUjUPD:nth-child(2)"
+    prompt_selector: str = ".sc-jJRqov.cxtNJi span[aria-describedby]"
     
     # Download settings
     max_downloads: int = 50
@@ -261,29 +261,77 @@ class GenerationDownloadManager:
         try:
             metadata = {}
             
-            # Extract generation date
+            # Extract generation date with fallback strategies
             try:
+                logger.debug(f"Attempting to extract date using selector: {self.config.generation_date_selector}")
                 date_element = await page.wait_for_selector(
                     self.config.generation_date_selector, 
                     timeout=5000
                 )
                 if date_element:
-                    metadata['generation_date'] = await date_element.text_content()
+                    date_text = await date_element.text_content()
+                    metadata['generation_date'] = date_text.strip() if date_text else "Unknown Date"
+                    logger.debug(f"Extracted date: {metadata['generation_date']}")
+                else:
+                    raise Exception("Date element not found")
             except Exception as e:
-                logger.warning(f"Could not extract generation date: {e}")
-                metadata['generation_date'] = "Unknown Date"
+                logger.warning(f"Primary date selector failed: {e}")
+                
+                # Fallback: Look for any element containing "Creation Time"
+                try:
+                    logger.debug("Trying fallback date extraction...")
+                    # Look for the Creation Time container and get the next span
+                    creation_time_elements = await page.query_selector_all("*:has-text('Creation Time')")
+                    for element in creation_time_elements:
+                        parent = element
+                        # Try to find the date span in the same container
+                        date_spans = await parent.query_selector_all("span.sc-cSMkSB.hUjUPD")
+                        if len(date_spans) >= 2:  # First is "Creation Time", second is the date
+                            date_text = await date_spans[1].text_content()
+                            metadata['generation_date'] = date_text.strip() if date_text else "Unknown Date"
+                            logger.debug(f"Extracted date via fallback: {metadata['generation_date']}")
+                            break
+                    else:
+                        metadata['generation_date'] = "Unknown Date"
+                except Exception as fallback_e:
+                    logger.warning(f"Fallback date extraction failed: {fallback_e}")
+                    metadata['generation_date'] = "Unknown Date"
             
-            # Extract prompt
+            # Extract prompt with fallback strategies  
             try:
+                logger.debug(f"Attempting to extract prompt using selector: {self.config.prompt_selector}")
                 prompt_element = await page.wait_for_selector(
                     self.config.prompt_selector, 
                     timeout=5000
                 )
                 if prompt_element:
-                    metadata['prompt'] = await prompt_element.text_content()
+                    prompt_text = await prompt_element.text_content()
+                    metadata['prompt'] = prompt_text.strip() if prompt_text else "Unknown Prompt"
+                    logger.debug(f"Extracted prompt: {metadata['prompt'][:100]}...")
+                else:
+                    raise Exception("Prompt element not found")
             except Exception as e:
-                logger.warning(f"Could not extract prompt: {e}")
-                metadata['prompt'] = "Unknown Prompt"
+                logger.warning(f"Primary prompt selector failed: {e}")
+                
+                # Fallback: Look for any span with aria-describedby attribute
+                try:
+                    logger.debug("Trying fallback prompt extraction...")
+                    prompt_elements = await page.query_selector_all("span[aria-describedby]")
+                    if prompt_elements:
+                        # Use the first one that has substantial text content
+                        for element in prompt_elements:
+                            text = await element.text_content()
+                            if text and len(text.strip()) > 20:  # Substantial content
+                                metadata['prompt'] = text.strip()
+                                logger.debug(f"Extracted prompt via fallback: {metadata['prompt'][:100]}...")
+                                break
+                        else:
+                            metadata['prompt'] = "Unknown Prompt"
+                    else:
+                        metadata['prompt'] = "Unknown Prompt"
+                except Exception as fallback_e:
+                    logger.warning(f"Fallback prompt extraction failed: {fallback_e}")
+                    metadata['prompt'] = "Unknown Prompt"
             
             return metadata
             

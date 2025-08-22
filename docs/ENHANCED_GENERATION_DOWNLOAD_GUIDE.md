@@ -74,12 +74,19 @@ The configuration now supports both new and legacy selectors:
 | `download_button_index` | int | Index of download button in panel (0-based) | `2` |
 | `download_no_watermark_text` | string | Text to search for watermark option | `Download without Watermark` |
 
+### Metadata Extraction Parameters
+
+| Parameter | Type | Description | Default |
+|-----------|------|-------------|---------|
+| `generation_date_selector` | string | CSS selector for creation date | `.sc-eJlwcH.gjlyBM span.sc-cSMkSB.hUjUPD:nth-child(2)` |
+| `prompt_selector` | string | CSS selector for prompt text | `.sc-jJRqov.cxtNJi span[aria-describedby]` |
+
 ### Legacy Parameters (Kept for Compatibility)
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `download_button_selector` | string | Traditional CSS selector for download button |
-| `download_no_watermark_selector` | string | Traditional CSS selector for no watermark option |
+| `download_no_watermark_selector` | string | CSS selector for no watermark option (.sc-fbUgXY.hMAwvg) |
 
 ## 🔍 Troubleshooting
 
