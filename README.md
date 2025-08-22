@@ -1,525 +1,426 @@
-# Web Automation Tool
+# Automaton - Advanced Web Automation Framework 🤖
 
-A lightweight and fast automation tool for executing repetitive web tasks with both GUI and CLI interfaces. Built with Python and Playwright for reliable browser automation.
+[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
+[![Playwright](https://img.shields.io/badge/playwright-latest-green.svg)](https://playwright.dev/)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-## Features
+A powerful, lightweight web automation framework with both GUI and CLI interfaces. Built with Python and Playwright for reliable browser automation with advanced flow control, queue management, and intelligent download handling.
 
-- **Dual Interface**: Use either the modern GUI or powerful CLI
-- **Modular Action System**: Support for various web interactions
-- **Configuration Management**: Save and load automation sequences
-- **Headless/Headed Mode**: Run with or without browser UI
+## ✨ Features
+
+### 🎯 Core Capabilities
+- **Dual Interface**: Modern GUI with Tkinter or powerful CLI for automation
+- **30+ Action Types**: Comprehensive set of web interaction actions
+- **Flow Control**: Advanced IF/ELIF/ELSE and WHILE loop support
+- **Queue Management**: Intelligent queue detection and capacity management
+- **Variable System**: Dynamic variables with substitution support
+- **Stop Functionality**: Graceful termination with controller integration
+- **Download Automation**: Advanced file download with metadata tracking
+- **Scheduler Support**: Datetime-based scheduling with timezone support
+
+### 🔧 Technical Features
+- **Async Execution**: Fast and efficient browser automation
 - **Cross-Platform**: Works on Windows, macOS, and Linux
-- **Async Execution**: Fast and efficient automation
-- **Detailed Logging**: Track automation progress and debug issues
+- **Headless/Headed Mode**: Run with or without browser UI
+- **Detailed Logging**: Comprehensive logging for debugging
+- **Error Recovery**: Automatic retry mechanisms and error handling
+- **Browser Persistence**: Keep browser open for debugging
+- **Security Features**: Credential management and input validation
 
-## Supported Actions
+## 📋 Supported Action Types
 
 ### Basic Actions
-- **Input Text**: Fill text fields with dynamic content
-- **Click Button**: Click any button or interactive element
-- **Upload Image**: Upload files to web forms
-- **Toggle Settings**: Check/uncheck checkboxes and switches
-- **Wait**: Pause for specified duration
-- **Wait for Element**: Wait for elements to appear
-- **Refresh Page**: Reload the current page
+| Action | Description | Example |
+|--------|-------------|---------|
+| `INPUT_TEXT` | Fill text fields | Enter username/password |
+| `CLICK_BUTTON` | Click elements | Submit forms |
+| `UPLOAD_IMAGE` | Upload files | Profile pictures |
+| `TOGGLE_SETTING` | Check/uncheck boxes | Accept terms |
+| `WAIT` | Pause execution | Wait 2 seconds |
+| `WAIT_FOR_ELEMENT` | Wait for element | Wait for button |
+| `REFRESH_PAGE` | Reload page | Refresh content |
+| `EXPAND_DIALOG` | Expand dialogs | Show more options |
+| `SWITCH_PANEL` | Switch panels | Navigate tabs |
 
 ### Advanced Actions
-- **Check Element**: Validate element content with conditions (equals, less, greater)
-- **Set Variable**: Store values for use in other actions
-- **Increment Variable**: Increase numeric variables
-- **Log Message**: Record automation progress and debugging info
+| Action | Description | Use Case |
+|--------|-------------|----------|
+| `CHECK_ELEMENT` | Validate content | Verify text/values |
+| `CHECK_QUEUE` | Monitor queues | Check capacity |
+| `SET_VARIABLE` | Store values | Save user data |
+| `INCREMENT_VARIABLE` | Increment numbers | Count iterations |
+| `LOG_MESSAGE` | Record progress | Debug logging |
+| `LOGIN` | Automated login | Authentication |
+| `DOWNLOAD_FILE` | Download files | Save documents |
 
 ### Flow Control
-- **IF/ELIF/ELSE**: Conditional execution based on check results
-- **WHILE Loops**: Repeat actions while conditions are met
-- **BREAK/CONTINUE**: Control loop execution
-- **Conditional Wait**: Retry actions with backoff strategies
-- **Skip If**: Skip actions based on conditions
+| Action | Description | Example |
+|--------|-------------|---------|
+| `IF_BEGIN`/`IF_END` | Conditional blocks | If element exists |
+| `ELIF`/`ELSE` | Conditional branches | Multiple conditions |
+| `WHILE_BEGIN`/`WHILE_END` | Loop blocks | Repeat until done |
+| `BREAK`/`CONTINUE` | Loop control | Exit/skip iteration |
+| `CONDITIONAL_WAIT` | Retry with backoff | Wait for success |
+| `SKIP_IF` | Conditional skip | Skip on condition |
+| `STOP_AUTOMATION` | Terminate | Emergency stop |
 
-### Queue Management
-- **Queue Detection**: Monitor task queues with multiple detection strategies
-- **Queue Capacity Checking**: Ensure queue space before adding tasks
-- **Automated Task Creation**: Create multiple tasks until capacity is reached
+### Generation Downloads
+| Action | Description | Features |
+|--------|-------------|----------|
+| `START_GENERATION_DOWNLOADS` | Begin downloads | Sequential naming |
+| `STOP_GENERATION_DOWNLOADS` | Stop downloads | Graceful stop |
+| `CHECK_GENERATION_STATUS` | Check progress | Status monitoring |
 
-## Installation
+## 🚀 Installation
 
-### 1. Clone the repository
+### Prerequisites
+- Python 3.11 or higher
+- pip package manager
+- Chrome/Chromium browser
+
+### Step 1: Clone Repository
 ```bash
-git clone <repository-url>
+git clone https://github.com/yourusername/automaton.git
 cd automaton
 ```
 
-### 2. Create virtual environment (recommended)
+### Step 2: Create Virtual Environment
 ```bash
-python -m venv venv
+python3.11 -m venv venv
 
 # On Windows
 venv\Scripts\activate
 
-# On macOS/Linux
+# On macOS/Linux  
 source venv/bin/activate
 ```
 
-### 3. Install dependencies
+### Step 3: Install Dependencies
 ```bash
 pip install -r requirements.txt
 ```
 
-### 4. Install Playwright browsers
+### Step 4: Install Playwright Browsers
 ```bash
 playwright install chromium
 ```
 
-## Quick Start
+### Step 5: Verify Installation
+```bash
+python3.11 -c "import playwright; print('✅ Installation successful!')"
+```
+
+## 🎮 Quick Start
 
 ### GUI Mode
 
-Run the GUI application:
+Launch the graphical interface:
 ```bash
-python automaton-gui.py
+python3.11 automaton-gui.py
 ```
 
+**Steps:**
 1. Enter automation name and target URL
 2. Add actions using the "Add Action" button
-3. Configure each action with selectors and values
+3. Configure selectors and values
 4. Save configuration for reuse
 5. Click "Run Automation" to execute
+6. Use "Stop" button for graceful termination
 
 ### CLI Mode
 
-#### Create a new automation:
+#### Create New Automation
 ```bash
-python automaton-cli.py create -n "My Task" -u "https://example.com" -o my_task.json --interactive
+python3.11 automaton-cli.py create -n "My Task" -u "https://example.com" -o config.json
 ```
 
-#### Run automation from config:
+#### Run Automation
 ```bash
-python automaton-cli.py run -c my_task.json
+# Run headless
+python3.11 automaton-cli.py run -c config.json
+
+# Run with browser visible
+python3.11 automaton-cli.py run -c config.json --show-browser
+
+# Continue on error
+python3.11 automaton-cli.py run -c config.json --continue-on-error
 ```
 
-#### Run with browser visible:
+#### List Available Actions
 ```bash
-python automaton-cli.py run -c my_task.json --show-browser
+python3.11 automaton-cli.py list-actions
 ```
 
-## Usage Examples
+## 📖 Usage Examples
 
-### Example 1: Form Submission Automation
-
+### Example 1: Simple Form Submission
 ```python
-from web_automation import AutomationSequenceBuilder
+from src.core.engine import AutomationSequenceBuilder
 
-# Build automation sequence
-builder = AutomationSequenceBuilder("Form Submission", "https://example.com/form")
+builder = AutomationSequenceBuilder("Form Submit", "https://example.com/form")
 
 sequence = (builder
     .add_wait_for_element("#form-container")
-    .add_input_text("#name-field", "John Doe")
-    .add_input_text("#email-field", "john@example.com")
-    .add_toggle_setting("#newsletter-checkbox", True)
-    .add_click_button("#submit-button")
+    .add_input_text("#name", "John Doe")
+    .add_input_text("#email", "john@example.com")
+    .add_click_button("#submit")
     .add_wait_for_element(".success-message")
     .build()
 )
 
-# Save for reuse
 builder.save_to_file("form_automation.json")
 ```
 
-### Example 2: Queue Management with While Loop
-
+### Example 2: Queue Management with WHILE Loop
 ```python
-# Automated queue management - create tasks until queue is full
 sequence = (builder
     .add_set_variable("max_tasks", "8")
-    .add_set_variable("task_count", "0")
+    .add_set_variable("current", "0")
     
-    # Navigate to queue view
-    .add_click_button("[data-test-id='sidebar-menuitem-button-Favorites']")
-    .add_wait(2000)
+    # Check queue status
+    .add_check_element(".queue-count", "less", "${max_tasks}")
     
-    # Check initial queue status
-    .add_check_element(
-        selector=".sc-dMmcxd.cZTIpi",
-        check_type="less",
-        expected_value="${max_tasks}",
-        attribute="text"
-    )
-    
-    # WHILE loop - continue until queue is full
-    .add_while_begin("check_passed")
-    
-    # Create new task
-    .add_click_button(".creation-button")
-    .add_upload_image("#file-input", "/path/to/image.jpg")
-    .add_input_text("#prompt-field", "Create amazing content")
-    .add_click_button("#submit-button")
-    .add_increment_variable("task_count", 1)
-    
-    # Check queue status again
-    .add_click_button("[data-test-id='sidebar-menuitem-button-Favorites']")
-    .add_wait(2000)
-    .add_check_element(
-        selector=".sc-dMmcxd.cZTIpi",
-        check_type="less",
-        expected_value="${max_tasks}",
-        attribute="text"
-    )
-    
-    # Exit if queue is full
-    .add_if_begin("check_failed")
-    .add_log_message("Queue is full - stopping automation", "logs/automation.log")
-    .add_break()
-    .add_if_end()
-    
+    # WHILE loop - create tasks until full
+    .add_while_begin("check_result == true")
+        .add_click_button(".create-task")
+        .add_wait(2000)
+        .add_increment_variable("current", 1)
+        .add_check_element(".queue-count", "less", "${max_tasks}")
     .add_while_end()
+    
+    .add_log_message("Queue filled: ${current} tasks created")
     .build()
 )
 ```
 
-## Configuration File Format
+### Example 3: Conditional Download with Error Handling
+```python
+sequence = (builder
+    .add_check_element("#download-ready", "equals", "true")
+    
+    .add_if_begin("check_result == true")
+        .add_click_button("#download-btn")
+        .add_wait(3000)
+        .add_download_file("#file-link")
+        .add_log_message("Download completed")
+    .add_else()
+        .add_log_message("Download not ready")
+        .add_refresh_page()
+    .add_if_end()
+    .build()
+)
+```
 
-Automation configurations are stored as JSON files:
-
+### Example 4: Generation Downloads
 ```json
 {
-  "name": "My Automation",
-  "url": "https://example.com",
-  "headless": true,
-  "viewport": {
-    "width": 1280,
-    "height": 720
-  },
+  "name": "Download Generations",
+  "url": "https://platform.com",
   "actions": [
     {
-      "type": "wait_for_element",
-      "selector": "#main-content",
-      "timeout": 30000,
-      "description": "Wait for page load"
-    },
-    {
-      "type": "input_text",
-      "selector": "#search-box",
-      "value": "automation",
-      "description": "Enter search term"
-    },
-    {
-      "type": "click_button",
-      "selector": "#search-button",
-      "description": "Click search"
-    },
-    {
-      "type": "check_element",
-      "selector": ".queue-counter",
+      "type": "login",
       "value": {
-        "check": "less",
-        "value": "8",
-        "attribute": "text"
-      },
-      "description": "Check if queue has space"
+        "username": "user@example.com",
+        "password": "password"
+      }
     },
     {
-      "type": "while_begin",
+      "type": "start_generation_downloads",
       "value": {
-        "condition": "check_passed"
-      },
-      "description": "Loop while queue has space"
-    },
-    {
-      "type": "log_message",
-      "value": {
-        "message": "Creating task - queue has space",
-        "log_file": "logs/automation.log"
-      },
-      "description": "Log task creation"
-    },
-    {
-      "type": "while_end",
-      "value": {},
-      "description": "End while loop"
+        "max_downloads": 50,
+        "downloads_folder": "/path/to/downloads"
+      }
     }
   ]
 }
 ```
 
-## CLI Commands Reference
+## 🧪 Testing
 
-### `run` - Execute automation
+### Run All Tests
 ```bash
-automation run -c config.json [options]
-
-Options:
-  -c, --config          Path to config file (required)
-  --show-browser        Show browser window
-  --continue-on-error   Don't stop on action failure
+python3.11 -m pytest tests/ -v
 ```
 
-### `create` - Create new automation
+### Run Specific Tests
 ```bash
-automation create -n NAME -u URL [options]
+# Stop functionality tests
+python3.11 -m pytest tests/test_stop_functionality.py -v
 
-Options:
-  -n, --name         Automation name (required)
-  -u, --url          Target URL (required)
-  -o, --output       Output file path
-  --interactive      Add actions interactively
+# Generation download tests
+python3.11 -m pytest tests/test_generation_downloads.py -v
+
+# GUI tests
+python3.11 -m pytest tests/test_edit_action_windows.py -v
 ```
 
-### `add-action` - Add action to config
+### Run with Coverage
 ```bash
-automation add-action -c CONFIG --type TYPE [options]
-
-Options:
-  -c, --config       Config file to modify (required)
-  --type            Action type (required)
-  --selector        CSS selector
-  --value           Action value
-  --description     Action description
-  --timeout         Timeout in ms (default: 30000)
+python3.11 -m pytest tests/ --cov=src --cov-report=html
 ```
 
-### `list-actions` - Show available actions
+## 📚 Documentation
+
+### Essential Guides
+- [Stop Functionality Guide](docs/STOP_FUNCTIONALITY_GUIDE.md) - Stop mechanism implementation
+- [Generation Download Guide](docs/GENERATION_DOWNLOAD_GUIDE.md) - Automated downloads
+- [Automation Scheduler Guide](docs/AUTOMATION_SCHEDULER_GUIDE.md) - Scheduling automation
+- [While Loop Guide](docs/WHILE_LOOP_AUTOMATION_GUIDE.md) - Loop control
+- [Conditional Flow Guide](docs/conditional_flow_guide.md) - IF/ELSE usage
+- [Selector Guide](docs/selector_guide.md) - CSS selector strategies
+
+### API Documentation
+- [ActionType Reference](src/core/engine.py) - All action types
+- [Controller API](src/core/controller.py) - Control signals
+- [GUI Components](src/interfaces/gui.py) - Interface elements
+- [CLI Commands](src/interfaces/cli.py) - Command reference
+
+## 🏗️ Project Structure
+
+```
+automaton/
+├── src/
+│   ├── core/
+│   │   ├── engine.py                 # Main automation engine
+│   │   ├── controller.py             # State management
+│   │   ├── keyboard_handler.py       # Keyboard control
+│   │   └── generation_download_handlers.py
+│   ├── interfaces/
+│   │   ├── gui.py                    # GUI interface
+│   │   └── cli.py                    # CLI interface
+│   └── utils/
+│       ├── download_manager.py       # Download handling
+│       ├── generation_download_manager.py
+│       ├── performance_monitor.py
+│       └── credential_manager.py
+├── tests/                             # Test suite
+├── docs/                              # Documentation
+├── examples/                          # Example scripts
+├── scripts/                           # Utility scripts
+├── configs/                           # Configuration files
+└── workflows/                         # Saved workflows
+```
+
+## 🔧 Configuration
+
+### Environment Variables
 ```bash
-automation list-actions
+# Optional configuration
+export AUTOMATON_HEADLESS=true
+export AUTOMATON_BROWSER_PATH=/path/to/chrome
+export AUTOMATON_DOWNLOAD_DIR=/path/to/downloads
+export AUTOMATON_LOG_LEVEL=DEBUG
 ```
 
-### `validate` - Validate configuration
-```bash
-automation validate -c config.json
+### Configuration File
+```json
+{
+  "name": "My Automation",
+  "url": "https://example.com",
+  "headless": false,
+  "viewport": {
+    "width": 1600,
+    "height": 1000
+  },
+  "keep_browser_open": true,
+  "actions": [...]
+}
 ```
 
-### `convert` - Convert between formats
-```bash
-automation convert -i input.json -o output.yaml
-```
-
-## Advanced Usage
-
-### Complex Automation with Flow Control
-
-Create sophisticated workflows with conditional logic and loops:
-
-```python
-# Advanced automation with queue management and error handling
-sequence = (builder
-    # Login flow
-    .add_input_text("#username", "user@example.com")
-    .add_input_text("#password", "password")
-    .add_click_button("#login-btn")
-    .add_wait_for_element("#dashboard")
-    
-    # Initialize variables
-    .add_set_variable("max_attempts", "5")
-    .add_set_variable("current_attempt", "0")
-    .add_set_variable("queue_capacity", "8")
-    
-    # Check queue status with retry logic
-    .add_while_begin("check_passed")  # Retry loop
-    .add_increment_variable("current_attempt", 1)
-    
-    # Navigate to queue view
-    .add_click_button("[data-test-id='sidebar-menuitem-button-Favorites']")
-    .add_wait(2000)
-    
-    # Check if queue has space
-    .add_check_element(
-        selector=".queue-counter",
-        check_type="less",
-        expected_value="${queue_capacity}",
-        attribute="text"
-    )
-    
-    # If queue has space, create task
-    .add_if_begin("check_passed")
-    .add_log_message("Queue has space - creating task", "logs/automation.log")
-    .add_click_button(".creation-button")
-    .add_upload_image("#file-upload", "image.jpg")
-    .add_toggle_setting("#high-quality", True)
-    .add_input_text("#prompt", "Generate amazing content")
-    .add_click_button("#submit-btn")
-    .add_break()  # Exit retry loop on success
-    .add_if_end()
-    
-    # If queue is full, wait and retry
-    .add_if_begin("check_failed")
-    .add_log_message("Queue full - waiting before retry", "logs/automation.log")
-    .add_conditional_wait(
-        condition="check_failed",
-        wait_time=30000,  # Wait 30 seconds
-        max_retries=3
-    )
-    .add_if_end()
-    
-    # Check if max attempts reached
-    .add_check_element(
-        selector="body",  # Dummy check to use variable comparison
-        check_type="greater",
-        expected_value="${max_attempts}",
-        attribute="data-attempts"
-    )
-    .add_if_begin("check_passed")
-    .add_log_message("Max attempts reached - stopping", "logs/automation.log")
-    .add_break()
-    .add_if_end()
-    
-    .add_while_end()
-    .build()
-)
-```
-
-### Variable Management and Dynamic Content
-
-```python
-# Using variables for dynamic automation
-sequence = (builder
-    # Set up automation parameters
-    .add_set_variable("task_prefix", "Automation Task")
-    .add_set_variable("task_number", "1")
-    .add_set_variable("total_tasks", "0")
-    
-    # Create multiple tasks with dynamic names
-    .add_while_begin("check_passed")
-    
-    # Create task with dynamic title
-    .add_input_text("#task-title", "${task_prefix} #${task_number}")
-    .add_input_text("#description", "Automated task created on $(date)")
-    .add_click_button("#create-task")
-    
-    # Update counters
-    .add_increment_variable("task_number", 1)
-    .add_increment_variable("total_tasks", 1)
-    
-    # Log progress
-    .add_log_message(
-        "Created task ${task_number} - Total: ${total_tasks}",
-        "logs/task_creation.log"
-    )
-    
-    # Check if we should continue (example: stop at 5 tasks)
-    .add_check_element(
-        selector=".task-counter",
-        check_type="less",
-        expected_value="5",
-        attribute="text"
-    )
-    
-    .add_while_end()
-    .build()
-)
-```
-
-### Error Handling
-
-The tool provides detailed error reporting:
-
-```python
-results = await engine.run_automation()
-
-if not results['success']:
-    for error in results['errors']:
-        print(f"Action {error['action_index']}: {error['error']}")
-```
-
-### Programmatic Usage
-
-Integrate automation into your Python scripts:
-
-```python
-import asyncio
-from web_automation import WebAutomationEngine, AutomationSequenceBuilder
-
-async def main():
-    # Build or load configuration
-    config = AutomationSequenceBuilder.load_from_file("config.json")
-    
-    # Run automation
-    engine = WebAutomationEngine(config)
-    results = await engine.run_automation()
-    
-    # Process results
-    if results['success']:
-        print("Automation completed!")
-        print(f"Downloaded files: {results['outputs']}")
-
-asyncio.run(main())
-```
-
-## Tips for Reliable Automation
-
-### Selector Best Practices
-1. **Use Specific Selectors**: Prefer IDs and unique classes over generic selectors
-2. **Test Selectors**: Use browser DevTools to verify selectors work
-3. **Avoid Fragile Selectors**: Don't rely on deep nested structures that may change
-4. **Use data-test-id**: Prefer test-specific attributes when available
-
-### Timing and Synchronization
-5. **Add Wait Actions**: Allow time for page loads and dynamic content
-6. **Handle Timing**: Use `wait_for_element` before interacting with dynamic content
-7. **Queue Detection**: Use multiple detection strategies for reliable queue monitoring
-8. **Element Attribute Matching**: Use correct attributes (`text` for DIV content, `value` for inputs)
-
-### Flow Control and Error Handling
-9. **Conditional Logic**: Use IF/ELSE blocks for robust error handling
-10. **While Loops**: Implement retry logic with proper exit conditions
-11. **Variable Management**: Store state information for complex workflows
-12. **Break Conditions**: Always provide exit strategies for loops
-13. **Logging**: Add comprehensive logging for debugging and monitoring
-
-### Debugging and Development
-14. **Error Recovery**: Use `--continue-on-error` for non-critical actions
-15. **Debugging**: Run with `--show-browser` to see what's happening
-16. **Test Incrementally**: Build and test automations step by step
-17. **Use Log Files**: Monitor automation progress with detailed logging
-
-## Performance Optimization
-
-- **Headless Mode**: Run without browser UI for better performance
-- **Parallel Execution**: Run multiple instances for different tasks
-- **Minimal Waits**: Use element-based waits instead of fixed delays
-- **Reuse Sessions**: For multiple automations on same site
-
-## Troubleshooting
+## 🐛 Troubleshooting
 
 ### Common Issues
 
-1. **Element not found**: 
-   - Verify selector in browser DevTools
-   - Add wait actions before interaction
-   - Check if element is in iframe
+#### Stop Button Not Working
+- Ensure controller is properly initialized
+- Check that engine has controller reference
+- Verify control signal propagation
 
-2. **Timeout errors**:
-   - Increase timeout values
-   - Check network connectivity
-   - Verify page loads completely
+#### Downloads Failing
+- Check download directory permissions
+- Verify CSS selectors are correct
+- Increase timeout values if needed
 
-3. **Download failures**:
-   - Ensure download directory exists
-   - Check file permissions
-   - Verify download triggers
+#### Queue Detection Issues
+- Update selectors for current page structure
+- Try multiple detection strategies
+- Check browser console for values
 
-### Debug Mode
-
-Run with verbose logging:
+#### Browser Not Found
 ```bash
-python automaton-cli.py run -c config.json -v
+# Install Playwright browsers
+playwright install chromium
+
+# Or specify browser path
+export AUTOMATON_BROWSER_PATH=/usr/bin/chromium
 ```
 
-## Contributing
+## 🤝 Contributing
 
-Contributions are welcome! Please:
+We welcome contributions! Please follow these guidelines:
 
 1. Fork the repository
-2. Create a feature branch
-3. Add tests for new functionality
-4. Submit a pull request
+2. Create a feature branch (`git checkout -b feature/amazing-feature`)
+3. Make your changes
+4. Add tests for new features
+5. Run the test suite
+6. Update documentation
+7. Commit changes (`git commit -m 'Add amazing feature'`)
+8. Push to branch (`git push origin feature/amazing-feature`)
+9. Open a Pull Request
 
-## License
+### Development Setup
+```bash
+# Install development dependencies
+pip install -r requirements-dev.txt
 
-MIT License - see LICENSE file for details
+# Run linter
+flake8 src/
 
-## Support
+# Run formatter
+black src/
 
-For issues and questions:
-- Create an issue on GitHub
-- Check existing issues for solutions
-- Review debug logs for error details
+# Run type checker
+mypy src/
+```
+
+## 📈 Performance Tips
+
+- Use headless mode for better performance
+- Batch similar operations together
+- Implement appropriate wait strategies
+- Monitor memory usage for long-running automations
+- Use caching for repeated operations
+- Optimize CSS selectors for speed
+
+## 🔒 Security
+
+- Never hardcode credentials in automation files
+- Use environment variables for sensitive data
+- Validate all user inputs
+- Sanitize file paths to prevent traversal
+- Implement rate limiting for API calls
+- Review logs for sensitive information
+
+## 📝 License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## 🙏 Acknowledgments
+
+- Built with [Playwright](https://playwright.dev/) for reliable browser automation
+- GUI powered by [Tkinter](https://docs.python.org/3/library/tkinter.html)
+- Testing with [pytest](https://pytest.org/)
+
+## 📞 Support
+
+- 📧 Email: support@automaton.example
+- 💬 Discord: [Join our community](https://discord.gg/automaton)
+- 🐛 Issues: [GitHub Issues](https://github.com/yourusername/automaton/issues)
+- 📖 Wiki: [Documentation Wiki](https://github.com/yourusername/automaton/wiki)
+
+---
+
+**Automaton** - Making web automation simple, powerful, and reliable 🚀
+
+*Last Updated: August 2024 | Version: 2.0.0*

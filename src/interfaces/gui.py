@@ -18,6 +18,7 @@ from core.engine import (
     ActionType,
     Action
 )
+from core.controller import AutomationController
 
 class ModernButton(tk.Button):
     """Custom styled button that respects theme settings"""
@@ -136,6 +137,7 @@ class AutomationGUI:
         self.automation_thread = None
         self.log_queue = queue.Queue()
         self.current_engine = None  # Keep reference to the automation engine
+        self.controller = None  # Controller for automation control
         self.stop_requested = False  # Flag for stopping automation
         self.is_running = False  # Track automation state
         
@@ -1973,15 +1975,27 @@ class AutomationGUI:
             logger.addHandler(handler)
             logger.setLevel(logging.INFO)
             
+            # Create controller for automation control
+            if not self.controller:
+                self.controller = AutomationController()
+            else:
+                # Reset controller for new automation run
+                self.controller.reset_automation()
+            
+            # Start the controller for the automation
+            self.controller.start_automation(total_actions=len(config.actions))
+            
             # Reuse existing engine if available, otherwise create new one
             if self.current_engine:
                 # Update config for existing engine
                 self.current_engine.config = config
+                # Update controller reference
+                self.current_engine.controller = self.controller
                 engine = self.current_engine
                 self.log_queue.put(('info', 'Reusing existing browser window'))
             else:
-                # Create new engine
-                engine = WebAutomationEngine(config)
+                # Create new engine with controller
+                engine = WebAutomationEngine(config, controller=self.controller)
                 # Store engine reference for browser control
                 self.current_engine = engine
                 self.log_queue.put(('info', 'Creating new browser window'))
@@ -2093,6 +2107,14 @@ Errors: {len(results.get('errors', []))}
             
             # Log stop request
             self._log_message("🛑 Stop requested by user", "warning")
+            
+            # Signal the controller to stop automation
+            if self.controller:
+                success = self.controller.stop_automation(emergency=False)
+                if success:
+                    self._log_message("✅ Stop signal sent to automation controller", "info")
+                else:
+                    self._log_message("⚠️ Controller stop failed - automation may not be running", "warning")
             
             # If we have an engine with a page, try to stop gracefully
             if hasattr(self, 'current_engine') and self.current_engine:

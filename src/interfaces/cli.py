@@ -15,12 +15,34 @@ from core.engine import (
     AutomationConfig,
     ActionType
 )
+from core.controller import AutomationController
+import signal
 
 class AutomationCLI:
     """Command Line Interface for Web Automation"""
     
     def __init__(self):
         self.parser = self._create_parser()
+        self.controller = None
+        self.engine = None
+        
+        # Setup signal handlers for graceful stop
+        signal.signal(signal.SIGINT, self._signal_handler)
+        signal.signal(signal.SIGTERM, self._signal_handler)
+    
+    def _signal_handler(self, signum, frame):
+        """Handle interrupt signals (Ctrl+C)"""
+        print("\n🛑 Stop signal received...")
+        if self.controller:
+            print("📡 Sending stop signal to automation...")
+            success = self.controller.stop_automation(emergency=(signum == signal.SIGTERM))
+            if success:
+                print("✅ Stop signal sent successfully")
+            else:
+                print("⚠️ Failed to send stop signal")
+        else:
+            print("❌ No controller available - forcing exit")
+            sys.exit(1)
         
     def _create_parser(self):
         """Create argument parser with subcommands"""
@@ -160,11 +182,33 @@ Examples:
         print(f"Total actions: {len(config.actions)}")
         print("-" * 50)
         
-        engine = WebAutomationEngine(config)
+        # Create controller for automation control
+        self.controller = AutomationController()
+        
+        # Start the controller for the automation
+        self.controller.start_automation(total_actions=len(config.actions))
+        
+        # Create engine with controller
+        self.engine = WebAutomationEngine(config, controller=self.controller)
         if args.continue_on_error:
-            engine.continue_on_error = True
+            self.engine.continue_on_error = True
             
-        results = asyncio.run(engine.run_automation())
+        print("🚀 Starting automation... (Press Ctrl+C to stop gracefully)")
+        try:
+            results = asyncio.run(self.engine.run_automation())
+        except KeyboardInterrupt:
+            print("\n⏹️ Automation stopped by user")
+            results = {
+                'success': False,
+                'actions_completed': 0,
+                'total_actions': len(config.actions),
+                'errors': ['Automation stopped by user'],
+                'outputs': {}
+            }
+        finally:
+            # Cleanup
+            self.controller = None
+            self.engine = None
         
         # Display results
         print("\n" + "-" * 50)
