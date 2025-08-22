@@ -43,9 +43,20 @@ class GenerationDownloadConfig:
     # Selectors for page elements
     completed_task_selector: str = "div[id$='__8']"  # 9th item (index 8)
     thumbnail_container_selector: str = ".thumbnail-container"
-    thumbnail_selector: str = ".thumbnail-item"
+    thumbnail_selector: str = ".thumbnail-item, .thumsItem"  # Multiple possible selectors
+    
+    # Button panel and icon-based selectors
+    button_panel_selector: str = ".sc-eYHxxX.fmURBt"  # Static button panel selector
+    download_icon_href: str = "#icon-icon_tongyong_20px_xiazai"  # Download icon SVG reference
+    download_button_index: int = 2  # 3rd button (0-indexed)
+    
+    # Text-based selectors
+    download_no_watermark_text: str = "Download without Watermark"
+    
+    # Legacy selectors (kept for backward compatibility)
     download_button_selector: str = "[data-spm-anchor-id='a2ty_o02.30365920.0.i1.6daf47258YB5qi']"
     download_no_watermark_selector: str = "[data-spm-anchor-id='a2ty_o02.30365920.0.i2.6daf47258YB5qi']"
+    
     generation_date_selector: str = ".sc-eWXuyo.gwshYN"
     prompt_selector: str = "span[aria-describedby]"
     
@@ -280,25 +291,189 @@ class GenerationDownloadManager:
             logger.error(f"Error extracting metadata: {e}")
             return None
     
+    async def find_and_click_download_button(self, page) -> bool:
+        """Find and click the download button using multiple strategies"""
+        logger.debug("Attempting to find download button...")
+        
+        # Strategy 1: Try button panel approach (most reliable)
+        try:
+            logger.debug(f"Strategy 1: Looking for button panel with selector {self.config.button_panel_selector}")
+            button_panels = await page.query_selector_all(self.config.button_panel_selector)
+            
+            for panel in button_panels:
+                # Get all span elements with SVG icons
+                buttons = await panel.query_selector_all("span[role='img']")
+                logger.debug(f"Found {len(buttons)} buttons in panel")
+                
+                if len(buttons) > self.config.download_button_index:
+                    # Click the download button (3rd button, index 2)
+                    download_button = buttons[self.config.download_button_index]
+                    await download_button.click()
+                    logger.info("Successfully clicked download button using panel strategy")
+                    return True
+        except Exception as e:
+            logger.debug(f"Strategy 1 failed: {e}")
+        
+        # Strategy 2: Try to find by SVG icon reference
+        try:
+            logger.debug(f"Strategy 2: Looking for SVG with href {self.config.download_icon_href}")
+            svg_selector = f"svg use[href='{self.config.download_icon_href}']"
+            svg_element = await page.wait_for_selector(svg_selector, timeout=5000)
+            if svg_element:
+                # Click the parent span element
+                parent_span = await svg_element.evaluate_handle("el => el.closest('span[role=\"img\"]')")
+                await parent_span.click()
+                logger.info("Successfully clicked download button using SVG icon strategy")
+                return True
+        except Exception as e:
+            logger.debug(f"Strategy 2 failed: {e}")
+        
+        # Strategy 3: Legacy selector (fallback)
+        try:
+            logger.debug(f"Strategy 3: Using legacy selector {self.config.download_button_selector}")
+            await page.click(self.config.download_button_selector, timeout=5000)
+            logger.info("Successfully clicked download button using legacy selector")
+            return True
+        except Exception as e:
+            logger.debug(f"Strategy 3 failed: {e}")
+        
+        logger.error("All strategies failed to find download button")
+        return False
+    
+    async def find_and_click_no_watermark(self, page) -> bool:
+        """Find and click the 'Download without Watermark' option"""
+        logger.debug("Attempting to find 'Download without Watermark' option...")
+        
+        # Wait for download options to appear after clicking download button
+        await page.wait_for_timeout(2000)
+        
+        # Strategy 1: Use CSS selector first (highest priority)
+        try:
+            logger.debug(f"Strategy 1: Using CSS selector {self.config.download_no_watermark_selector}")
+            element = await page.wait_for_selector(self.config.download_no_watermark_selector, timeout=3000)
+            if element and await element.is_visible():
+                await element.click()
+                logger.info(f"Successfully clicked 'Download without Watermark' using CSS selector: {self.config.download_no_watermark_selector}")
+                return True
+        except Exception as e:
+            logger.debug(f"CSS selector strategy failed: {e}")
+        
+        # Strategy 2: Direct text match for 'Download without Watermark'
+        try:
+            logger.debug("Strategy 2: Looking for exact text 'Download without Watermark'")
+            
+            # Find all clickable elements that might contain the text
+            clickable_selectors = [
+                "*:has-text('Download without Watermark')",
+                "div:has-text('Download without Watermark')", 
+                "span:has-text('Download without Watermark')",
+                "button:has-text('Download without Watermark')",
+                "a:has-text('Download without Watermark')"
+            ]
+            
+            for selector in clickable_selectors:
+                try:
+                    element = await page.wait_for_selector(selector, timeout=2000)
+                    if element and await element.is_visible():
+                        await element.click()
+                        logger.info(f"Successfully clicked 'Download without Watermark' using text selector: {selector}")
+                        return True
+                except:
+                    continue
+                    
+        except Exception as e:
+            logger.debug(f"Playwright text selector strategy failed: {e}")
+        
+        # Strategy 3: Manual element search with exact text matching
+        try:
+            logger.debug("Strategy 3: Manual element search with exact text matching")
+            
+            # Get all potentially clickable elements
+            elements = await page.query_selector_all("div, span, button, a, p, li, td")
+            
+            for element in elements:
+                try:
+                    text_content = await element.text_content()
+                    if text_content and 'Download without Watermark' in text_content.strip():
+                        # Verify element is visible and clickable
+                        is_visible = await element.is_visible()
+                        is_enabled = await element.is_enabled()
+                        
+                        if is_visible and is_enabled:
+                            await element.click()
+                            logger.info(f"Successfully clicked 'Download without Watermark' - found text: '{text_content.strip()}'")
+                            return True
+                        else:
+                            logger.debug(f"Found text but element not clickable - visible: {is_visible}, enabled: {is_enabled}")
+                except:
+                    continue
+                    
+        except Exception as e:
+            logger.debug(f"Manual search strategy failed: {e}")
+        
+        # Strategy 4: XPath with exact text match
+        try:
+            logger.debug("Strategy 4: XPath with exact text match")
+            xpath_selectors = [
+                "//div[contains(text(), 'Download without Watermark')]",
+                "//span[contains(text(), 'Download without Watermark')]", 
+                "//button[contains(text(), 'Download without Watermark')]",
+                "//a[contains(text(), 'Download without Watermark')]",
+                "//*[contains(text(), 'Download without Watermark')]"
+            ]
+            
+            for xpath in xpath_selectors:
+                try:
+                    element = await page.wait_for_selector(f"xpath={xpath}", timeout=2000)
+                    if element and await element.is_visible():
+                        await element.click()
+                        logger.info(f"Successfully clicked 'Download without Watermark' using XPath: {xpath}")
+                        return True
+                except:
+                    continue
+                    
+        except Exception as e:
+            logger.debug(f"XPath strategy failed: {e}")
+        
+        logger.error("All strategies failed to find 'Download without Watermark' option")
+        return False
+    
     async def download_single_generation(self, page, thumbnail_index: int) -> bool:
         """Download a single generation and handle all associated tasks"""
         try:
             logger.info(f"Starting download for thumbnail {thumbnail_index}")
             
             # Click on thumbnail to load generation details
-            thumbnail_selector = f"{self.config.thumbnail_selector}:nth-child({thumbnail_index + 1})"
-            try:
-                await page.click(thumbnail_selector, timeout=10000)
-                await page.wait_for_timeout(2000)  # Wait for content to load
-            except Exception as e:
-                logger.error(f"Failed to click thumbnail {thumbnail_index}: {e}")
+            # Try multiple thumbnail selectors
+            thumbnail_clicked = False
+            for selector in self.config.thumbnail_selector.split(", "):
+                try:
+                    thumbnail_selector = f"{selector}:nth-child({thumbnail_index + 1})"
+                    await page.click(thumbnail_selector, timeout=10000)
+                    await page.wait_for_timeout(2000)  # Wait for content to load
+                    thumbnail_clicked = True
+                    logger.debug(f"Successfully clicked thumbnail using selector: {selector}")
+                    break
+                except Exception as e:
+                    logger.debug(f"Thumbnail selector {selector} failed: {e}")
+            
+            if not thumbnail_clicked:
+                logger.error(f"Failed to click thumbnail {thumbnail_index}")
                 return False
+            
+            # Set up download handling before clicking download button
+            download_path = Path(self.config.downloads_folder)
+            logger.debug(f"Monitoring download directory: {download_path}")
+            
+            # Get initial file list
+            initial_files = set(download_path.glob('*')) if download_path.exists() else set()
+            logger.debug(f"Initial files in directory: {len(initial_files)}")
             
             # Extract metadata before download
             metadata_dict = await self.extract_metadata_from_page(page)
             if not metadata_dict:
-                logger.error(f"Failed to extract metadata for thumbnail {thumbnail_index}")
-                return False
+                logger.warning(f"Failed to extract metadata for thumbnail {thumbnail_index}, continuing anyway")
+                metadata_dict = {'generation_date': 'Unknown', 'prompt': 'Unknown'}
             
             # Get next file ID
             file_id = self.logger.get_next_file_id()
@@ -306,26 +481,152 @@ class GenerationDownloadManager:
             # Start download process
             download_start_time = time.time()
             
-            # Click download button
-            try:
-                await page.click(self.config.download_button_selector, timeout=10000)
+            # Set up download event listener
+            download_promise = None
+            
+            def handle_download(download):
+                nonlocal download_promise
+                download_promise = download
+                logger.info(f"Download started: {download.suggested_filename}")
+            
+            # Add download listener to page
+            page.on("download", handle_download)
+            
+            # Click download button using enhanced strategies
+            if not await self.find_and_click_download_button(page):
+                logger.error("Failed to click download button")
+                page.remove_listener("download", handle_download)
+                return False
+            
+            # Wait for download modal/options to appear and try to find watermark option
+            logger.debug("Waiting for download options to appear...")
+            await page.wait_for_timeout(1000)
+            
+            # Try to click download without watermark with more aggressive timing
+            watermark_clicked = False
+            for attempt in range(3):
+                logger.debug(f"Attempt {attempt + 1} to find 'Download without Watermark'")
+                
+                if await self.find_and_click_no_watermark(page):
+                    watermark_clicked = True
+                    break
+                    
+                # Wait a bit more if first attempts fail
+                if attempt < 2:
+                    await page.wait_for_timeout(1500)
+            
+            if not watermark_clicked:
+                logger.warning("Failed to click 'Download without Watermark' after multiple attempts")
+                
+                # Check if download started anyway (sometimes download button alone is enough)
+                logger.debug("Checking if download started without watermark option...")
                 await page.wait_for_timeout(1000)
-            except Exception as e:
-                logger.error(f"Failed to click download button: {e}")
-                return False
+                
+                # Look for download-related elements to see if download is in progress
+                download_indicators = [
+                    ".download-progress", ".downloading", "[data-downloading]",
+                    "text=Downloading", "text=Download started"
+                ]
+                
+                download_started = False
+                for indicator in download_indicators:
+                    try:
+                        element = await page.wait_for_selector(indicator, timeout=1000)
+                        if element:
+                            logger.info(f"Download appears to have started (found: {indicator})")
+                            download_started = True
+                            break
+                    except:
+                        continue
+                
+                if not download_started:
+                    logger.debug("No download indicators found, trying download button again")
+                    # Sometimes clicking download button again helps
+                    await self.find_and_click_download_button(page)
+            else:
+                logger.info("Successfully clicked 'Download without Watermark' option")
             
-            # Click download without watermark
-            try:
-                await page.click(self.config.download_no_watermark_selector, timeout=10000)
-                await page.wait_for_timeout(2000)
-            except Exception as e:
-                logger.error(f"Failed to click download without watermark: {e}")
-                return False
+            # Wait longer and check for additional UI elements
+            await page.wait_for_timeout(2000)
             
-            # Wait for download to complete
-            downloaded_file = await self.file_manager.wait_for_download(
-                timeout=self.config.verification_timeout // 1000
-            )
+            # Check if any additional confirmation dialogs or buttons appeared
+            logger.debug("Checking for any additional confirmation buttons...")
+            confirmation_buttons = [
+                "button:has-text('Confirm')",
+                "button:has-text('Download')", 
+                "button:has-text('OK')",
+                "button:has-text('Yes')",
+                "[role='button']:has-text('Download')",
+                ".download-confirm"
+            ]
+            
+            for button_selector in confirmation_buttons:
+                try:
+                    button = await page.wait_for_selector(button_selector, timeout=2000)
+                    if button and await button.is_visible():
+                        await button.click()
+                        logger.info(f"Clicked additional confirmation button: {button_selector}")
+                        await page.wait_for_timeout(2000)
+                        break
+                except:
+                    continue
+            
+            # Wait a bit more for download to start
+            await page.wait_for_timeout(3000)
+            
+            # Handle Playwright download if detected
+            downloaded_file = None
+            if download_promise:
+                try:
+                    logger.info("Processing Playwright download...")
+                    # Define the target path for the download
+                    target_filename = f"{file_id}_temp.mp4"
+                    target_path = download_path / target_filename
+                    
+                    # Save the download
+                    await download_promise.save_as(str(target_path))
+                    downloaded_file = target_path
+                    logger.info(f"Download saved via Playwright: {downloaded_file.name}")
+                    
+                except Exception as e:
+                    logger.error(f"Failed to save Playwright download: {e}")
+            else:
+                logger.debug("No Playwright download event detected")
+            
+            # Fallback: Try file system detection if Playwright download didn't work
+            if not downloaded_file:
+                logger.debug("Playwright download not detected, trying file system detection...")
+                
+                # Try multiple approaches to detect download
+                for attempt in range(3):
+                    # Method 1: Wait using file manager
+                    logger.debug(f"Download detection attempt {attempt + 1}/3")
+                    downloaded_file = await self.file_manager.wait_for_download(
+                        timeout=15  # Shorter timeout per attempt
+                    )
+                    
+                    if downloaded_file:
+                        logger.info(f"Download detected via file manager: {downloaded_file.name}")
+                        break
+                        
+                    # Method 2: Check if any new files appeared in the directory
+                    logger.debug("Checking for new files in download directory...")
+                    current_files = set(download_path.glob('*')) if download_path.exists() else set()
+                    new_files = current_files - initial_files
+                    
+                    if new_files:
+                        # Found new files, use the most recent one
+                        downloaded_file = max(new_files, key=lambda f: f.stat().st_mtime)
+                        logger.info(f"Found new file via directory scan: {downloaded_file.name}")
+                        break
+                    
+                    # Wait a bit more before next attempt
+                    if attempt < 2:
+                        logger.debug("No download detected, waiting longer...")
+                        await page.wait_for_timeout(5000)
+            
+            # Clean up download listener
+            page.remove_listener("download", handle_download)
             
             if not downloaded_file:
                 logger.error(f"Download did not complete for thumbnail {thumbnail_index}")

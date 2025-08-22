@@ -218,11 +218,15 @@ class AutomationConfig:
 
 # Import generation download handlers
 try:
-    from core.generation_download_handlers import GenerationDownloadHandlers
+    from .generation_download_handlers import GenerationDownloadHandlers
     GENERATION_DOWNLOAD_AVAILABLE = True
 except ImportError:
-    GENERATION_DOWNLOAD_AVAILABLE = False
-    logger.warning("Generation download handlers not available")
+    try:
+        from core.generation_download_handlers import GenerationDownloadHandlers
+        GENERATION_DOWNLOAD_AVAILABLE = True
+    except ImportError:
+        GENERATION_DOWNLOAD_AVAILABLE = False
+        logger.warning("Generation download handlers not available")
     
     # Create a dummy base class if not available
     class GenerationDownloadHandlers:

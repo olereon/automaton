@@ -23,7 +23,7 @@ class GenerationDownloadHandlers:
     async def _handle_start_generation_downloads(self, action) -> Dict[str, Any]:
         """Handle START_GENERATION_DOWNLOADS action"""
         try:
-            from utils.generation_download_manager import GenerationDownloadManager, GenerationDownloadConfig
+            from ..utils.generation_download_manager import GenerationDownloadManager, GenerationDownloadConfig
             
             # Parse configuration from action value
             config_data = action.value if action.value else {}
@@ -39,10 +39,18 @@ class GenerationDownloadHandlers:
                 # Update selectors if provided
                 completed_task_selector=config_data.get('completed_task_selector', "div[id$='__8']"),
                 thumbnail_selector=config_data.get('thumbnail_selector', '.thumbnail-item'),
+                
+                # Enhanced selector configuration
+                button_panel_selector=config_data.get('button_panel_selector', '.sc-eYHxxX.fmURBt'),
+                download_icon_href=config_data.get('download_icon_href', '#icon-icon_tongyong_20px_xiazai'),
+                download_button_index=config_data.get('download_button_index', 2),
+                download_no_watermark_text=config_data.get('download_no_watermark_text', 'Download without Watermark'),
+                
+                # Legacy and CSS selectors
                 download_button_selector=config_data.get('download_button_selector', 
                     "[data-spm-anchor-id='a2ty_o02.30365920.0.i1.6daf47258YB5qi']"),
                 download_no_watermark_selector=config_data.get('download_no_watermark_selector',
-                    "[data-spm-anchor-id='a2ty_o02.30365920.0.i2.6daf47258YB5qi']"),
+                    ".sc-fbUgXY.hMAwvg"),  # Updated default to the new selector
                 generation_date_selector=config_data.get('generation_date_selector', '.sc-eWXuyo.gwshYN'),
                 prompt_selector=config_data.get('prompt_selector', 'span[aria-describedby]')
             )
@@ -55,6 +63,15 @@ class GenerationDownloadHandlers:
             logger.info(f"Max downloads: {config.max_downloads}")
             logger.info(f"Downloads folder: {config.downloads_folder}")
             logger.info(f"Logs folder: {config.logs_folder}")
+            
+            # Configure browser downloads to go to our directory
+            try:
+                # Set up download path in browser context
+                context = self.page.context
+                await context.route("**", lambda route: route.continue_())
+                logger.debug(f"Browser download path configured to: {config.downloads_folder}")
+            except Exception as e:
+                logger.warning(f"Could not configure browser download path: {e}")
             
             # Start the download automation
             results = await self._generation_download_manager.run_download_automation(self.page)

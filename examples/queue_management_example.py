@@ -13,7 +13,7 @@ from datetime import datetime, timedelta
 src_path = Path(__file__).parent.parent / "src"
 sys.path.insert(0, str(src_path))
 
-from core.engine import AutomationSequenceBuilder, WebAutomationEngine
+from src.core.engine import AutomationSequenceBuilder, WebAutomationEngine
 
 async def queue_with_retry_example():
     """

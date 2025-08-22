@@ -15,8 +15,8 @@ from datetime import datetime
 # Add src directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from core.engine import WebAutomationEngine, AutomationConfig, Action, ActionType
-from utils.download_manager import create_download_manager, DownloadConfig
+from src.core.engine import WebAutomationEngine, AutomationConfig, Action, ActionType
+from src.utils.download_manager import create_download_manager, DownloadConfig
 
 
 async def test_download_functionality():
@@ -77,7 +77,7 @@ async def test_download_functionality():
     
     try:
         # Load the test config
-        from core.engine import AutomationSequenceBuilder
+        from src.core.engine import AutomationSequenceBuilder
         
         config = AutomationSequenceBuilder.from_file(str(config_file))
         engine = WebAutomationEngine(config)

@@ -10,10 +10,17 @@ import os
 import json
 from pathlib import Path
 
-# Add parent directory to path
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# Add parent directory to path for imports
+parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, parent_dir)
 
-from src.core.engine import WebAutomationEngine, AutomationConfig, Action, ActionType
+# Import from src directory
+try:
+    from src.core.engine import WebAutomationEngine, AutomationConfig, Action, ActionType
+except ImportError:
+    # Alternative import path
+    sys.path.insert(0, os.path.join(parent_dir, 'src'))
+    from src.core.engine import WebAutomationEngine, AutomationConfig, Action, ActionType
 
 
 async def demo_generation_downloads():

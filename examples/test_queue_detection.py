@@ -12,7 +12,7 @@ from pathlib import Path
 src_path = Path(__file__).parent.parent / "src"
 sys.path.insert(0, str(src_path))
 
-from core.engine import AutomationSequenceBuilder, WebAutomationEngine
+from src.core.engine import AutomationSequenceBuilder, WebAutomationEngine
 
 async def test_queue_detection():
     """
