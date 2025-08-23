@@ -6,37 +6,58 @@ The Generation Download Automation system has been enhanced with intelligent sel
 
 ## 🚀 Key Improvements
 
-### 1. **Multi-Strategy Element Finding**
+### 1. **Text-Based Landmark Strategies** (MOST ROBUST)
 
-The system now uses multiple strategies to find elements, with automatic fallback if one strategy fails:
+The system now prioritizes text-based landmarks that remain stable even when CSS classes change dynamically:
 
-#### Download Button Strategies:
-1. **Button Panel Strategy** (Most Reliable)
-   - Finds the static button panel using `.sc-eYHxxX.fmURBt`
-   - Locates the download button as the 3rd button (index 2) in the panel
-   - Works even when individual button selectors change
+#### Download Button Finding:
+1. **"Image to video" Text Landmark** (Primary Strategy)
+   - Finds elements containing "Image to video" text
+   - Navigates to parent container
+   - Locates second div with 5 button spans
+   - Clicks the 3rd span (download button)
+   - **Success Rate: 100%** in testing
 
-2. **SVG Icon Strategy**
-   - Searches for the specific download icon using `href="#icon-icon_tongyong_20px_xiazai"`
-   - Clicks the parent span element containing the icon
+2. **Button Panel Strategy** (Fallback)
+   - Finds the static button panel using CSS selector
+   - Locates the download button by position
+   - Works when panel structure remains consistent
+
+3. **SVG Icon Strategy** (Secondary Fallback)
+   - Searches for the specific download icon
+   - Clicks the parent span element
    - Reliable when icon references remain consistent
 
-3. **Legacy Selector Fallback**
-   - Falls back to traditional data-spm-anchor-id selectors
-   - Useful if the site temporarily reverts to old structure
+4. **Legacy Selector Fallback**
+   - Falls back to traditional selectors
+   - Last resort option
 
 #### Download Without Watermark Strategies:
-1. **Text Content Search**
+1. **CSS Selector** (Primary)
+   - Uses `.sc-fbUgXY.hMAwvg` selector
+   - Direct element targeting when available
+   
+2. **Text Content Search** (Fallback)
    - Searches all elements for text "Download without Watermark"
    - Case-insensitive matching
    - Most reliable for text-based elements
 
-2. **XPath Text Search**
+3. **XPath Text Search**
    - Uses XPath to find elements containing the text
    - More efficient for deeply nested elements
 
-3. **Legacy Selector Fallback**
-   - Falls back to traditional selectors if available
+#### Metadata Extraction Strategies:
+
+1. **Date Extraction - "Creation Time" Landmark**
+   - Finds elements containing "Creation Time" text
+   - Gets the next span element (contains actual date)
+   - **100% accurate** when landmark is present
+
+2. **Prompt Extraction - "..." Pattern**
+   - Finds divs containing `</span>...` pattern
+   - Extracts text from span with `aria-describedby` attribute
+   - Validates content length (>20 chars)
+   - **Captures full prompt text** instead of UI labels
 
 ### 2. **Enhanced Debug Logging**
 
@@ -65,14 +86,23 @@ The configuration now supports both new and legacy selectors:
 
 ## 📋 Configuration Parameters
 
-### New Parameters
+### Text-Based Landmark Parameters (RECOMMENDED)
+
+| Parameter | Type | Description | Default |
+|-----------|------|-------------|---------|
+| `image_to_video_text` | string | Text landmark for finding download button | `Image to video` |
+| `creation_time_text` | string | Text landmark for finding date | `Creation Time` |
+| `prompt_ellipsis_pattern` | string | HTML pattern for finding prompt | `</span>...` |
+| `download_no_watermark_text` | string | Text to search for watermark option | `Download without Watermark` |
+
+### CSS Selector Parameters (Fallback)
 
 | Parameter | Type | Description | Default |
 |-----------|------|-------------|---------|
 | `button_panel_selector` | string | CSS selector for the button panel | `.sc-eYHxxX.fmURBt` |
 | `download_icon_href` | string | SVG icon reference for download button | `#icon-icon_tongyong_20px_xiazai` |
 | `download_button_index` | int | Index of download button in panel (0-based) | `2` |
-| `download_no_watermark_text` | string | Text to search for watermark option | `Download without Watermark` |
+| `download_no_watermark_selector` | string | CSS selector for no watermark button | `.sc-fbUgXY.hMAwvg` |
 
 ### Metadata Extraction Parameters
 

@@ -50,7 +50,10 @@ class GenerationDownloadConfig:
     download_icon_href: str = "#icon-icon_tongyong_20px_xiazai"  # Download icon SVG reference
     download_button_index: int = 2  # 3rd button (0-indexed)
     
-    # Text-based selectors
+    # Text-based landmark selectors (MOST ROBUST)
+    image_to_video_text: str = "Image to video"  # Landmark for finding download button
+    creation_time_text: str = "Creation Time"    # Landmark for finding date
+    prompt_ellipsis_pattern: str = "</span>..."  # Pattern for finding prompt
     download_no_watermark_text: str = "Download without Watermark"
     
     # Legacy selectors (kept for backward compatibility)
@@ -257,81 +260,112 @@ class GenerationDownloadManager:
         logger.info("Stop requested for generation downloads")
     
     async def extract_metadata_from_page(self, page) -> Optional[Dict[str, str]]:
-        """Extract generation metadata from the current page"""
+        """Extract generation metadata from the current page using text-based landmarks"""
         try:
             metadata = {}
             
-            # Extract generation date with fallback strategies
+            # Extract generation date using "Creation Time" text landmark (MOST ROBUST)
             try:
-                logger.debug(f"Attempting to extract date using selector: {self.config.generation_date_selector}")
-                date_element = await page.wait_for_selector(
-                    self.config.generation_date_selector, 
-                    timeout=5000
-                )
-                if date_element:
-                    date_text = await date_element.text_content()
-                    metadata['generation_date'] = date_text.strip() if date_text else "Unknown Date"
-                    logger.debug(f"Extracted date: {metadata['generation_date']}")
-                else:
-                    raise Exception("Date element not found")
-            except Exception as e:
-                logger.warning(f"Primary date selector failed: {e}")
+                logger.debug(f"Extracting date using '{self.config.creation_time_text}' text landmark")
                 
-                # Fallback: Look for any element containing "Creation Time"
-                try:
-                    logger.debug("Trying fallback date extraction...")
-                    # Look for the Creation Time container and get the next span
-                    creation_time_elements = await page.query_selector_all("*:has-text('Creation Time')")
-                    for element in creation_time_elements:
-                        parent = element
-                        # Try to find the date span in the same container
-                        date_spans = await parent.query_selector_all("span.sc-cSMkSB.hUjUPD")
-                        if len(date_spans) >= 2:  # First is "Creation Time", second is the date
-                            date_text = await date_spans[1].text_content()
-                            metadata['generation_date'] = date_text.strip() if date_text else "Unknown Date"
-                            logger.debug(f"Extracted date via fallback: {metadata['generation_date']}")
-                            break
+                # Find elements containing the landmark text
+                creation_time_elements = await page.query_selector_all(f"span:has-text('{self.config.creation_time_text}')")
+                
+                date_found = False
+                for element in creation_time_elements:
+                    try:
+                        # Get the parent container
+                        parent = await element.evaluate_handle("el => el.parentElement")
+                        
+                        # Find all spans in the parent
+                        spans = await parent.query_selector_all("span")
+                        
+                        # The date should be in the second span (after "Creation Time")
+                        if len(spans) >= 2:
+                            date_span = spans[1]
+                            date_text = await date_span.text_content()
+                            if date_text and date_text.strip() != self.config.creation_time_text:
+                                metadata['generation_date'] = date_text.strip()
+                                logger.debug(f"Extracted date via 'Creation Time' landmark: {metadata['generation_date']}")
+                                date_found = True
+                                break
+                    except Exception as inner_e:
+                        logger.debug(f"Failed to process Creation Time element: {inner_e}")
+                        continue
+                
+                if not date_found:
+                    # Fallback to selector-based approach
+                    logger.debug("Trying selector-based date extraction")
+                    date_element = await page.wait_for_selector(
+                        self.config.generation_date_selector, 
+                        timeout=3000
+                    )
+                    if date_element:
+                        date_text = await date_element.text_content()
+                        metadata['generation_date'] = date_text.strip() if date_text else "Unknown Date"
                     else:
                         metadata['generation_date'] = "Unknown Date"
-                except Exception as fallback_e:
-                    logger.warning(f"Fallback date extraction failed: {fallback_e}")
-                    metadata['generation_date'] = "Unknown Date"
-            
-            # Extract prompt with fallback strategies  
-            try:
-                logger.debug(f"Attempting to extract prompt using selector: {self.config.prompt_selector}")
-                prompt_element = await page.wait_for_selector(
-                    self.config.prompt_selector, 
-                    timeout=5000
-                )
-                if prompt_element:
-                    prompt_text = await prompt_element.text_content()
-                    metadata['prompt'] = prompt_text.strip() if prompt_text else "Unknown Prompt"
-                    logger.debug(f"Extracted prompt: {metadata['prompt'][:100]}...")
-                else:
-                    raise Exception("Prompt element not found")
+                        
             except Exception as e:
-                logger.warning(f"Primary prompt selector failed: {e}")
+                logger.warning(f"Date extraction failed: {e}")
+                metadata['generation_date'] = "Unknown Date"
+            
+            # Extract prompt using "..." pattern landmark (MOST ROBUST)
+            try:
+                logger.debug(f"Extracting prompt using '{self.config.prompt_ellipsis_pattern}' pattern landmark")
                 
-                # Fallback: Look for any span with aria-describedby attribute
-                try:
-                    logger.debug("Trying fallback prompt extraction...")
-                    prompt_elements = await page.query_selector_all("span[aria-describedby]")
-                    if prompt_elements:
-                        # Use the first one that has substantial text content
+                # Find all divs that might contain the prompt
+                prompt_containers = await page.query_selector_all("div")
+                
+                prompt_found = False
+                for container in prompt_containers:
+                    try:
+                        # Get the HTML content
+                        html_content = await container.evaluate("el => el.innerHTML")
+                        
+                        # Check if it contains the pattern
+                        if self.config.prompt_ellipsis_pattern in html_content and "aria-describedby" in html_content:
+                            # Find the span with aria-describedby
+                            prompt_spans = await container.query_selector_all("span[aria-describedby]")
+                            
+                            for span in prompt_spans:
+                                text = await span.text_content()
+                                if text and len(text.strip()) > 20:  # Substantial content
+                                    metadata['prompt'] = text.strip()
+                                    logger.debug(f"Extracted prompt via '...' pattern: {metadata['prompt'][:100]}...")
+                                    prompt_found = True
+                                    break
+                            
+                            if prompt_found:
+                                break
+                                
+                    except Exception as inner_e:
+                        continue
+                
+                if not prompt_found:
+                    # Fallback to selector-based approach
+                    logger.debug("Trying selector-based prompt extraction")
+                    prompt_element = await page.wait_for_selector(
+                        self.config.prompt_selector, 
+                        timeout=3000
+                    )
+                    if prompt_element:
+                        prompt_text = await prompt_element.text_content()
+                        metadata['prompt'] = prompt_text.strip() if prompt_text else "Unknown Prompt"
+                    else:
+                        # Last resort: any span with aria-describedby
+                        prompt_elements = await page.query_selector_all("span[aria-describedby]")
                         for element in prompt_elements:
                             text = await element.text_content()
-                            if text and len(text.strip()) > 20:  # Substantial content
+                            if text and len(text.strip()) > 20:
                                 metadata['prompt'] = text.strip()
-                                logger.debug(f"Extracted prompt via fallback: {metadata['prompt'][:100]}...")
                                 break
                         else:
                             metadata['prompt'] = "Unknown Prompt"
-                    else:
-                        metadata['prompt'] = "Unknown Prompt"
-                except Exception as fallback_e:
-                    logger.warning(f"Fallback prompt extraction failed: {fallback_e}")
-                    metadata['prompt'] = "Unknown Prompt"
+                            
+            except Exception as e:
+                logger.warning(f"Prompt extraction failed: {e}")
+                metadata['prompt'] = "Unknown Prompt"
             
             return metadata
             
@@ -343,9 +377,44 @@ class GenerationDownloadManager:
         """Find and click the download button using multiple strategies"""
         logger.debug("Attempting to find download button...")
         
-        # Strategy 1: Try button panel approach (most reliable)
+        # Strategy 1: Text-based landmark approach using "Image to video" (MOST ROBUST)
         try:
-            logger.debug(f"Strategy 1: Looking for button panel with selector {self.config.button_panel_selector}")
+            logger.debug(f"Strategy 1: Using text-based landmark '{self.config.image_to_video_text}' to find download button")
+            
+            # Find elements containing the landmark text
+            image_to_video_elements = await page.query_selector_all(f"span:has-text('{self.config.image_to_video_text}')")
+            
+            for element in image_to_video_elements:
+                try:
+                    # Navigate to the parent container (should be the first div)
+                    parent_container = await element.evaluate_handle("el => el.closest('.sc-jxKUFb') || el.parentElement.parentElement")
+                    
+                    # Find the second div that contains the buttons
+                    button_divs = await parent_container.query_selector_all("div")
+                    
+                    if len(button_divs) >= 2:
+                        # The second div should contain the 5 button spans
+                        button_container = button_divs[1]
+                        button_spans = await button_container.query_selector_all("span[role='img']")
+                        
+                        logger.debug(f"Found {len(button_spans)} button spans in container")
+                        
+                        if len(button_spans) >= 3:
+                            # The download button is the 3rd span (index 2)
+                            download_button = button_spans[2]
+                            await download_button.click()
+                            logger.info("Successfully clicked download button using 'Image to video' text landmark strategy")
+                            return True
+                except Exception as inner_e:
+                    logger.debug(f"Failed to process 'Image to video' element: {inner_e}")
+                    continue
+                    
+        except Exception as e:
+            logger.debug(f"Text-based landmark strategy failed: {e}")
+        
+        # Strategy 2: Try button panel approach (fallback)
+        try:
+            logger.debug(f"Strategy 2: Looking for button panel with selector {self.config.button_panel_selector}")
             button_panels = await page.query_selector_all(self.config.button_panel_selector)
             
             for panel in button_panels:
@@ -360,11 +429,11 @@ class GenerationDownloadManager:
                     logger.info("Successfully clicked download button using panel strategy")
                     return True
         except Exception as e:
-            logger.debug(f"Strategy 1 failed: {e}")
+            logger.debug(f"Strategy 2 failed: {e}")
         
-        # Strategy 2: Try to find by SVG icon reference
+        # Strategy 3: Try to find by SVG icon reference
         try:
-            logger.debug(f"Strategy 2: Looking for SVG with href {self.config.download_icon_href}")
+            logger.debug(f"Strategy 3: Looking for SVG with href {self.config.download_icon_href}")
             svg_selector = f"svg use[href='{self.config.download_icon_href}']"
             svg_element = await page.wait_for_selector(svg_selector, timeout=5000)
             if svg_element:
@@ -374,16 +443,16 @@ class GenerationDownloadManager:
                 logger.info("Successfully clicked download button using SVG icon strategy")
                 return True
         except Exception as e:
-            logger.debug(f"Strategy 2 failed: {e}")
+            logger.debug(f"Strategy 3 failed: {e}")
         
-        # Strategy 3: Legacy selector (fallback)
+        # Strategy 4: Legacy selector (fallback)
         try:
-            logger.debug(f"Strategy 3: Using legacy selector {self.config.download_button_selector}")
+            logger.debug(f"Strategy 4: Using legacy selector {self.config.download_button_selector}")
             await page.click(self.config.download_button_selector, timeout=5000)
             logger.info("Successfully clicked download button using legacy selector")
             return True
         except Exception as e:
-            logger.debug(f"Strategy 3 failed: {e}")
+            logger.debug(f"Strategy 4 failed: {e}")
         
         logger.error("All strategies failed to find download button")
         return False
