@@ -76,6 +76,7 @@ A powerful, lightweight web automation framework with both GUI and CLI interface
 - **Enhanced Naming**: `vid_2025-08-24-14-35-22_project.mp4` instead of `#000000001.mp4`
 - **Text-Based Detection**: Robust element finding using text landmarks
 - **Full Prompt Extraction**: Complete prompt text without truncation
+- **🚫 Popup Suppression**: Automatic download popup elimination for uninterrupted automation
 
 ## 🚀 Installation
 

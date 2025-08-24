@@ -69,6 +69,7 @@ claude-flow.ps1
 .mcp.json
 claude-flow.config.json
 CLAUDE.md
+/!_CF_tasks
 
 # Claude Flow directories
 .swarm/

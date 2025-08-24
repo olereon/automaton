@@ -1,7 +1,7 @@
 {
     "downloads_folder": "/home/olereon/workspace/github.com/olereon/automaton/downloads/enhanced_vids",
     "logs_folder": "/home/olereon/workspace/github.com/olereon/automaton/logs",
-    "max_downloads": 10,
+    "max_downloads": 16,
     
     "_comment_descriptive_naming": "Enhanced naming configuration",
     "use_descriptive_naming": true,
@@ -10,14 +10,14 @@
     "date_format": "%Y-%m-%d-%H-%M-%S",
     
     "_comment_scrolling": "Infinite scroll configuration", 
-    "scroll_batch_size": 5,
+    "scroll_batch_size": 10,
     "scroll_amount": 500,
     "scroll_wait_time": 2000,
     
     "_comment_selectors": "Page element selectors",
     "thumbnail_container_selector": ".thumsInner",
     "thumbnail_selector": ".thumbnail-item, .thumsItem",
-    "completed_task_selector": "div[id$='__8']",
+    "completed_task_selector": "div[id$='__9']",
     
     "_comment_text_landmarks": "Text-based element finding",
     "image_to_video_text": "Image to video",

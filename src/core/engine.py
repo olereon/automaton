@@ -360,13 +360,59 @@ class WebAutomationEngine(GenerationDownloadHandlers):
         """Create a new browser instance"""
         logger.info("Creating new browser instance")
         playwright = await async_playwright().start()
+        
+        # Chrome/Chromium launch arguments to disable download notifications and pop-ups
+        launch_args = [
+            "--disable-dev-shm-usage",
+            "--disable-extensions",
+            "--disable-download-notification",  # Disable download notification popup
+            "--disable-notifications",          # Disable all notifications
+            "--disable-popup-blocking",         # Allow downloads without popup interference
+            "--disable-web-security",           # Reduce security restrictions for automation
+            "--disable-features=VizDisplayCompositor",  # Reduce visual interference
+            "--disable-background-timer-throttling",    # Prevent timing issues
+            "--disable-backgrounding-occluded-windows", # Keep windows active
+            "--disable-renderer-backgrounding"          # Keep renderer active
+        ]
+        
         self.browser = await playwright.chromium.launch(
-            headless=self.config.headless, args=["--disable-dev-shm-usage", "--disable-extensions"]
+            headless=self.config.headless, 
+            args=launch_args
         )
+        
+        # Browser context with download preferences
         self.context = await self.browser.new_context(
-            viewport=self.config.viewport, accept_downloads=True
+            viewport=self.config.viewport, 
+            accept_downloads=True,
+            # Set download behavior preferences
+            extra_http_headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            }
         )
         self.page = await self.context.new_page()
+        
+        # Configure Chrome download preferences to hide download UI
+        await self.page.add_init_script("""
+            // Override download notification and UI settings
+            Object.defineProperty(window.navigator, 'serviceWorker', {
+                value: undefined,
+                writable: false
+            });
+            
+            // Disable download progress notifications
+            if (window.chrome && window.chrome.downloads) {
+                window.chrome.downloads = undefined;
+            }
+            
+            // Suppress download-related dialogs and notifications
+            const originalAlert = window.alert;
+            const originalConfirm = window.confirm;
+            const originalPrompt = window.prompt;
+            
+            window.alert = function() { return true; };
+            window.confirm = function() { return true; };
+            window.prompt = function() { return ''; };
+        """)
 
     async def _reset_page_state(self):
         """Reset page state for reused pages to ensure clean automation"""

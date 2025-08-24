@@ -27,7 +27,7 @@
     {
       "type": "start_generation_downloads",
       "value": {
-        "max_downloads": 4,
+        "max_downloads": 16,
         "downloads_folder": "/home/olereon/workspace/github.com/olereon/automaton/downloads/vids",
         "logs_folder": "/home/olereon/workspace/github.com/olereon/automaton/logs",
         "download_timeout": 12000,

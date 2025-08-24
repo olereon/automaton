@@ -78,7 +78,7 @@ The Generation Download Automation system provides comprehensive functionality f
       "value": {
         "max_downloads": 50,
         "downloads_folder": "/path/to/downloads",
-        "completed_task_selector": "div[id$='__8']"
+        "completed_task_selector": "div[id$='__9']"
       },
       "timeout": 300000,
       "description": "Start automated downloads"
@@ -320,18 +320,45 @@ results = asyncio.run(run_downloads())
 }
 ```
 
-## Performance Optimization
+## Browser Configuration & Performance
+
+### 🚫 **Download Popup Suppression** (NEW)
+The system automatically configures the browser to eliminate download popup interference:
+
+**Chromium Launch Arguments:**
+```bash
+--disable-download-notification    # Disable download notification popup
+--disable-notifications           # Disable all notifications  
+--disable-popup-blocking          # Allow downloads without popup interference
+--disable-web-security            # Reduce security restrictions for automation
+--disable-features=VizDisplayCompositor  # Reduce visual interference
+```
+
+**JavaScript Overrides:**
+- Suppresses `alert()`, `confirm()`, and `prompt()` dialogs
+- Disables download progress notifications
+- Prevents service worker interference
+
+**Benefits:**
+✅ **Uninterrupted automation** - No popup blocking download process  
+✅ **Clean browser UI** - Downloads proceed silently in background  
+✅ **Reliable execution** - No manual intervention required for downloads  
+✅ **Professional experience** - Browser remains focused on automation task
+
+### Performance Optimization
 
 ### Best Practices
 - Use reasonable `max_downloads` limits
 - Set appropriate timeouts for your network speed
 - Monitor disk space in download folder
 - Use SSD storage for better file I/O performance
+- Browser popup suppression ensures smooth download flow
 
 ### Resource Management
 - Downloads are processed sequentially to avoid overwhelming the server
 - File verification happens immediately after download
 - Memory usage is optimized for long-running operations
+- Download popups are automatically suppressed to prevent interruptions
 
 ## Security Considerations
 
@@ -347,12 +374,35 @@ results = asyncio.run(run_downloads())
 
 ## Troubleshooting
 
+### Download Popup Issues (NEW)
+**Problem:** Downloads interrupted by browser popups or notifications
+**Solution:** Popup suppression is enabled automatically. If issues persist:
+1. Verify browser launches with `--disable-download-notification` argument
+2. Check JavaScript console for override script execution
+3. Restart browser if popups still appear
+4. Use headless mode to eliminate all visual popups
+
+**Problem:** Downloads prompt for location or confirmation
+**Solution:** The system configures `accept_downloads=True` and suppresses dialogs:
+1. Ensure download folder has write permissions
+2. Check that browser context accepts downloads automatically
+3. Verify JavaScript dialog suppression is active
+
 ### Download Failures
 1. Check network connectivity
 2. Verify login credentials
 3. Update selectors if page structure changed
 4. Increase timeout values
 5. Check download folder permissions
+6. **NEW:** Verify popup suppression is working properly
+
+### Browser Configuration Issues (NEW)
+**Problem:** Browser not launching with correct arguments
+**Solution:** Check browser launch configuration:
+1. Verify Chromium/Chrome installation
+2. Check Playwright browser installation: `playwright install chromium`
+3. Restart automation if browser settings not applied
+4. Review console logs for launch argument errors
 
 ### Log Issues
 1. Verify logs folder exists and is writable
@@ -364,6 +414,7 @@ results = asyncio.run(run_downloads())
 2. Increase timeout values
 3. Check system resources (CPU, memory, disk)
 4. Monitor network bandwidth usage
+5. **NEW:** Popup suppression reduces browser overhead
 
 ## API Reference
 
