@@ -4,31 +4,53 @@
 
 The Generation Download Automation system provides comprehensive functionality for automatically downloading generated content (videos, images, etc.) from web platforms with metadata tracking and file organization.
 
-## Features
+## 🚀 New Features
+
+### 🔄 **Infinite Scroll Support** ([Guide](INFINITE_SCROLL_GUIDE.md))
+- Automatically scrolls through thumbnail galleries to access entire generation history
+- Configurable batch sizes and scroll detection
+- Handles dynamic content loading
+- Processes unlimited generations beyond initial view
+
+### 🏷️ **Enhanced Descriptive Naming** ([Guide](ENHANCED_NAMING_GUIDE.md))
+- Replace sequential numbers with descriptive filenames
+- Format: `{media_type}_{creation_date}_{unique_id}.{extension}`
+- Automatic media type detection (vid/img/aud)
+- Flexible date formatting and project identifiers
+
+### 🎯 **Text-Based Element Detection** ([Guide](ENHANCED_GENERATION_DOWNLOAD_GUIDE.md))
+- Robust element finding using text landmarks
+- Handles dynamic CSS classes and changing selectors
+- Multiple fallback strategies for reliability
+- Full prompt text extraction without truncation
+
+## Core Features
 
 ### ✅ **Automated Download Process**
 - Navigate to completed generation tasks
-- Iterate through thumbnail galleries
-- Extract metadata (date, prompt) from each generation
+- Iterate through thumbnail galleries with infinite scroll
+- Extract metadata (date, full prompt) from each generation
 - Download without watermarks
-- Sequential file naming with ID tracking
+- Enhanced descriptive or sequential file naming
 
 ### ✅ **Intelligent File Management**
-- Automatic file renaming with sequential IDs (#000000001, #000000002, etc.)
+- Descriptive naming: `vid_2025-08-24-14-35-22_project.mp4`
+- Legacy sequential IDs: `#000000001.mp4` (optional)
 - Download verification and integrity checking
-- Organized folder structure
-- Duplicate handling
+- Organized folder structure with project identifiers
+- Duplicate handling with automatic numbering
 
 ### ✅ **Comprehensive Logging**
 - Structured text logs with generation metadata
-- Track generation date, prompt, file ID, and download timestamp
-- Progress monitoring and status tracking
+- Track generation date, full prompt text, file ID, and download timestamp
+- Progress monitoring with scroll statistics
+- Status tracking across sessions
 
 ### ✅ **Error Handling & Recovery**
 - Retry mechanisms for failed downloads
-- Graceful error handling
+- Graceful error handling with scroll failures
 - Stop conditions and user control
-- Resume capability
+- Resume capability with state preservation
 
 ## Quick Start
 
@@ -65,25 +87,64 @@ The Generation Download Automation system provides comprehensive functionality f
 }
 ```
 
-### 2. Run via GUI
+### 2. Enhanced Configuration with New Features
+
+```json
+{
+  "name": "Enhanced Generation Download",
+  "actions": [{
+    "type": "start_generation_downloads",
+    "value": {
+      "max_downloads": 100,
+      "downloads_folder": "/path/to/downloads",
+      
+      "_comment": "Enhanced Naming Configuration",
+      "use_descriptive_naming": true,
+      "unique_id": "project_alpha",
+      "naming_format": "{media_type}_{creation_date}_{unique_id}",
+      "date_format": "%Y-%m-%d-%H-%M-%S",
+      
+      "_comment": "Infinite Scroll Configuration",
+      "scroll_batch_size": 10,
+      "scroll_amount": 600,
+      "scroll_wait_time": 2000,
+      
+      "_comment": "Text-Based Element Finding",
+      "image_to_video_text": "Image to video",
+      "creation_time_text": "Creation Time",
+      "download_no_watermark_text": "Download without Watermark"
+    }
+  }]
+}
+```
+
+### 3. Run via GUI
 1. Open the Automaton GUI
 2. Create a new automation configuration
 3. Add "Start Generation Downloads" action
-4. Configure download settings
-5. Run the automation
+4. Configure download settings with enhanced naming
+5. Enable infinite scroll for large galleries
+6. Run the automation
 
-### 3. Run via CLI
+### 4. Run via CLI
 ```bash
+# Basic demo
 python3.11 examples/generation_download_demo.py
+
+# Test enhanced naming
+python3.11 examples/test_enhanced_naming.py
+
+# Test infinite scroll
+python3.11 examples/test_infinite_scroll.py
 ```
 
 ## Action Types
 
 ### START_GENERATION_DOWNLOADS
 
-Starts the automated generation download process.
+Starts the automated generation download process with enhanced features.
 
-**Configuration Options:**
+**Core Configuration:**
 - `max_downloads`: Maximum number of files to download (default: 50)
 - `downloads_folder`: Target folder for downloaded files
 - `logs_folder`: Folder for log files (default: `/logs`)
@@ -91,10 +152,22 @@ Starts the automated generation download process.
 - `verification_timeout`: Timeout for file verification (default: 30000ms)
 - `retry_attempts`: Number of retry attempts for failed downloads (default: 3)
 
+**Enhanced Naming Options:**
+- `use_descriptive_naming`: Enable descriptive filenames (default: true)
+- `unique_id`: Project/batch identifier (default: "gen")
+- `naming_format`: Filename template (default: `"{media_type}_{creation_date}_{unique_id}"`)
+- `date_format`: Date formatting (default: `"%Y-%m-%d-%H-%M-%S"`)
+
+**Infinite Scroll Options:**
+- `scroll_batch_size`: Downloads before scrolling (default: 10)
+- `scroll_amount`: Pixels to scroll (default: 600)
+- `scroll_wait_time`: Wait after scroll in ms (default: 2000)
+- `max_scroll_attempts`: Max scroll retries (default: 5)
+
 **Selectors (customize for your platform):**
-- `completed_task_selector`: Selector for completed tasks (default: `"div[id$='__8']"`)
-- `thumbnail_selector`: Selector for thumbnail elements (default: `".thumbnail-item"`)
-- `download_button_selector`: Selector for download button
+- `thumbnail_container_selector`: Container for thumbnails (default: `".thumsInner"`)
+- `thumbnail_selector`: Individual thumbnails (default: `".thumbnail-item, .thumsItem"`)
+- `completed_task_selector`: Completed tasks section (default: `"div[id$='__8']"`)
 - `download_no_watermark_selector`: Selector for "no watermark" option
 - `generation_date_selector`: Selector for generation date element
 - `prompt_selector`: Selector for prompt text element

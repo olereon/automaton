@@ -64,12 +64,18 @@ A powerful, lightweight web automation framework with both GUI and CLI interface
 | `SKIP_IF` | Conditional skip | Skip on condition |
 | `STOP_AUTOMATION` | Terminate | Emergency stop |
 
-### Generation Downloads
+### Generation Downloads (Enhanced)
 | Action | Description | Features |
 |--------|-------------|----------|
-| `START_GENERATION_DOWNLOADS` | Begin downloads | Sequential naming |
+| `START_GENERATION_DOWNLOADS` | Begin downloads | **NEW**: Descriptive naming, Infinite scroll |
 | `STOP_GENERATION_DOWNLOADS` | Stop downloads | Graceful stop |
 | `CHECK_GENERATION_STATUS` | Check progress | Status monitoring |
+
+#### 🆕 New Download Features
+- **Infinite Scroll**: Automatically scrolls to download entire galleries
+- **Enhanced Naming**: `vid_2025-08-24-14-35-22_project.mp4` instead of `#000000001.mp4`
+- **Text-Based Detection**: Robust element finding using text landmarks
+- **Full Prompt Extraction**: Complete prompt text without truncation
 
 ## 🚀 Installation
 
@@ -211,10 +217,10 @@ sequence = (builder
 )
 ```
 
-### Example 4: Generation Downloads
+### Example 4: Generation Downloads (Enhanced)
 ```json
 {
-  "name": "Download Generations",
+  "name": "Download Generations with Enhanced Features",
   "url": "https://platform.com",
   "actions": [
     {
@@ -227,13 +233,27 @@ sequence = (builder
     {
       "type": "start_generation_downloads",
       "value": {
-        "max_downloads": 50,
-        "downloads_folder": "/path/to/downloads"
+        "max_downloads": 100,
+        "downloads_folder": "/path/to/downloads",
+        
+        "_comment": "Enhanced Naming (NEW)",
+        "use_descriptive_naming": true,
+        "unique_id": "project_alpha",
+        "naming_format": "{media_type}_{creation_date}_{unique_id}",
+        
+        "_comment": "Infinite Scroll (NEW)",
+        "scroll_batch_size": 10,
+        "scroll_amount": 600,
+        
+        "_comment": "Text-Based Detection (NEW)",
+        "image_to_video_text": "Image to video",
+        "download_no_watermark_text": "Download without Watermark"
       }
     }
   ]
 }
 ```
+**Output**: Files named like `vid_2025-08-24-14-35-22_project_alpha.mp4`
 
 ## 🧪 Testing
 
