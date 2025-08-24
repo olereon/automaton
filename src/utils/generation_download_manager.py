@@ -285,8 +285,9 @@ class GenerationDownloadManager:
                             date_span = spans[1]
                             date_text = await date_span.text_content()
                             if date_text and date_text.strip() != self.config.creation_time_text:
-                                metadata['generation_date'] = date_text.strip()
-                                logger.debug(f"Extracted date via 'Creation Time' landmark: {metadata['generation_date']}")
+                                extracted_date = date_text.strip()
+                                metadata['generation_date'] = extracted_date
+                                logger.debug(f"Extracted date via 'Creation Time' landmark: {extracted_date}")
                                 date_found = True
                                 break
                     except Exception as inner_e:
@@ -329,10 +330,63 @@ class GenerationDownloadManager:
                             prompt_spans = await container.query_selector_all("span[aria-describedby]")
                             
                             for span in prompt_spans:
-                                text = await span.text_content()
-                                if text and len(text.strip()) > 20:  # Substantial content
-                                    metadata['prompt'] = text.strip()
-                                    logger.debug(f"Extracted prompt via '...' pattern: {metadata['prompt'][:100]}...")
+                                # Try multiple methods to extract text
+                                text_content = await span.text_content()
+                                inner_text = None
+                                inner_html = None
+                                
+                                try:
+                                    inner_text = await span.evaluate("el => el.innerText")
+                                    logger.debug(f"innerText length: {len(inner_text) if inner_text else 0} chars")
+                                except Exception as e:
+                                    logger.debug(f"innerText failed: {e}")
+                                
+                                try:
+                                    inner_html = await span.inner_html()
+                                    logger.debug(f"innerHTML length: {len(inner_html)} chars")
+                                    
+                                    # Try to extract text from HTML by removing tags
+                                    import re
+                                    html_text = re.sub(r'<[^>]+>', '', inner_html)
+                                    logger.debug(f"HTML text extraction length: {len(html_text)} chars")
+                                    if html_text:
+                                        logger.debug(f"HTML text sample: {html_text[:200]}...")
+                                        
+                                except Exception as e:
+                                    logger.debug(f"innerHTML failed: {e}")
+                                
+                                # Compare all extraction methods
+                                logger.debug(f"text_content length: {len(text_content) if text_content else 0} chars")
+                                if text_content:
+                                    logger.debug(f"text_content sample: {text_content[:200]}...")
+                                
+                                # Choose the longest/best extraction method
+                                candidates = [
+                                    ('text_content', text_content),
+                                    ('inner_text', inner_text),
+                                    ('html_text', html_text if 'html_text' in locals() else None)
+                                ]
+                                
+                                best_method = None
+                                best_text = None
+                                max_length = 0
+                                
+                                for method_name, text in candidates:
+                                    if text and len(text.strip()) > max_length:
+                                        max_length = len(text.strip())
+                                        best_method = method_name
+                                        best_text = text.strip()
+                                
+                                if best_text and len(best_text) > 20:  # Substantial content
+                                    full_prompt = best_text
+                                    metadata['prompt'] = full_prompt
+                                    logger.debug(f"Extracted prompt via '...' pattern using {best_method}: Length {len(full_prompt)} chars")
+                                    logger.debug(f"Prompt start: {full_prompt[:100]}...")
+                                    
+                                    # Log the end of the prompt too
+                                    if len(full_prompt) > 100:
+                                        logger.debug(f"Prompt ending: ...{full_prompt[-50:]}")
+                                    
                                     prompt_found = True
                                     break
                             
@@ -343,25 +397,148 @@ class GenerationDownloadManager:
                         continue
                 
                 if not prompt_found:
-                    # Fallback to selector-based approach
-                    logger.debug("Trying selector-based prompt extraction")
-                    prompt_element = await page.wait_for_selector(
-                        self.config.prompt_selector, 
-                        timeout=3000
-                    )
-                    if prompt_element:
-                        prompt_text = await prompt_element.text_content()
-                        metadata['prompt'] = prompt_text.strip() if prompt_text else "Unknown Prompt"
-                    else:
-                        # Last resort: any span with aria-describedby
-                        prompt_elements = await page.query_selector_all("span[aria-describedby]")
-                        for element in prompt_elements:
-                            text = await element.text_content()
-                            if text and len(text.strip()) > 20:
-                                metadata['prompt'] = text.strip()
+                    # Try alternative approach: Look for the full prompt in title attribute or data attributes
+                    logger.debug("Trying alternative prompt extraction methods")
+                    
+                    # Method 1: Check for title attributes that might contain the full text
+                    try:
+                        title_elements = await page.query_selector_all("[title*='camera'], [title*='giant'], [title*='frost']")
+                        for element in title_elements:
+                            title_text = await element.get_attribute("title")
+                            if title_text and len(title_text.strip()) > 102:  # Longer than current truncated version
+                                full_prompt = title_text.strip()
+                                metadata['prompt'] = full_prompt
+                                logger.debug(f"Extracted full prompt from title attribute: Length {len(full_prompt)} chars")
+                                prompt_found = True
                                 break
+                    except Exception as e:
+                        logger.debug(f"Title attribute search failed: {e}")
+                    
+                    # Method 2: Look for aria-label or data attributes
+                    if not prompt_found:
+                        try:
+                            aria_elements = await page.query_selector_all("[aria-label*='camera'], [aria-label*='giant']")
+                            for element in aria_elements:
+                                aria_text = await element.get_attribute("aria-label")
+                                if aria_text and len(aria_text.strip()) > 102:
+                                    full_prompt = aria_text.strip()
+                                    metadata['prompt'] = full_prompt
+                                    logger.debug(f"Extracted full prompt from aria-label: Length {len(full_prompt)} chars")
+                                    prompt_found = True
+                                    break
+                        except Exception as e:
+                            logger.debug(f"Aria-label search failed: {e}")
+                    
+                    # Method 3: Look for the parent element that might contain the full text
+                    if not prompt_found:
+                        try:
+                            logger.debug("Looking for parent elements with full prompt text")
+                            # Find spans with aria-describedby and check their parents
+                            spans_with_aria = await page.query_selector_all("span[aria-describedby]")
+                            for span in spans_with_aria:
+                                # Check various parent levels
+                                for level in range(1, 4):  # Check 3 levels up
+                                    try:
+                                        parent_js = "el => " + "el.parentElement." * level + "textContent"
+                                        parent_text = await span.evaluate(parent_js)
+                                        if parent_text and len(parent_text.strip()) > 102:
+                                            full_prompt = parent_text.strip()
+                                            metadata['prompt'] = full_prompt
+                                            logger.debug(f"Extracted full prompt from parent level {level}: Length {len(full_prompt)} chars")
+                                            prompt_found = True
+                                            break
+                                    except:
+                                        continue
+                                if prompt_found:
+                                    break
+                        except Exception as e:
+                            logger.debug(f"Parent element search failed: {e}")
+                    
+                    # Method 4: Check for CSS overflow/truncation and try to get full text
+                    if not prompt_found:
+                        try:
+                            logger.debug("Checking for CSS truncation and attempting to get full text")
+                            spans_with_aria = await page.query_selector_all("span[aria-describedby]")
+                            for span in spans_with_aria:
+                                # Check computed styles for truncation indicators
+                                computed_style = await span.evaluate("""el => {
+                                    const style = window.getComputedStyle(el);
+                                    return {
+                                        textOverflow: style.textOverflow,
+                                        overflow: style.overflow,
+                                        whiteSpace: style.whiteSpace,
+                                        maxWidth: style.maxWidth,
+                                        width: style.width
+                                    };
+                                }""")
+                                logger.debug(f"Element computed style: {computed_style}")
+                                
+                                # Try to temporarily remove CSS truncation
+                                full_text = await span.evaluate("""el => {
+                                    // Store original styles
+                                    const originalStyles = {
+                                        textOverflow: el.style.textOverflow,
+                                        overflow: el.style.overflow,
+                                        whiteSpace: el.style.whiteSpace,
+                                        maxWidth: el.style.maxWidth,
+                                        width: el.style.width
+                                    };
+                                    
+                                    // Temporarily remove truncation
+                                    el.style.textOverflow = 'clip';
+                                    el.style.overflow = 'visible';
+                                    el.style.whiteSpace = 'normal';
+                                    el.style.maxWidth = 'none';
+                                    el.style.width = 'auto';
+                                    
+                                    // Get the text content
+                                    const fullText = el.textContent || el.innerText;
+                                    
+                                    // Restore original styles
+                                    Object.keys(originalStyles).forEach(prop => {
+                                        if (originalStyles[prop]) {
+                                            el.style[prop] = originalStyles[prop];
+                                        } else {
+                                            el.style.removeProperty(prop.replace(/([A-Z])/g, '-$1').toLowerCase());
+                                        }
+                                    });
+                                    
+                                    return fullText;
+                                }""")
+                                
+                                if full_text and len(full_text.strip()) > 102:
+                                    full_prompt = full_text.strip()
+                                    metadata['prompt'] = full_prompt
+                                    logger.debug(f"Extracted full prompt by removing CSS truncation: Length {len(full_prompt)} chars")
+                                    prompt_found = True
+                                    break
+                        except Exception as e:
+                            logger.debug(f"CSS truncation removal failed: {e}")
+                    
+                    # Fallback to selector-based approach
+                    if not prompt_found:
+                        logger.debug("Trying selector-based prompt extraction")
+                        prompt_element = await page.wait_for_selector(
+                            self.config.prompt_selector, 
+                            timeout=3000
+                        )
+                        if prompt_element:
+                            prompt_text = await prompt_element.text_content()
+                            full_prompt = prompt_text.strip() if prompt_text else "Unknown Prompt"
+                            metadata['prompt'] = full_prompt
+                            logger.debug(f"Extracted prompt via selector: {full_prompt[:100]}... (Length: {len(full_prompt)} chars)")
                         else:
-                            metadata['prompt'] = "Unknown Prompt"
+                            # Last resort: any span with aria-describedby
+                            prompt_elements = await page.query_selector_all("span[aria-describedby]")
+                            for element in prompt_elements:
+                                text = await element.text_content()
+                                if text and len(text.strip()) > 20:
+                                    full_prompt = text.strip()
+                                    metadata['prompt'] = full_prompt
+                                    logger.debug(f"Extracted prompt via fallback: {full_prompt[:100]}... (Length: {len(full_prompt)} chars)")
+                                    break
+                            else:
+                                metadata['prompt'] = "Unknown Prompt"
                             
             except Exception as e:
                 logger.warning(f"Prompt extraction failed: {e}")
