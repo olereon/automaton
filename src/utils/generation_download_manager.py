@@ -20,6 +20,130 @@ from .download_manager import DownloadManager, DownloadConfig
 logger = logging.getLogger(__name__)
 
 
+class EnhancedFileNamer:
+    """Handles enhanced file naming with descriptive conventions"""
+    
+    # Media type mappings based on file extensions
+    MEDIA_TYPE_MAP = {
+        # Video extensions
+        'mp4': 'vid', 'avi': 'vid', 'mov': 'vid', 'mkv': 'vid', 'webm': 'vid',
+        'wmv': 'vid', 'flv': 'vid', 'mpg': 'vid', 'mpeg': 'vid', 'm4v': 'vid',
+        
+        # Image extensions  
+        'jpg': 'img', 'jpeg': 'img', 'png': 'img', 'gif': 'img', 'bmp': 'img',
+        'tiff': 'img', 'tif': 'img', 'webp': 'img', 'svg': 'img', 'ico': 'img',
+        
+        # Audio extensions
+        'mp3': 'aud', 'wav': 'aud', 'flac': 'aud', 'aac': 'aud', 'ogg': 'aud',
+        'wma': 'aud', 'm4a': 'aud', 'opus': 'aud', 'aiff': 'aud'
+    }
+    
+    def __init__(self, config: 'GenerationDownloadConfig'):
+        self.config = config
+    
+    def get_media_type(self, file_extension: str) -> str:
+        """Determine media type from file extension"""
+        ext = file_extension.lower().lstrip('.')
+        return self.MEDIA_TYPE_MAP.get(ext, 'file')  # Default to 'file' for unknown types
+    
+    def parse_creation_date(self, date_string: str) -> str:
+        """Parse and format creation date for filename"""
+        try:
+            if not date_string or date_string == "Unknown Date":
+                # Use current timestamp as fallback
+                return datetime.now().strftime(self.config.date_format)
+            
+            # Try to parse common date formats from webpage
+            date_formats = [
+                "%d %b %Y %H:%M:%S",    # "24 Aug 2025 01:37:01"
+                "%Y-%m-%d %H:%M:%S",    # "2025-08-24 01:37:01" 
+                "%d/%m/%Y %H:%M:%S",    # "24/08/2025 01:37:01"
+                "%m/%d/%Y %H:%M:%S",    # "08/24/2025 01:37:01"
+                "%Y-%m-%d",             # "2025-08-24"
+                "%d %b %Y",             # "24 Aug 2025"
+            ]
+            
+            parsed_date = None
+            for fmt in date_formats:
+                try:
+                    parsed_date = datetime.strptime(date_string.strip(), fmt)
+                    break
+                except ValueError:
+                    continue
+            
+            if parsed_date:
+                return parsed_date.strftime(self.config.date_format)
+            else:
+                logger.warning(f"Could not parse date '{date_string}', using current time")
+                return datetime.now().strftime(self.config.date_format)
+                
+        except Exception as e:
+            logger.error(f"Error parsing creation date: {e}")
+            return datetime.now().strftime(self.config.date_format)
+    
+    def generate_filename(self, file_path: Path, creation_date: str = None, 
+                         sequence_number: int = None) -> str:
+        """Generate descriptive filename based on configuration"""
+        try:
+            # Get file extension
+            extension = file_path.suffix
+            
+            if not self.config.use_descriptive_naming:
+                # Fall back to sequential naming
+                if sequence_number is not None:
+                    return f"{self.config.id_format.format(sequence_number)}{extension}"
+                else:
+                    return file_path.name  # Keep original name
+            
+            # Generate descriptive filename
+            media_type = self.get_media_type(extension)
+            formatted_date = self.parse_creation_date(creation_date)
+            
+            # Build filename using template
+            filename_base = self.config.naming_format.format(
+                media_type=media_type,
+                creation_date=formatted_date,
+                unique_id=self.config.unique_id
+            )
+            
+            # Add extension
+            new_filename = f"{filename_base}{extension}"
+            
+            # Sanitize filename for filesystem compatibility
+            new_filename = self.sanitize_filename(new_filename)
+            
+            logger.debug(f"Generated descriptive filename: {new_filename}")
+            return new_filename
+            
+        except Exception as e:
+            logger.error(f"Error generating filename: {e}")
+            # Fallback to original or sequential naming
+            if sequence_number is not None:
+                return f"{self.config.id_format.format(sequence_number)}{extension}"
+            else:
+                return file_path.name
+    
+    def sanitize_filename(self, filename: str) -> str:
+        """Sanitize filename for cross-platform compatibility"""
+        # Remove or replace invalid characters
+        invalid_chars = '<>:"/\\|?*'
+        sanitized = filename
+        
+        for char in invalid_chars:
+            sanitized = sanitized.replace(char, '_')
+        
+        # Replace spaces with underscores (optional)
+        sanitized = sanitized.replace(' ', '_')
+        
+        # Limit filename length (most filesystems support 255 chars)
+        if len(sanitized) > 200:  # Leave room for extension
+            name_part = sanitized.rsplit('.', 1)[0][:190]
+            ext_part = sanitized.rsplit('.', 1)[1] if '.' in sanitized else ''
+            sanitized = f"{name_part}.{ext_part}" if ext_part else name_part
+        
+        return sanitized
+
+
 @dataclass
 class GenerationMetadata:
     """Metadata for a generation download"""
@@ -79,7 +203,13 @@ class GenerationDownloadConfig:
     # File management
     log_filename: str = "generation_downloads.txt"
     starting_file_id: int = 1
-    id_format: str = "#{:09d}"  # #000000001 format
+    id_format: str = "#{:09d}"  # #000000001 format (legacy)
+    
+    # Enhanced naming configuration
+    use_descriptive_naming: bool = True  # Enable new naming convention
+    unique_id: str = "gen"  # User-defined unique identifier
+    naming_format: str = "{media_type}_{creation_date}_{unique_id}"  # Naming template
+    date_format: str = "%Y-%m-%d-%H-%M-%S"  # Date format for filename
 
 
 class GenerationDownloadLogger:
@@ -161,6 +291,7 @@ class GenerationFileManager:
     def __init__(self, config: GenerationDownloadConfig):
         self.config = config
         self.downloads_path = Path(config.downloads_folder)
+        self.file_namer = EnhancedFileNamer(config)
         self.ensure_downloads_directory()
         
     def ensure_downloads_directory(self):
@@ -187,13 +318,38 @@ class GenerationFileManager:
         logger.warning(f"No new download detected within {timeout} seconds")
         return None
     
-    def rename_file(self, file_path: Path, new_id: str) -> Optional[Path]:
-        """Rename downloaded file with the new ID"""
+    def rename_file(self, file_path: Path, new_id: str = None, creation_date: str = None) -> Optional[Path]:
+        """Rename downloaded file with enhanced naming or legacy ID"""
         try:
-            # Extract file extension
-            extension = file_path.suffix
-            new_filename = f"{new_id}{extension}"
+            if self.config.use_descriptive_naming and creation_date:
+                # Use enhanced descriptive naming
+                new_filename = self.file_namer.generate_filename(
+                    file_path=file_path,
+                    creation_date=creation_date
+                )
+            elif new_id:
+                # Use legacy sequential naming
+                extension = file_path.suffix
+                new_filename = f"{new_id}{extension}"
+            else:
+                # Keep original filename if no naming method specified
+                logger.warning("No naming method specified, keeping original filename")
+                return file_path
+            
             new_path = file_path.parent / new_filename
+            
+            # Check if file already exists and create unique name if needed
+            counter = 1
+            original_new_path = new_path
+            while new_path.exists():
+                name_part = original_new_path.stem
+                extension_part = original_new_path.suffix
+                new_path = original_new_path.parent / f"{name_part}_{counter}{extension_part}"
+                counter += 1
+                
+                if counter > 999:  # Safety limit
+                    logger.error(f"Could not create unique filename after 999 attempts")
+                    return None
             
             # Rename the file
             file_path.rename(new_path)
@@ -1099,8 +1255,13 @@ class GenerationDownloadManager:
                 logger.error(f"Downloaded file verification failed: {downloaded_file}")
                 return False
             
-            # Rename file with ID
-            renamed_file = self.file_manager.rename_file(downloaded_file, file_id)
+            # Rename file with enhanced naming
+            creation_date = metadata_dict.get('generation_date', 'Unknown Date')
+            renamed_file = self.file_manager.rename_file(
+                downloaded_file, 
+                new_id=file_id,  # Legacy fallback
+                creation_date=creation_date
+            )
             if not renamed_file:
                 logger.error(f"Failed to rename downloaded file")
                 return False
