@@ -42,8 +42,15 @@ class GenerationDownloadConfig:
     
     # Selectors for page elements
     completed_task_selector: str = "div[id$='__8']"  # 9th item (index 8)
-    thumbnail_container_selector: str = ".thumbnail-container"
+    thumbnail_container_selector: str = ".thumsInner"  # Main thumbnail container
     thumbnail_selector: str = ".thumbnail-item, .thumsItem"  # Multiple possible selectors
+    
+    # Scrolling configuration
+    scroll_batch_size: int = 10  # Number of downloads before scrolling
+    scroll_amount: int = 600  # Pixels to scroll each time
+    scroll_wait_time: int = 2000  # Wait time after scrolling (ms)
+    max_scroll_attempts: int = 5  # Max attempts to find new thumbnails
+    scroll_detection_threshold: int = 3  # Min new thumbnails to consider scroll successful
     
     # Button panel and icon-based selectors
     button_panel_selector: str = ".sc-eYHxxX.fmURBt"  # Static button panel selector
@@ -243,6 +250,12 @@ class GenerationDownloadManager:
         self.downloads_completed = 0
         self.should_stop = False
         
+        # Scrolling state
+        self.visible_thumbnails_cache = []  # Cache of currently visible thumbnails
+        self.total_thumbnails_seen = 0
+        self.current_scroll_position = 0
+        self.last_scroll_thumbnail_count = 0
+        
     def should_continue_downloading(self) -> bool:
         """Check if we should continue downloading"""
         if self.should_stop:
@@ -258,6 +271,161 @@ class GenerationDownloadManager:
         """Request to stop the download process"""
         self.should_stop = True
         logger.info("Stop requested for generation downloads")
+    
+    async def get_visible_thumbnail_identifiers(self, page) -> List[str]:
+        """Get unique identifiers for currently visible thumbnails"""
+        try:
+            # Get all currently visible thumbnail elements
+            thumbnail_elements = await page.query_selector_all(f"{self.config.thumbnail_container_selector} {self.config.thumbnail_selector}")
+            
+            identifiers = []
+            for element in thumbnail_elements:
+                try:
+                    # Try to get a unique identifier from the thumbnail
+                    # Method 1: Check for data attributes
+                    data_id = await element.get_attribute("data-spm-anchor-id")
+                    if data_id:
+                        identifiers.append(data_id)
+                        continue
+                    
+                    # Method 2: Get image src as unique identifier
+                    img_element = await element.query_selector("img")
+                    if img_element:
+                        img_src = await img_element.get_attribute("src")
+                        if img_src:
+                            # Extract unique part of the URL (the hash/ID part)
+                            if "/framecut/" in img_src:
+                                unique_id = img_src.split("/framecut/")[1].split("/")[0]
+                                identifiers.append(unique_id)
+                                continue
+                    
+                    # Method 3: Use element index as fallback
+                    element_index = len(identifiers)
+                    identifiers.append(f"thumb_{element_index}")
+                    
+                except Exception as e:
+                    logger.debug(f"Error getting thumbnail identifier: {e}")
+                    continue
+            
+            logger.debug(f"Found {len(identifiers)} visible thumbnails")
+            return identifiers
+            
+        except Exception as e:
+            logger.error(f"Error getting visible thumbnails: {e}")
+            return []
+    
+    async def scroll_thumbnail_gallery(self, page) -> bool:
+        """Scroll the thumbnail gallery to reveal more thumbnails"""
+        try:
+            logger.info("🔄 Scrolling thumbnail gallery to reveal more generations...")
+            
+            # Get current visible thumbnails before scrolling
+            before_scroll_ids = await self.get_visible_thumbnail_identifiers(page)
+            before_count = len(before_scroll_ids)
+            
+            logger.debug(f"Thumbnails before scroll: {before_count}")
+            
+            # Find the scrollable container
+            container_selectors = [
+                self.config.thumbnail_container_selector,
+                ".thumbnail-container",
+                ".gallery-container", 
+                ".scroll-container",
+                # Fallback to parent containers
+                f"{self.config.thumbnail_container_selector} .."
+            ]
+            
+            scrollable_container = None
+            for selector in container_selectors:
+                try:
+                    container = await page.wait_for_selector(selector, timeout=3000)
+                    if container:
+                        # Check if this element is scrollable
+                        is_scrollable = await container.evaluate("""el => {
+                            return el.scrollHeight > el.clientHeight || 
+                                   el.scrollWidth > el.clientWidth ||
+                                   getComputedStyle(el).overflowY === 'scroll' ||
+                                   getComputedStyle(el).overflowY === 'auto';
+                        }""")
+                        
+                        if is_scrollable:
+                            scrollable_container = container
+                            logger.debug(f"Found scrollable container: {selector}")
+                            break
+                except:
+                    continue
+            
+            if not scrollable_container:
+                logger.warning("Could not find scrollable container, trying page scroll")
+                # Fallback to page scrolling
+                await page.evaluate(f"window.scrollBy(0, {self.config.scroll_amount})")
+            else:
+                # Scroll the container
+                await scrollable_container.evaluate(f"el => el.scrollBy(0, {self.config.scroll_amount})")
+            
+            # Wait for new content to load
+            await page.wait_for_timeout(self.config.scroll_wait_time)
+            
+            # Check if new thumbnails appeared
+            after_scroll_ids = await self.get_visible_thumbnail_identifiers(page)
+            after_count = len(after_scroll_ids)
+            
+            # Find truly new thumbnails (not just moved into view)
+            new_thumbnails = [tid for tid in after_scroll_ids if tid not in before_scroll_ids]
+            new_count = len(new_thumbnails)
+            
+            logger.info(f"📊 Scroll result: {before_count} → {after_count} thumbnails ({new_count} new)")
+            
+            if new_count >= self.config.scroll_detection_threshold:
+                self.visible_thumbnails_cache = after_scroll_ids
+                self.current_scroll_position += self.config.scroll_amount
+                logger.info("✅ Successfully scrolled and found new thumbnails")
+                return True
+            else:
+                logger.warning(f"⚠️ Scroll did not reveal enough new thumbnails (found {new_count}, need {self.config.scroll_detection_threshold})")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Error scrolling thumbnail gallery: {e}")
+            return False
+    
+    async def ensure_sufficient_thumbnails(self, page, required_count: int = 1) -> bool:
+        """Ensure there are sufficient thumbnails visible for continued processing"""
+        try:
+            current_thumbnails = await self.get_visible_thumbnail_identifiers(page)
+            available_count = len(current_thumbnails)
+            
+            logger.debug(f"Current thumbnails available: {available_count}, required: {required_count}")
+            
+            if available_count >= required_count:
+                return True
+            
+            # Try to scroll to get more thumbnails
+            scroll_attempts = 0
+            while scroll_attempts < self.config.max_scroll_attempts and available_count < required_count:
+                scroll_attempts += 1
+                logger.info(f"🔄 Scroll attempt {scroll_attempts}/{self.config.max_scroll_attempts} to get more thumbnails")
+                
+                scroll_success = await self.scroll_thumbnail_gallery(page)
+                if not scroll_success:
+                    logger.warning(f"Scroll attempt {scroll_attempts} failed")
+                    await page.wait_for_timeout(1000)  # Brief wait before retry
+                    continue
+                
+                # Check if we now have enough thumbnails
+                current_thumbnails = await self.get_visible_thumbnail_identifiers(page)
+                available_count = len(current_thumbnails)
+                
+                if available_count >= required_count:
+                    logger.info(f"✅ Successfully obtained {available_count} thumbnails after {scroll_attempts} scroll attempts")
+                    return True
+            
+            logger.warning(f"⚠️ Could not obtain sufficient thumbnails after {scroll_attempts} attempts (have {available_count}, need {required_count})")
+            return available_count > 0  # Return true if we have any thumbnails at all
+            
+        except Exception as e:
+            logger.error(f"Error ensuring sufficient thumbnails: {e}")
+            return False
     
     async def extract_metadata_from_page(self, page) -> Optional[Dict[str, str]]:
         """Extract generation metadata from the current page using text-based landmarks"""
@@ -964,17 +1132,19 @@ class GenerationDownloadManager:
             return False
     
     async def run_download_automation(self, page) -> Dict[str, Any]:
-        """Run the complete generation download automation"""
+        """Run the complete generation download automation with intelligent scrolling"""
         results = {
             'success': False,
             'downloads_completed': 0,
             'errors': [],
+            'scrolls_performed': 0,
+            'total_thumbnails_processed': 0,
             'start_time': datetime.now().isoformat(),
             'end_time': None
         }
         
         try:
-            logger.info("Starting generation download automation")
+            logger.info("🚀 Starting generation download automation with infinite scroll support")
             
             # Navigate to completed tasks (9th item, index 8)
             try:
@@ -987,38 +1157,90 @@ class GenerationDownloadManager:
                 results['errors'].append(error_msg)
                 return results
             
-            # Wait for thumbnails to load
+            # Wait for initial thumbnails to load
             try:
                 await page.wait_for_selector(self.config.thumbnail_selector, timeout=15000)
-                logger.info("Thumbnails loaded successfully")
+                logger.info("Initial thumbnails loaded successfully")
             except Exception as e:
-                error_msg = f"Thumbnails did not load: {e}"
+                error_msg = f"Initial thumbnails did not load: {e}"
                 logger.error(error_msg)
                 results['errors'].append(error_msg)
                 return results
             
-            # Get total number of thumbnails
-            thumbnail_elements = await page.query_selector_all(self.config.thumbnail_selector)
-            total_thumbnails = len(thumbnail_elements)
-            logger.info(f"Found {total_thumbnails} thumbnails to process")
+            # Initialize thumbnail tracking
+            self.visible_thumbnails_cache = await self.get_visible_thumbnail_identifiers(page)
+            initial_thumbnail_count = len(self.visible_thumbnails_cache)
+            logger.info(f"📊 Initial batch: {initial_thumbnail_count} thumbnails visible")
             
-            # Process each thumbnail
+            # Main processing loop with intelligent scrolling
             thumbnail_index = 0
-            while self.should_continue_downloading() and thumbnail_index < total_thumbnails:
-                success = await self.download_single_generation(page, thumbnail_index)
+            consecutive_failures = 0
+            max_consecutive_failures = 5
+            
+            while self.should_continue_downloading():
+                # Check if we need to scroll to get more thumbnails
+                if thumbnail_index > 0 and thumbnail_index % self.config.scroll_batch_size == 0:
+                    logger.info(f"📥 Completed {thumbnail_index} downloads, checking for more thumbnails...")
+                    
+                    # Ensure we have sufficient thumbnails for continued processing
+                    if not await self.ensure_sufficient_thumbnails(page, required_count=3):
+                        logger.warning("⚠️ Could not load more thumbnails, checking if we've reached the end")
+                        
+                        # Try one more scroll to be sure we've reached the end
+                        final_scroll_success = await self.scroll_thumbnail_gallery(page)
+                        if final_scroll_success:
+                            results['scrolls_performed'] += 1
+                            logger.info("✅ Found more thumbnails after final scroll attempt")
+                            continue
+                        else:
+                            logger.info("🏁 Reached the end of available thumbnails")
+                            break
+                    
+                    results['scrolls_performed'] += 1
+                    logger.info(f"✅ Successfully scrolled (total scrolls: {results['scrolls_performed']})")
+                
+                # Get currently visible thumbnails
+                current_visible = await self.get_visible_thumbnail_identifiers(page)
+                if not current_visible:
+                    logger.warning("No thumbnails currently visible")
+                    consecutive_failures += 1
+                    if consecutive_failures >= max_consecutive_failures:
+                        logger.error("Too many consecutive failures, stopping automation")
+                        break
+                    await page.wait_for_timeout(2000)
+                    continue
+                
+                # Calculate the actual thumbnail index within the currently visible set
+                visible_index = thumbnail_index % len(current_visible)
+                
+                logger.info(f"🎯 Processing thumbnail {thumbnail_index + 1} (visible index: {visible_index + 1}/{len(current_visible)})")
+                
+                # Download the current thumbnail
+                success = await self.download_single_generation(page, visible_index)
                 
                 if success:
                     results['downloads_completed'] = self.downloads_completed
-                    logger.info(f"Progress: {self.downloads_completed}/{self.config.max_downloads}")
+                    consecutive_failures = 0  # Reset failure counter on success
+                    logger.info(f"✅ Progress: {self.downloads_completed}/{self.config.max_downloads} downloads completed")
                 else:
-                    error_msg = f"Failed to download thumbnail {thumbnail_index}"
+                    error_msg = f"Failed to download thumbnail at visible index {visible_index}"
                     logger.warning(error_msg)
                     results['errors'].append(error_msg)
+                    consecutive_failures += 1
+                    
+                    if consecutive_failures >= max_consecutive_failures:
+                        logger.error(f"❌ Too many consecutive failures ({consecutive_failures}), stopping automation")
+                        break
                 
                 thumbnail_index += 1
+                results['total_thumbnails_processed'] = thumbnail_index
                 
                 # Small delay between downloads
                 await page.wait_for_timeout(2000)
+                
+                # Log progress every 5 downloads
+                if thumbnail_index % 5 == 0:
+                    logger.info(f"📈 Batch progress: {thumbnail_index} thumbnails processed, {results['downloads_completed']} successful downloads")
             
             # Set final results
             results['success'] = True
@@ -1028,6 +1250,9 @@ class GenerationDownloadManager:
                 results['success'] = False
                 results['errors'].append("No downloads were completed successfully")
             
+            logger.info(f"🎉 Download automation completed successfully!")
+            logger.info(f"📊 Final stats: {results['downloads_completed']} downloads, {results['scrolls_performed']} scrolls, {results['total_thumbnails_processed']} thumbnails processed")
+            
         except Exception as e:
             error_msg = f"Critical error in download automation: {e}"
             logger.error(error_msg)
@@ -1036,7 +1261,7 @@ class GenerationDownloadManager:
         
         finally:
             results['end_time'] = datetime.now().isoformat()
-            logger.info(f"Download automation completed. Downloads: {results['downloads_completed']}")
+            logger.info(f"🏁 Download automation session ended. Total downloads: {results['downloads_completed']}")
         
         return results
     
@@ -1049,5 +1274,20 @@ class GenerationDownloadManager:
             'max_downloads': self.config.max_downloads,
             'log_file_path': str(self.logger.log_file_path),
             'downloads_folder': self.config.downloads_folder,
-            'total_logged_downloads': self.logger.get_download_count()
+            'total_logged_downloads': self.logger.get_download_count(),
+            
+            # Scrolling status
+            'scroll_config': {
+                'batch_size': self.config.scroll_batch_size,
+                'scroll_amount': self.config.scroll_amount,
+                'wait_time': self.config.scroll_wait_time,
+                'max_attempts': self.config.max_scroll_attempts,
+                'detection_threshold': self.config.scroll_detection_threshold
+            },
+            'scroll_state': {
+                'visible_thumbnails_cached': len(self.visible_thumbnails_cache),
+                'total_thumbnails_seen': self.total_thumbnails_seen,
+                'current_scroll_position': self.current_scroll_position,
+                'last_scroll_thumbnail_count': self.last_scroll_thumbnail_count
+            }
         }
