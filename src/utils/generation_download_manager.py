@@ -1056,6 +1056,78 @@ class GenerationDownloadManager:
         logger.error("All strategies failed to find 'Download without Watermark' option")
         return False
     
+    async def close_download_shelf(self, page) -> None:
+        """Attempt to close Chrome download shelf / Recent Downloads popup"""
+        try:
+            # Method 1: Keyboard shortcut to close download shelf
+            try:
+                await page.keyboard.press("Control+Shift+J")  # Toggle download shelf
+                await page.wait_for_timeout(100)
+                await page.keyboard.press("Control+Shift+J")  # Toggle again to close
+                logger.debug("Attempted to close download shelf with keyboard shortcut")
+            except:
+                pass
+            
+            # Method 2: Click outside the download area to dismiss
+            try:
+                await page.mouse.click(100, 100)  # Click in top left corner
+                logger.debug("Clicked outside download area to dismiss popup")
+            except:
+                pass
+            
+            # Method 3: Press Escape to close any popups
+            try:
+                await page.keyboard.press("Escape")
+                logger.debug("Pressed Escape to close popups")
+            except:
+                pass
+            
+            # Method 4: Try to find and close the download shelf UI element
+            try:
+                # Common selectors for download shelf close button
+                close_selectors = [
+                    "#download-shelf-close",
+                    "[aria-label='Close downloads']",
+                    ".download-shelf-close-button",
+                    "button[title='Close']",
+                    "[role='button'][aria-label*='Close']"
+                ]
+                
+                for selector in close_selectors:
+                    try:
+                        close_button = await page.query_selector(selector)
+                        if close_button:
+                            await close_button.click()
+                            logger.info(f"Closed download shelf using selector: {selector}")
+                            break
+                    except:
+                        continue
+            except:
+                pass
+                
+            # Method 5: Execute JavaScript to hide download-related elements
+            try:
+                await page.evaluate("""
+                    // Hide download shelf and related UI elements
+                    const downloadElements = document.querySelectorAll(
+                        '#download-shelf, .download-shelf, .downloads-bar, ' +
+                        '[role="alert"], .download-started-animation, ' +
+                        '.download-notification, .download-bubble'
+                    );
+                    downloadElements.forEach(el => {
+                        if (el) {
+                            el.style.display = 'none';
+                            el.style.visibility = 'hidden';
+                        }
+                    });
+                """)
+                logger.debug("Executed JavaScript to hide download UI elements")
+            except:
+                pass
+                
+        except Exception as e:
+            logger.debug(f"Error closing download shelf: {e}")
+    
     async def download_single_generation(self, page, thumbnail_index: int) -> bool:
         """Download a single generation and handle all associated tasks"""
         try:
@@ -1192,6 +1264,9 @@ class GenerationDownloadManager:
             # Wait a bit more for download to start
             await page.wait_for_timeout(3000)
             
+            # Try to close Chrome download shelf if it appears
+            await self.close_download_shelf(page)
+            
             # Handle Playwright download if detected
             downloaded_file = None
             if download_promise:
@@ -1283,6 +1358,10 @@ class GenerationDownloadManager:
             if self.logger.log_download(metadata):
                 self.downloads_completed += 1
                 logger.info(f"Successfully completed download {self.downloads_completed}: {file_id}")
+                
+                # Close download shelf again after successful download
+                await self.close_download_shelf(page)
+                
                 return True
             else:
                 logger.error(f"Failed to log download for {file_id}")

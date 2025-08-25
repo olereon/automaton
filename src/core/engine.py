@@ -370,14 +370,29 @@ class WebAutomationEngine(GenerationDownloadHandlers):
             "--disable-popup-blocking",         # Allow downloads without popup interference
             "--disable-web-security",           # Reduce security restrictions for automation
             "--disable-features=VizDisplayCompositor",  # Reduce visual interference
+            "--disable-features=DownloadBubble,DownloadBubbleV2",  # Disable download bubble UI
             "--disable-background-timer-throttling",    # Prevent timing issues
             "--disable-backgrounding-occluded-windows", # Keep windows active
-            "--disable-renderer-backgrounding"          # Keep renderer active
+            "--disable-renderer-backgrounding",         # Keep renderer active
+            "--disable-infobars",                       # Disable info bars
+            "--disable-translate",                      # Disable translation bar
+            "--no-first-run",                           # Skip first run experience
+            "--disable-default-apps",                   # Disable default apps
+            "--disable-component-update"                # Disable component updates
         ]
+        
+        # Additional arguments to suppress download shelf
+        launch_args.extend([
+            "--disable-features=DownloadShelf",         # Disable download shelf at bottom
+            "--enable-features=DownloadBubbleUpdate",   # Use newer download UI (less intrusive)
+            "--download-whole-document",                # Download without showing UI
+            "--silent-launch"                           # Silent browser launch
+        ])
         
         self.browser = await playwright.chromium.launch(
             headless=self.config.headless, 
-            args=launch_args
+            args=launch_args,
+            downloads_path=str(Path.home() / "Downloads")  # Set explicit download path
         )
         
         # Browser context with download preferences
@@ -390,6 +405,34 @@ class WebAutomationEngine(GenerationDownloadHandlers):
             }
         )
         self.page = await self.context.new_page()
+        
+        # Try to use Chrome DevTools Protocol to disable download shelf
+        try:
+            client = await self.page.context.new_cdp_session(self.page)
+            # Disable download UI elements
+            await client.send("Browser.setDownloadBehavior", {
+                "behavior": "allowAndName",
+                "downloadPath": str(Path.home() / "Downloads"),
+                "eventsEnabled": False
+            })
+            # Set Chrome preferences for downloads
+            await client.send("Page.addScriptToEvaluateOnNewDocument", {
+                "source": """
+                    // Disable download shelf and notifications
+                    if (window.chrome && window.chrome.downloads) {
+                        Object.defineProperty(window.chrome.downloads, 'showDefaultFolder', {
+                            value: function() { return false; },
+                            writable: false
+                        });
+                        Object.defineProperty(window.chrome.downloads, 'openWhenComplete', {
+                            value: false,
+                            writable: false
+                        });
+                    }
+                """
+            })
+        except Exception as e:
+            logger.debug(f"CDP session setup failed (normal for non-Chrome): {e}")
         
         # Configure Chrome download preferences to hide download UI
         await self.page.add_init_script("""
@@ -412,6 +455,16 @@ class WebAutomationEngine(GenerationDownloadHandlers):
             window.alert = function() { return true; };
             window.confirm = function() { return true; };
             window.prompt = function() { return ''; };
+            
+            // Try to hide download shelf using Chrome-specific APIs
+            if (window.chrome && window.chrome.runtime) {
+                // Override chrome.downloads.setShelfEnabled if available
+                try {
+                    chrome.downloads.setShelfEnabled = function(enabled) { 
+                        return false; 
+                    };
+                } catch(e) {}
+            }
         """)
 
     async def _reset_page_state(self):

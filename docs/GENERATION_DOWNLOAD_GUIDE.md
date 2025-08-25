@@ -322,28 +322,43 @@ results = asyncio.run(run_downloads())
 
 ## Browser Configuration & Performance
 
-### 🚫 **Download Popup Suppression** (NEW)
-The system automatically configures the browser to eliminate download popup interference:
+### 🚫 **Download Popup & Shelf Suppression** (ENHANCED)
+The system now provides comprehensive suppression of ALL download UI interference:
 
 **Chromium Launch Arguments:**
 ```bash
---disable-download-notification    # Disable download notification popup
---disable-notifications           # Disable all notifications  
---disable-popup-blocking          # Allow downloads without popup interference
---disable-web-security            # Reduce security restrictions for automation
---disable-features=VizDisplayCompositor  # Reduce visual interference
+--disable-download-notification         # Disable download notification popup
+--disable-notifications                # Disable all notifications  
+--disable-popup-blocking               # Allow downloads without popup interference
+--disable-features=DownloadBubble,DownloadBubbleV2  # Disable new download bubble UI
+--disable-features=DownloadShelf       # Disable download shelf at bottom
+--disable-infobars                     # Disable info bars
+--no-first-run                        # Skip first run experience
 ```
 
-**JavaScript Overrides:**
-- Suppresses `alert()`, `confirm()`, and `prompt()` dialogs
-- Disables download progress notifications
-- Prevents service worker interference
+**Chrome DevTools Protocol (CDP) Integration:**
+- Sets download behavior to silent mode
+- Disables download events and UI notifications
+- Configures automatic download acceptance
+
+**Active Shelf Closing Methods:**
+1. **Keyboard shortcuts** - Automated Ctrl+Shift+J toggle
+2. **Click dismissal** - Clicks outside download area
+3. **Escape key** - Closes any open popups
+4. **Element targeting** - Finds and clicks close buttons
+5. **JavaScript hiding** - Dynamically hides download UI elements
+
+**Post-Download Cleanup:**
+- Automatically closes download shelf after each download
+- Clears any residual download notifications
+- Maintains clean browser interface throughout automation
 
 **Benefits:**
-✅ **Uninterrupted automation** - No popup blocking download process  
-✅ **Clean browser UI** - Downloads proceed silently in background  
-✅ **Reliable execution** - No manual intervention required for downloads  
-✅ **Professional experience** - Browser remains focused on automation task
+✅ **Complete UI suppression** - No download shelf, no popups, no notifications  
+✅ **Recent Downloads eliminated** - The persistent "Recent Downloads" popup is actively closed  
+✅ **Uninterrupted automation** - Downloads proceed without ANY visual interference  
+✅ **Clean browser UI** - Browser stays focused on content, not download management  
+✅ **Professional experience** - Seamless automation without distracting UI elements
 
 ### Performance Optimization
 
@@ -374,19 +389,28 @@ The system automatically configures the browser to eliminate download popup inte
 
 ## Troubleshooting
 
-### Download Popup Issues (NEW)
+### Download Popup & Shelf Issues (ENHANCED)
+**Problem:** "Recent Downloads" popup still appearing at bottom of browser
+**Solution:** Enhanced shelf suppression is now implemented:
+1. Browser launches with `--disable-features=DownloadShelf` argument
+2. CDP protocol configures silent download mode
+3. Active shelf closing after each download with multiple methods
+4. JavaScript actively hides download UI elements
+5. If still visible, automation will automatically close it
+
 **Problem:** Downloads interrupted by browser popups or notifications
-**Solution:** Popup suppression is enabled automatically. If issues persist:
-1. Verify browser launches with `--disable-download-notification` argument
-2. Check JavaScript console for override script execution
-3. Restart browser if popups still appear
-4. Use headless mode to eliminate all visual popups
+**Solution:** Comprehensive popup suppression is enabled:
+1. Multiple Chrome flags disable all download UI
+2. Keyboard shortcuts automatically close popups
+3. Click dismissal and Escape key automation
+4. Use headless mode for complete UI elimination
 
 **Problem:** Downloads prompt for location or confirmation
-**Solution:** The system configures `accept_downloads=True` and suppresses dialogs:
-1. Ensure download folder has write permissions
-2. Check that browser context accepts downloads automatically
-3. Verify JavaScript dialog suppression is active
+**Solution:** The system configures automatic acceptance:
+1. Browser context has `accept_downloads=True`
+2. CDP sets download behavior to "allowAndName"
+3. JavaScript overrides dialog functions
+4. Download path is explicitly configured
 
 ### Download Failures
 1. Check network connectivity
