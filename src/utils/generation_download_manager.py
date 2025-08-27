@@ -608,18 +608,22 @@ class GenerationDownloadManager:
             except:
                 pass
             
-            # Method 4: Use position-based fallback with content hash
-            try:
-                bbox = await thumbnail_element.bounding_box()
-                if bbox:
-                    position = f"pos:{int(bbox['x'])}:{int(bbox['y'])}"
-                    identifier_parts.append(position)
-            except:
-                pass
+            # Method 4: Use position-based fallback ONLY if no other identifier found
+            # Position should NOT be part of the unique ID as it changes after downloads
+            if not identifier_parts:
+                try:
+                    bbox = await thumbnail_element.bounding_box()
+                    if bbox:
+                        position = f"pos:{int(bbox['x'])}:{int(bbox['y'])}"
+                        identifier_parts.append(position)
+                except:
+                    pass
             
             # Create composite identifier
             if identifier_parts:
-                unique_id = "|".join(identifier_parts[:2])  # Use top 2 most reliable parts
+                # Use only the FIRST (most reliable) identifier to avoid position pollution
+                # This ensures thumbnails maintain the same ID even if position changes
+                unique_id = identifier_parts[0]
                 return unique_id
             else:
                 # Fallback: use element handle reference
@@ -2247,25 +2251,42 @@ class GenerationDownloadManager:
                     "timestamp": datetime.now().isoformat()
                 })
             
-            # Click directly on the thumbnail element (no nth-child needed!)
+            # Click directly on the thumbnail element with retry for stale references
+            click_success = False
             try:
-                # Ensure element is still visible and in viewport
+                # First attempt: Use cached element reference
                 await thumbnail_element.scroll_into_view_if_needed()
-                await page.wait_for_timeout(500)  # Brief wait for scroll
+                await page.wait_for_timeout(500)
                 
-                # Verify element is still clickable
                 is_visible = await thumbnail_element.is_visible()
                 if not is_visible:
                     logger.warning(f"Thumbnail {thumbnail_id} is no longer visible")
                     return False
                 
-                # Click the thumbnail directly
                 await thumbnail_element.click(timeout=10000)
+                click_success = True
                 logger.info(f"✅ Successfully clicked thumbnail: {thumbnail_id}")
                 
             except Exception as e:
-                logger.error(f"Failed to click thumbnail {thumbnail_id}: {e}")
-                return False
+                # If element is stale/detached, try to find it again by unique ID
+                error_msg = str(e).lower()
+                if "not attached" in error_msg or "intercepts pointer events" in error_msg:
+                    logger.info(f"🔄 Element stale, retrying with fresh lookup for {thumbnail_id}")
+                    try:
+                        # Get fresh thumbnail list and find our target
+                        fresh_thumbnails = await self.get_robust_thumbnail_list(page)
+                        for fresh_thumb in fresh_thumbnails:
+                            if fresh_thumb['unique_id'] == thumbnail_id and fresh_thumb['visible']:
+                                await fresh_thumb['element'].click(timeout=5000)
+                                click_success = True
+                                logger.info(f"✅ Successfully clicked thumbnail on retry: {thumbnail_id}")
+                                break
+                    except Exception as retry_error:
+                        logger.debug(f"Retry also failed: {retry_error}")
+                
+                if not click_success:
+                    logger.error(f"Failed to click thumbnail {thumbnail_id}: {e}")
+                    return False
             
             # Wait for content to load
             await page.wait_for_timeout(2000)
