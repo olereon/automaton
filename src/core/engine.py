@@ -371,6 +371,11 @@ class WebAutomationEngine(GenerationDownloadHandlers):
             "--disable-web-security",           # Reduce security restrictions for automation
             "--disable-features=VizDisplayCompositor",  # Reduce visual interference
             "--disable-features=DownloadBubble,DownloadBubbleV2",  # Disable download bubble UI
+            "--disable-features=DownloadShelf",         # CRITICAL: Disable download shelf
+            "--disable-features=DownloadBubbleV2UI",    # Disable new download UI
+            "--disable-features=DownloadUIV2",          # Disable download UI v2
+            "--disable-features=DownloadNotification",  # Disable download notifications
+            "--disable-features=DownloadService",       # Disable download service
             "--disable-background-timer-throttling",    # Prevent timing issues
             "--disable-backgrounding-occluded-windows", # Keep windows active
             "--disable-renderer-backgrounding",         # Keep renderer active
@@ -378,16 +383,33 @@ class WebAutomationEngine(GenerationDownloadHandlers):
             "--disable-translate",                      # Disable translation bar
             "--no-first-run",                           # Skip first run experience
             "--disable-default-apps",                   # Disable default apps
-            "--disable-component-update"                # Disable component updates
+            "--disable-component-update",               # Disable component updates
+            "--disable-hang-monitor",                   # Disable hang monitoring
+            "--disable-prompt-on-repost",               # Disable repost prompts
+            "--silent"                                   # Run in silent mode
         ]
         
-        # Additional arguments to suppress download shelf
+        # Additional arguments to suppress download shelf and popups
         launch_args.extend([
             "--disable-features=DownloadShelf",         # Disable download shelf at bottom
+            "--disable-download-notification",          # CRITICAL: Disable download notifications completely
+            "--disable-print-preview",                  # Disable print preview that can interfere
+            "--disable-features=PrintPreview",          # Disable print preview feature
             "--enable-features=DownloadBubbleUpdate",   # Use newer download UI (less intrusive)
             "--download-whole-document",                # Download without showing UI
             "--silent-launch"                           # Silent browser launch
         ])
+        
+        # Enhanced window configuration for better popup placement
+        if not self.config.headless:
+            launch_args.extend([
+                "--auto-open-devtools-for-tabs",       # CRITICAL: Auto-open DevTools to push popups right
+                "--window-size=2560,1080",             # Set larger window size for DevTools
+                "--window-position=0,0",               # Position window at top-left
+                "--force-device-scale-factor=1",       # Ensure consistent scaling
+                "--disable-features=MediaRouter",      # Disable media router popup
+                "--disable-features=Translate"         # Disable translate popup
+            ])
         
         self.browser = await playwright.chromium.launch(
             headless=self.config.headless, 
@@ -395,16 +417,35 @@ class WebAutomationEngine(GenerationDownloadHandlers):
             downloads_path=str(Path.home() / "Downloads")  # Set explicit download path
         )
         
-        # Browser context with download preferences
-        self.context = await self.browser.new_context(
-            viewport=self.config.viewport, 
-            accept_downloads=True,
-            # Set download behavior preferences
-            extra_http_headers={
+        # Browser context with enhanced configuration for DevTools and download handling
+        context_options = {
+            "accept_downloads": True,
+            "extra_http_headers": {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
             }
-        )
+        }
+        
+        # Set viewport based on whether DevTools will be open
+        if not self.config.headless:
+            # Use larger viewport to accommodate DevTools panel (which takes ~300px on right)
+            context_options["viewport"] = {"width": 1920, "height": 1080}  # Main content area (accommodate larger window)
+            logger.info("🔧 Browser configured with DevTools auto-open for popup displacement")
+        else:
+            # Use configured viewport for headless mode
+            context_options["viewport"] = self.config.viewport
+        
+        self.context = await self.browser.new_context(**context_options)
         self.page = await self.context.new_page()
+        
+        # Ensure DevTools opens for non-headless mode (additional safeguard)
+        if not self.config.headless:
+            try:
+                # Use CDP to ensure DevTools is open
+                cdp_session = await self.context.new_cdp_session(self.page)
+                await cdp_session.send("Runtime.enable")
+                logger.info("✅ DevTools session established for popup displacement")
+            except Exception as e:
+                logger.debug(f"DevTools CDP setup failed (non-critical): {e}")
         
         # Try to use Chrome DevTools Protocol to disable download shelf
         try:

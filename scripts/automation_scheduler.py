@@ -120,7 +120,7 @@ class AutomationScheduler:
         self.setup_logging()
 
     def _setup_control_handlers(self):
-        """Setup enhanced control handlers for Ctrl+P and Ctrl+T"""
+        """Setup enhanced control handlers for Ctrl+W and Ctrl+T"""
         def keyboard_control_callback(command: str):
             """Handle keyboard control commands"""
             if command == 'toggle_pause':
@@ -144,7 +144,7 @@ class AutomationScheduler:
         def signal_handler(signum, frame):
             signal_name = signal.Signals(signum).name
             if signum == signal.SIGINT:  # Ctrl+C - fallback pause
-                print(f"\n⏸️  Received {signal_name} - Use Ctrl+P for pause/resume, Ctrl+T for stop")
+                print(f"\n⏸️  Received {signal_name} - Use Ctrl+W for pause/resume, Ctrl+T for stop")
                 if self.is_paused:
                     self.resume_scheduler()
                 else:
@@ -526,7 +526,7 @@ class AutomationScheduler:
         self.logger.info(f"⏱️  Success wait time: {self.config.success_wait_time}s")
         self.logger.info(f"🔄 Failure wait time: {self.config.failure_wait_time}s")
         self.logger.info(f"🎯 Max retries per config: {self.config.max_retries}")
-        self.logger.info(f"🎮 Control: Ctrl+P=Pause/Resume, Ctrl+T=Stop")
+        self.logger.info(f"🎮 Control: Ctrl+W=Pause/Resume, Ctrl+T=Stop")
         
         # Start keyboard monitoring
         if self.keyboard_handler:
@@ -708,7 +708,7 @@ class AutomationScheduler:
         """Pause the scheduler"""
         if not self.is_paused:
             self.is_paused = True
-            self.logger.info("⏸️ Scheduler paused - press Ctrl+P to resume")
+            self.logger.info("⏸️ Scheduler paused - press Ctrl+W to resume")
             if self.controller:
                 self.controller.pause_automation()
         else:

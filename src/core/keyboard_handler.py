@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Keyboard Input Handler for Control Commands
-Provides cross-platform keyboard input handling for Ctrl+P and Ctrl+T
+Provides cross-platform keyboard input handling for Ctrl+W and Ctrl+T
 """
 
 import asyncio
@@ -46,7 +46,7 @@ class KeyboardHandler:
             name="KeyboardHandler"
         )
         self.input_thread.start()
-        logger.info("🎮 Keyboard monitoring started - Ctrl+P: Pause/Resume, Ctrl+T: Stop")
+        logger.info("🎮 Keyboard monitoring started - Ctrl+W: Pause/Resume, Ctrl+T: Stop")
     
     def stop_monitoring(self):
         """Stop keyboard monitoring"""
@@ -80,7 +80,7 @@ class KeyboardHandler:
             while self.is_active and not self.stop_event.is_set():
                 if msvcrt.kbhit():
                     key = msvcrt.getch()
-                    if key == b'\x10':  # Ctrl+P
+                    if key == b'\x17':  # Ctrl+W
                         self._handle_control_command('toggle_pause')
                     elif key == b'\x14':  # Ctrl+T
                         self._handle_control_command('stop')
@@ -112,8 +112,8 @@ class KeyboardHandler:
                     if select.select([sys.stdin], [], [], 0.1)[0]:
                         char = sys.stdin.read(1)
                         
-                        # Check for Ctrl+P (ASCII 16) and Ctrl+T (ASCII 20)
-                        if ord(char) == 16:  # Ctrl+P
+                        # Check for Ctrl+W (ASCII 23) and Ctrl+T (ASCII 20)
+                        if ord(char) == 23:  # Ctrl+W
                             self._handle_control_command('toggle_pause')
                         elif ord(char) == 20:  # Ctrl+T
                             self._handle_control_command('stop')
@@ -221,7 +221,7 @@ def create_keyboard_handler(advanced: bool = True) -> KeyboardHandler:
     """Create appropriate keyboard handler based on environment
     
     Args:
-        advanced: If True, try to create advanced handler with Ctrl+P/Ctrl+T
+        advanced: If True, try to create advanced handler with Ctrl+W/Ctrl+T
                  If False or advanced fails, create simple handler
     
     Returns:

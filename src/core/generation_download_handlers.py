@@ -36,15 +36,41 @@ class GenerationDownloadHandlers:
                 download_timeout=config_data.get('download_timeout', 120000),
                 verification_timeout=config_data.get('verification_timeout', 30000),
                 retry_attempts=config_data.get('retry_attempts', 3),
+                
+                # Enhanced naming configuration (FIXED - was missing!)
+                use_descriptive_naming=config_data.get('use_descriptive_naming', True),
+                unique_id=config_data.get('unique_id', 'gen'),
+                naming_format=config_data.get('naming_format', '{media_type}_{creation_date}_{unique_id}'),
+                date_format=config_data.get('date_format', '%Y-%m-%d-%H-%M-%S'),
+                id_format=config_data.get('id_format', '#{:09d}'),
+                
+                # Infinite scroll configuration
+                scroll_batch_size=config_data.get('scroll_batch_size', 10),
+                scroll_amount=config_data.get('scroll_amount', 500),
+                scroll_wait_time=config_data.get('scroll_wait_time', 2000),
+                max_scroll_attempts=config_data.get('max_scroll_attempts', 5),
+                
+                # Text-based landmark selectors (robust approach)
+                image_to_video_text=config_data.get('image_to_video_text', 'Image to video'),
+                creation_time_text=config_data.get('creation_time_text', 'Creation Time'),
+                prompt_ellipsis_pattern=config_data.get('prompt_ellipsis_pattern', '</span>...'),
+                download_no_watermark_text=config_data.get('download_no_watermark_text', 'Download without Watermark'),
+                
+                # OPTIMIZED PROMPT EXTRACTION SETTINGS
+                extraction_strategy=config_data.get('extraction_strategy', 'longest_div'),
+                min_prompt_length=config_data.get('min_prompt_length', 150),
+                prompt_class_selector=config_data.get('prompt_class_selector', 'div.sc-dDrhAi.dnESm'),
+                prompt_indicators=config_data.get('prompt_indicators'),  # None will use defaults from __post_init__
+                
                 # Update selectors if provided
                 completed_task_selector=config_data.get('completed_task_selector', "div[id$='__8']"),
                 thumbnail_selector=config_data.get('thumbnail_selector', '.thumbnail-item'),
+                thumbnail_container_selector=config_data.get('thumbnail_container_selector', '.thumsInner'),
                 
                 # Enhanced selector configuration
                 button_panel_selector=config_data.get('button_panel_selector', '.sc-eYHxxX.fmURBt'),
                 download_icon_href=config_data.get('download_icon_href', '#icon-icon_tongyong_20px_xiazai'),
                 download_button_index=config_data.get('download_button_index', 2),
-                download_no_watermark_text=config_data.get('download_no_watermark_text', 'Download without Watermark'),
                 
                 # Legacy and CSS selectors
                 download_button_selector=config_data.get('download_button_selector', 

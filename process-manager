@@ -1,0 +1,6 @@
+#!/bin/bash
+# Process Manager Launcher
+# Quick access to the process management tool
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+python3.11 "$SCRIPT_DIR/scripts/process_manager.py" "$@"

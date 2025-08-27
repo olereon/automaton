@@ -102,7 +102,7 @@ python scripts/automation_scheduler.py --config scheduler_config.json --time 10:
 ### Waiting for Scheduled Time
 
 1. **Countdown Display**: For waits longer than 60 seconds, the scheduler displays a countdown
-2. **Control Support**: You can pause/resume (Ctrl+P) or stop (Ctrl+T) while waiting
+2. **Control Support**: You can pause/resume (Ctrl+W) or stop (Ctrl+T) while waiting
 3. **Past Times**: If the scheduled time has already passed, the scheduler starts immediately with a warning
 
 ### Time Calculation

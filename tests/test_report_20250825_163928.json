@@ -1,0 +1,57 @@
+{
+  "timestamp": "2025-08-25T16:39:28.492303",
+  "summary": {
+    "total_tests": 64,
+    "total_passed": 59,
+    "total_failed": 5,
+    "success_rate": 92.1875,
+    "categories_passing": 1,
+    "categories_total": 4
+  },
+  "detailed_results": {
+    "Unit Tests": {
+      "passed": 17,
+      "failed": 0,
+      "skipped": 0,
+      "total": 17,
+      "summary": "======================== 17 passed, 1 warning in 0.02s =========================",
+      "exit_code": 0
+    },
+    "Debug Logger": {
+      "passed": 19,
+      "failed": 1,
+      "skipped": 0,
+      "total": 20,
+      "summary": "=================== 1 failed, 19 passed, 1 warning in 0.19s ====================",
+      "exit_code": 1
+    },
+    "Edge Cases": {
+      "passed": 16,
+      "failed": 1,
+      "skipped": 0,
+      "total": 17,
+      "summary": "=================== 1 failed, 16 passed, 2 warnings in 0.15s ===================",
+      "exit_code": 1
+    },
+    "Integration": {
+      "passed": 7,
+      "failed": 3,
+      "skipped": 0,
+      "total": 10,
+      "summary": "=================== 3 failed, 7 passed, 2 warnings in 2.57s ====================",
+      "exit_code": 1
+    }
+  },
+  "coverage_areas": [
+    "\u2705 Multiple Thumbnail Date Extraction",
+    "\u2705 Element Selection Validation",
+    "\u2705 Smart Date Selection Algorithms",
+    "\u2705 File Naming with Extracted Metadata",
+    "\u2705 Debug Logger Comprehensive Logging",
+    "\u2705 Edge Cases and Error Conditions",
+    "\u2705 Performance with Large Datasets",
+    "\u2705 Security and Input Validation",
+    "\u2705 Configuration Management",
+    "\u2705 Memory Management and Cleanup"
+  ]
+}

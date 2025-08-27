@@ -159,7 +159,7 @@ class GenerationMetadata:
 
 @dataclass
 class GenerationDownloadConfig:
-    """Configuration for generation download automation"""
+    """Configuration for generation download automation with optimized prompt extraction"""
     # Directory paths
     downloads_folder: str = "/home/olereon/workspace/github.com/olereon/automaton/downloads/vids"
     logs_folder: str = "/home/olereon/workspace/github.com/olereon/automaton/logs"
@@ -187,6 +187,12 @@ class GenerationDownloadConfig:
     prompt_ellipsis_pattern: str = "</span>..."  # Pattern for finding prompt
     download_no_watermark_text: str = "Download without Watermark"
     
+    # OPTIMIZED PROMPT EXTRACTION SETTINGS
+    extraction_strategy: str = "longest_div"     # Strategy: "longest_div" or "legacy"
+    min_prompt_length: int = 150                 # Minimum chars for full prompt detection
+    prompt_class_selector: str = "div.sc-dDrhAi.dnESm"  # Target prompt div class
+    prompt_indicators: list = None               # Keywords that indicate prompt content
+    
     # Legacy selectors (kept for backward compatibility)
     download_button_selector: str = "[data-spm-anchor-id='a2ty_o02.30365920.0.i1.6daf47258YB5qi']"
     download_no_watermark_selector: str = "[data-spm-anchor-id='a2ty_o02.30365920.0.i2.6daf47258YB5qi']"
@@ -210,6 +216,16 @@ class GenerationDownloadConfig:
     unique_id: str = "gen"  # User-defined unique identifier
     naming_format: str = "{media_type}_{creation_date}_{unique_id}"  # Naming template
     date_format: str = "%Y-%m-%d-%H-%M-%S"  # Date format for filename
+    
+    def __post_init__(self):
+        """Initialize computed fields after dataclass creation"""
+        if self.prompt_indicators is None:
+            # Default prompt indicators for content detection
+            self.prompt_indicators = [
+                'camera', 'scene', 'shot', 'frame', 'view', 'angle', 'light', 
+                'shows', 'reveals', 'begins', 'starts', 'opens', 'focuses',
+                'character', 'person', 'figure', 'subject', 'object'
+            ]
 
 
 class GenerationDownloadLogger:
@@ -389,6 +405,28 @@ class GenerationDownloadManager:
         self.logger = GenerationDownloadLogger(config)
         self.file_manager = GenerationFileManager(config)
         
+        # Initialize debug logger
+        try:
+            from .generation_debug_logger import GenerationDebugLogger
+            self.debug_logger = GenerationDebugLogger(config.logs_folder)
+            logger.info("🔍 Debug logging enabled")
+            
+            # Log configuration for debugging
+            self.debug_logger.log_configuration({
+                "use_descriptive_naming": config.use_descriptive_naming,
+                "unique_id": config.unique_id,
+                "naming_format": config.naming_format,
+                "date_format": config.date_format,
+                "max_downloads": config.max_downloads,
+                "downloads_folder": config.downloads_folder,
+                "creation_time_text": config.creation_time_text,
+                "prompt_ellipsis_pattern": config.prompt_ellipsis_pattern
+            })
+            
+        except ImportError:
+            self.debug_logger = None
+            logger.warning("Debug logger not available")
+        
         # Initialize download manager
         download_config = DownloadConfig(
             base_download_path=config.downloads_folder,
@@ -469,6 +507,345 @@ class GenerationDownloadManager:
         except Exception as e:
             logger.error(f"Error getting visible thumbnails: {e}")
             return []
+    
+    async def validate_page_state_changed(self, page, thumbnail_index: int) -> bool:
+        """Validate that clicking a thumbnail actually changed the page content"""
+        try:
+            # Wait for any animations or transitions to complete
+            await page.wait_for_timeout(500)
+            
+            # Check if the creation time element exists (indicates detail view loaded)
+            creation_time_visible = await page.is_visible(f"span:has-text('{self.config.creation_time_text}')")
+            
+            if self.debug_logger:
+                self.debug_logger.log_step(thumbnail_index, "PAGE_STATE_VALIDATION", {
+                    "creation_time_visible": creation_time_visible,
+                    "thumbnail_index": thumbnail_index,
+                    "validation_method": "creation_time_visibility"
+                })
+            
+            return creation_time_visible
+            
+        except Exception as e:
+            if self.debug_logger:
+                self.debug_logger.log_step(thumbnail_index, "PAGE_STATE_VALIDATION", {
+                    "error": str(e),
+                    "success": False
+                }, success=False, error=str(e))
+            
+            logger.debug(f"Page state validation failed: {e}")
+            return False
+    
+    async def validate_content_loaded_for_thumbnail(self, page, thumbnail_index: int) -> bool:
+        """Ensure that the content for the specific thumbnail is fully loaded"""
+        try:
+            # Wait for creation time element to be stable
+            try:
+                await page.wait_for_selector(f"span:has-text('{self.config.creation_time_text}')", timeout=5000)
+            except Exception:
+                logger.warning(f"Creation time element not found for thumbnail {thumbnail_index}")
+            
+            # Additional validation: check if prompt content is present
+            prompt_elements = await page.query_selector_all("span[aria-describedby]")
+            prompt_found = len(prompt_elements) > 0
+            
+            if self.debug_logger:
+                self.debug_logger.log_step(thumbnail_index, "CONTENT_VALIDATION", {
+                    "prompt_elements_found": len(prompt_elements),
+                    "content_loaded": prompt_found,
+                    "thumbnail_index": thumbnail_index
+                })
+            
+            return prompt_found
+            
+        except Exception as e:
+            if self.debug_logger:
+                self.debug_logger.log_step(thumbnail_index, "CONTENT_VALIDATION", {
+                    "error": str(e),
+                    "success": False
+                }, success=False, error=str(e))
+            
+            logger.debug(f"Content validation failed: {e}")
+            return False
+    
+    async def _find_selected_thumbnail_date(self, page, date_candidates: list) -> Optional[str]:
+        """Find the date that belongs to the currently selected/active thumbnail using advanced context analysis"""
+        try:
+            # Strategy 1: Visual indicators and proximity analysis
+            # Look for visual state indicators that show which thumbnail is currently active
+            selected_indicators = [
+                ".selected",
+                ".active", 
+                ".current",
+                ".highlighted",
+                "[aria-selected='true']",
+                ".thumsItem.selected",
+                ".thumbnail-item.active",
+                ".current-item",
+                ".focus",
+                ".focused"
+            ]
+            
+            for indicator in selected_indicators:
+                try:
+                    selected_elements = await page.query_selector_all(indicator)
+                    if selected_elements:
+                        # For each selected element, try to find associated date
+                        for element in selected_elements:
+                            # Look for Creation Time span near this selected element
+                            creation_time_near = await element.query_selector("span:has-text('Creation Time')")
+                            if creation_time_near:
+                                parent = await creation_time_near.evaluate_handle("el => el.parentElement")
+                                spans = await parent.query_selector_all("span")
+                                if len(spans) >= 2:
+                                    date_text = await spans[1].text_content()
+                                    if date_text and date_text.strip():
+                                        logger.debug(f"Found selected thumbnail date via {indicator}: {date_text.strip()}")
+                                        return date_text.strip()
+                except Exception:
+                    continue
+            
+            # Strategy 2: Context-based analysis - find the date in the main detail/focus area
+            # Look for Creation Time elements that appear in singular, focused contexts
+            try:
+                focus_selectors = [
+                    ".modal-content span:has-text('Creation Time')",
+                    ".dialog span:has-text('Creation Time')",  
+                    ".popup span:has-text('Creation Time')",
+                    ".panel span:has-text('Creation Time')",
+                    ".detail span:has-text('Creation Time')",
+                    ".main-content span:has-text('Creation Time')",
+                    ".content-area span:has-text('Creation Time')"
+                ]
+                
+                for selector in focus_selectors:
+                    elements = await page.query_selector_all(selector)
+                    if elements and len(elements) == 1:  # Single focused element indicates active content
+                        element = elements[0]
+                        parent = await element.evaluate_handle("el => el.parentElement")
+                        spans = await parent.query_selector_all("span")
+                        if len(spans) >= 2:
+                            date_text = await spans[1].text_content()
+                            if date_text and date_text.strip():
+                                logger.debug(f"Found focused date via {selector}: {date_text.strip()}")
+                                return date_text.strip()
+            except Exception:
+                pass
+            
+            # Strategy 3: Viewport positioning analysis
+            # Find the Creation Time element that is most prominently positioned (center, top, etc.)
+            try:
+                creation_elements = await page.query_selector_all("span:has-text('Creation Time')")
+                if len(creation_elements) > 1:
+                    best_element = None
+                    best_score = -1
+                    
+                    for element in creation_elements:
+                        try:
+                            # Get element position and visibility metrics
+                            bounds = await element.bounding_box()
+                            if not bounds:
+                                continue
+                            
+                            # Score based on position (higher score for more central/prominent positions)
+                            viewport = await page.viewport_size()
+                            center_x = viewport['width'] / 2
+                            center_y = viewport['height'] / 2
+                            
+                            # Distance from center (closer is better)
+                            distance_from_center = ((bounds['x'] + bounds['width']/2 - center_x)**2 + 
+                                                   (bounds['y'] + bounds['height']/2 - center_y)**2) ** 0.5
+                            
+                            # Normalize distance score (lower distance = higher score)
+                            distance_score = max(0, 1 - distance_from_center / (max(viewport['width'], viewport['height']) / 2))
+                            
+                            # Bonus for elements higher on the page (detail areas often at top)
+                            top_bonus = max(0, 1 - bounds['y'] / viewport['height']) * 0.3
+                            
+                            # Bonus for larger elements (more prominent)
+                            size_bonus = min(1, (bounds['width'] * bounds['height']) / (viewport['width'] * viewport['height'])) * 0.2
+                            
+                            total_score = distance_score + top_bonus + size_bonus
+                            
+                            if total_score > best_score:
+                                best_score = total_score
+                                best_element = element
+                        except Exception:
+                            continue
+                    
+                    if best_element:
+                        parent = await best_element.evaluate_handle("el => el.parentElement")
+                        spans = await parent.query_selector_all("span")
+                        if len(spans) >= 2:
+                            date_text = await spans[1].text_content()
+                            if date_text and date_text.strip():
+                                logger.debug(f"Found best positioned date (score: {best_score:.2f}): {date_text.strip()}")
+                                return date_text.strip()
+            except Exception as e:
+                logger.debug(f"Viewport positioning analysis failed: {e}")
+                    
+            return None
+            
+        except Exception as e:
+            logger.debug(f"Error finding selected thumbnail date: {e}")
+            return None
+    
+    def _calculate_element_context_score(self, element_bounds, element_visibility: bool) -> float:
+        """Calculate a context score for an element based on its position and visibility"""
+        score = 0.0
+        
+        # Visibility is crucial
+        if element_visibility:
+            score += 0.5
+        else:
+            return score  # Skip other scoring if not visible
+        
+        # Position scoring (if bounds are available)
+        if element_bounds:
+            # Score based on position - prefer elements higher on the page (detail areas)
+            y_position = element_bounds.get('y', 0)
+            height = element_bounds.get('height', 0)
+            
+            # Normalize to 0-1 scale (assuming page height of ~2000px)
+            normalized_y = max(0, min(1, y_position / 2000))
+            
+            # Higher elements get better scores (detail content usually at top)
+            position_score = max(0, 1 - normalized_y) * 0.3
+            score += position_score
+            
+            # Size scoring - larger elements might be more important  
+            width = element_bounds.get('width', 0)
+            area = width * height
+            if area > 0:
+                # Normalize area score (capped at reasonable UI element size)
+                size_score = min(0.1, area / 50000)  # More conservative size scoring
+                score += size_score
+        
+        return score
+    
+    async def _validate_thumbnail_context(self, page, thumbnail_index: int) -> Dict[str, Any]:
+        """Validate that we're extracting metadata from the correct thumbnail context"""
+        try:
+            validation_data = {
+                'thumbnail_index': thumbnail_index,
+                'has_active_thumbnail': False,
+                'active_thumbnail_info': None,
+                'detail_panel_loaded': False,
+                'metadata_elements_count': 0
+            }
+            
+            # Check if there's a clear active/selected thumbnail
+            try:
+                active_selectors = ['.selected', '.active', '.current', '.highlighted']
+                for selector in active_selectors:
+                    active_elements = await page.query_selector_all(selector)
+                    if active_elements:
+                        validation_data['has_active_thumbnail'] = True
+                        validation_data['active_thumbnail_info'] = {
+                            'selector': selector,
+                            'count': len(active_elements)
+                        }
+                        break
+            except Exception:
+                pass
+            
+            # Check if detail panel/modal is loaded
+            try:
+                detail_indicators = [
+                    'span:has-text("Creation Time")',
+                    'span[aria-describedby]',
+                    '.modal', '.dialog', '.detail-panel'
+                ]
+                
+                for indicator in detail_indicators:
+                    elements = await page.query_selector_all(indicator)
+                    if elements:
+                        validation_data['detail_panel_loaded'] = True
+                        validation_data['metadata_elements_count'] += len(elements)
+            except Exception:
+                pass
+            
+            return validation_data
+            
+        except Exception as e:
+            logger.debug(f"Context validation failed: {e}")
+            return {'error': str(e)}
+    
+    def _select_best_date_candidate(self, date_candidates: list) -> str:
+        """Select the best date candidate using confidence scoring and smart heuristics"""
+        if not date_candidates:
+            return "Unknown Date"
+        
+        if len(date_candidates) == 1:
+            return date_candidates[0]['extracted_date']
+        
+        # Enhanced strategy with confidence scoring
+        date_counts = {}
+        element_positions = {}
+        
+        for candidate in date_candidates:
+            date = candidate['extracted_date']
+            date_counts[date] = date_counts.get(date, 0) + 1
+            
+            # Track element positions for additional context
+            if date not in element_positions:
+                element_positions[date] = []
+            element_positions[date].append(candidate['element_index'])
+        
+        # Calculate confidence scores for each unique date
+        date_scores = {}
+        total_candidates = len(date_candidates)
+        
+        for date, count in date_counts.items():
+            score = 0.0
+            
+            # Get candidates for this date to access context information
+            date_candidates_for_this_date = [c for c in date_candidates if c['extracted_date'] == date]
+            
+            # Frequency analysis (balanced approach - don't automatically prefer unique dates)
+            if count == 1:
+                score += 0.3  # Moderate bonus for unique dates (but context matters more)
+            elif count <= 3:
+                score += 0.1  # Small bonus for reasonable duplication
+            else:
+                score -= 0.1 * (count - 3)  # Only penalize excessive duplication
+            
+            # Context score analysis (use the best context score for this date - MOST IMPORTANT)
+            context_scores = [c.get('context_score', 0.0) for c in date_candidates_for_this_date]
+            best_context_score = max(context_scores) if context_scores else 0.0
+            score += best_context_score * 2.0  # Double the weight of context score
+            
+            # Position analysis (earlier elements might be more relevant, but context score is more important)
+            avg_position = sum(element_positions[date]) / len(element_positions[date])
+            position_score = max(0, 1.0 - (avg_position / total_candidates)) * 0.2  # Reduced weight
+            score += position_score
+            
+            # Element visibility bonus
+            visible_count = sum(1 for c in date_candidates_for_this_date if c.get('element_visible', False))
+            visibility_ratio = visible_count / len(date_candidates_for_this_date)
+            score += visibility_ratio * 0.3
+            
+            # Recency bonus (try to parse date and prefer more recent)
+            try:
+                parsed_date = datetime.strptime(date, "%d %b %Y %H:%M:%S")
+                # Bonus for dates within the last 30 days
+                days_ago = (datetime.now() - parsed_date).days
+                if days_ago <= 30:
+                    score += 0.2
+                elif days_ago <= 90:
+                    score += 0.1
+            except:
+                # Can't parse date, neutral score
+                pass
+            
+            date_scores[date] = score
+            logger.debug(f"Date candidate scoring: {date} -> {score:.2f} (count: {count}, avg_pos: {avg_position:.1f}, context: {best_context_score:.2f}, visible: {visibility_ratio:.1f})")
+        
+        # Select the date with the highest confidence score
+        best_date = max(date_scores.items(), key=lambda x: x[1])
+        logger.info(f"Selected best date candidate: {best_date[0]} (confidence: {best_date[1]:.2f})")
+        
+        return best_date[0]
     
     async def scroll_thumbnail_gallery(self, page) -> bool:
         """Scroll the thumbnail gallery to reveal more thumbnails"""
@@ -584,295 +961,16 @@ class GenerationDownloadManager:
             return False
     
     async def extract_metadata_from_page(self, page) -> Optional[Dict[str, str]]:
-        """Extract generation metadata from the current page using text-based landmarks"""
+        """UPDATED: Extract generation metadata using multi-landmark validation (same as landmark strategy)"""
         try:
-            metadata = {}
+            logger.debug("Fallback extraction using multi-landmark validation")
             
-            # Extract generation date using "Creation Time" text landmark (MOST ROBUST)
-            try:
-                logger.debug(f"Extracting date using '{self.config.creation_time_text}' text landmark")
-                
-                # Find elements containing the landmark text
-                creation_time_elements = await page.query_selector_all(f"span:has-text('{self.config.creation_time_text}')")
-                
-                date_found = False
-                for element in creation_time_elements:
-                    try:
-                        # Get the parent container
-                        parent = await element.evaluate_handle("el => el.parentElement")
-                        
-                        # Find all spans in the parent
-                        spans = await parent.query_selector_all("span")
-                        
-                        # The date should be in the second span (after "Creation Time")
-                        if len(spans) >= 2:
-                            date_span = spans[1]
-                            date_text = await date_span.text_content()
-                            if date_text and date_text.strip() != self.config.creation_time_text:
-                                extracted_date = date_text.strip()
-                                metadata['generation_date'] = extracted_date
-                                logger.debug(f"Extracted date via 'Creation Time' landmark: {extracted_date}")
-                                date_found = True
-                                break
-                    except Exception as inner_e:
-                        logger.debug(f"Failed to process Creation Time element: {inner_e}")
-                        continue
-                
-                if not date_found:
-                    # Fallback to selector-based approach
-                    logger.debug("Trying selector-based date extraction")
-                    date_element = await page.wait_for_selector(
-                        self.config.generation_date_selector, 
-                        timeout=3000
-                    )
-                    if date_element:
-                        date_text = await date_element.text_content()
-                        metadata['generation_date'] = date_text.strip() if date_text else "Unknown Date"
-                    else:
-                        metadata['generation_date'] = "Unknown Date"
-                        
-            except Exception as e:
-                logger.warning(f"Date extraction failed: {e}")
-                metadata['generation_date'] = "Unknown Date"
-            
-            # Extract prompt using "..." pattern landmark (MOST ROBUST)
-            try:
-                logger.debug(f"Extracting prompt using '{self.config.prompt_ellipsis_pattern}' pattern landmark")
-                
-                # Find all divs that might contain the prompt
-                prompt_containers = await page.query_selector_all("div")
-                
-                prompt_found = False
-                for container in prompt_containers:
-                    try:
-                        # Get the HTML content
-                        html_content = await container.evaluate("el => el.innerHTML")
-                        
-                        # Check if it contains the pattern
-                        if self.config.prompt_ellipsis_pattern in html_content and "aria-describedby" in html_content:
-                            # Find the span with aria-describedby
-                            prompt_spans = await container.query_selector_all("span[aria-describedby]")
-                            
-                            for span in prompt_spans:
-                                # Try multiple methods to extract text
-                                text_content = await span.text_content()
-                                inner_text = None
-                                inner_html = None
-                                
-                                try:
-                                    inner_text = await span.evaluate("el => el.innerText")
-                                    logger.debug(f"innerText length: {len(inner_text) if inner_text else 0} chars")
-                                except Exception as e:
-                                    logger.debug(f"innerText failed: {e}")
-                                
-                                try:
-                                    inner_html = await span.inner_html()
-                                    logger.debug(f"innerHTML length: {len(inner_html)} chars")
-                                    
-                                    # Try to extract text from HTML by removing tags
-                                    import re
-                                    html_text = re.sub(r'<[^>]+>', '', inner_html)
-                                    logger.debug(f"HTML text extraction length: {len(html_text)} chars")
-                                    if html_text:
-                                        logger.debug(f"HTML text sample: {html_text[:200]}...")
-                                        
-                                except Exception as e:
-                                    logger.debug(f"innerHTML failed: {e}")
-                                
-                                # Compare all extraction methods
-                                logger.debug(f"text_content length: {len(text_content) if text_content else 0} chars")
-                                if text_content:
-                                    logger.debug(f"text_content sample: {text_content[:200]}...")
-                                
-                                # Choose the longest/best extraction method
-                                candidates = [
-                                    ('text_content', text_content),
-                                    ('inner_text', inner_text),
-                                    ('html_text', html_text if 'html_text' in locals() else None)
-                                ]
-                                
-                                best_method = None
-                                best_text = None
-                                max_length = 0
-                                
-                                for method_name, text in candidates:
-                                    if text and len(text.strip()) > max_length:
-                                        max_length = len(text.strip())
-                                        best_method = method_name
-                                        best_text = text.strip()
-                                
-                                if best_text and len(best_text) > 20:  # Substantial content
-                                    full_prompt = best_text
-                                    metadata['prompt'] = full_prompt
-                                    logger.debug(f"Extracted prompt via '...' pattern using {best_method}: Length {len(full_prompt)} chars")
-                                    logger.debug(f"Prompt start: {full_prompt[:100]}...")
-                                    
-                                    # Log the end of the prompt too
-                                    if len(full_prompt) > 100:
-                                        logger.debug(f"Prompt ending: ...{full_prompt[-50:]}")
-                                    
-                                    prompt_found = True
-                                    break
-                            
-                            if prompt_found:
-                                break
-                                
-                    except Exception as inner_e:
-                        continue
-                
-                if not prompt_found:
-                    # Try alternative approach: Look for the full prompt in title attribute or data attributes
-                    logger.debug("Trying alternative prompt extraction methods")
-                    
-                    # Method 1: Check for title attributes that might contain the full text
-                    try:
-                        title_elements = await page.query_selector_all("[title*='camera'], [title*='giant'], [title*='frost']")
-                        for element in title_elements:
-                            title_text = await element.get_attribute("title")
-                            if title_text and len(title_text.strip()) > 102:  # Longer than current truncated version
-                                full_prompt = title_text.strip()
-                                metadata['prompt'] = full_prompt
-                                logger.debug(f"Extracted full prompt from title attribute: Length {len(full_prompt)} chars")
-                                prompt_found = True
-                                break
-                    except Exception as e:
-                        logger.debug(f"Title attribute search failed: {e}")
-                    
-                    # Method 2: Look for aria-label or data attributes
-                    if not prompt_found:
-                        try:
-                            aria_elements = await page.query_selector_all("[aria-label*='camera'], [aria-label*='giant']")
-                            for element in aria_elements:
-                                aria_text = await element.get_attribute("aria-label")
-                                if aria_text and len(aria_text.strip()) > 102:
-                                    full_prompt = aria_text.strip()
-                                    metadata['prompt'] = full_prompt
-                                    logger.debug(f"Extracted full prompt from aria-label: Length {len(full_prompt)} chars")
-                                    prompt_found = True
-                                    break
-                        except Exception as e:
-                            logger.debug(f"Aria-label search failed: {e}")
-                    
-                    # Method 3: Look for the parent element that might contain the full text
-                    if not prompt_found:
-                        try:
-                            logger.debug("Looking for parent elements with full prompt text")
-                            # Find spans with aria-describedby and check their parents
-                            spans_with_aria = await page.query_selector_all("span[aria-describedby]")
-                            for span in spans_with_aria:
-                                # Check various parent levels
-                                for level in range(1, 4):  # Check 3 levels up
-                                    try:
-                                        parent_js = "el => " + "el.parentElement." * level + "textContent"
-                                        parent_text = await span.evaluate(parent_js)
-                                        if parent_text and len(parent_text.strip()) > 102:
-                                            full_prompt = parent_text.strip()
-                                            metadata['prompt'] = full_prompt
-                                            logger.debug(f"Extracted full prompt from parent level {level}: Length {len(full_prompt)} chars")
-                                            prompt_found = True
-                                            break
-                                    except:
-                                        continue
-                                if prompt_found:
-                                    break
-                        except Exception as e:
-                            logger.debug(f"Parent element search failed: {e}")
-                    
-                    # Method 4: Check for CSS overflow/truncation and try to get full text
-                    if not prompt_found:
-                        try:
-                            logger.debug("Checking for CSS truncation and attempting to get full text")
-                            spans_with_aria = await page.query_selector_all("span[aria-describedby]")
-                            for span in spans_with_aria:
-                                # Check computed styles for truncation indicators
-                                computed_style = await span.evaluate("""el => {
-                                    const style = window.getComputedStyle(el);
-                                    return {
-                                        textOverflow: style.textOverflow,
-                                        overflow: style.overflow,
-                                        whiteSpace: style.whiteSpace,
-                                        maxWidth: style.maxWidth,
-                                        width: style.width
-                                    };
-                                }""")
-                                logger.debug(f"Element computed style: {computed_style}")
-                                
-                                # Try to temporarily remove CSS truncation
-                                full_text = await span.evaluate("""el => {
-                                    // Store original styles
-                                    const originalStyles = {
-                                        textOverflow: el.style.textOverflow,
-                                        overflow: el.style.overflow,
-                                        whiteSpace: el.style.whiteSpace,
-                                        maxWidth: el.style.maxWidth,
-                                        width: el.style.width
-                                    };
-                                    
-                                    // Temporarily remove truncation
-                                    el.style.textOverflow = 'clip';
-                                    el.style.overflow = 'visible';
-                                    el.style.whiteSpace = 'normal';
-                                    el.style.maxWidth = 'none';
-                                    el.style.width = 'auto';
-                                    
-                                    // Get the text content
-                                    const fullText = el.textContent || el.innerText;
-                                    
-                                    // Restore original styles
-                                    Object.keys(originalStyles).forEach(prop => {
-                                        if (originalStyles[prop]) {
-                                            el.style[prop] = originalStyles[prop];
-                                        } else {
-                                            el.style.removeProperty(prop.replace(/([A-Z])/g, '-$1').toLowerCase());
-                                        }
-                                    });
-                                    
-                                    return fullText;
-                                }""")
-                                
-                                if full_text and len(full_text.strip()) > 102:
-                                    full_prompt = full_text.strip()
-                                    metadata['prompt'] = full_prompt
-                                    logger.debug(f"Extracted full prompt by removing CSS truncation: Length {len(full_prompt)} chars")
-                                    prompt_found = True
-                                    break
-                        except Exception as e:
-                            logger.debug(f"CSS truncation removal failed: {e}")
-                    
-                    # Fallback to selector-based approach
-                    if not prompt_found:
-                        logger.debug("Trying selector-based prompt extraction")
-                        prompt_element = await page.wait_for_selector(
-                            self.config.prompt_selector, 
-                            timeout=3000
-                        )
-                        if prompt_element:
-                            prompt_text = await prompt_element.text_content()
-                            full_prompt = prompt_text.strip() if prompt_text else "Unknown Prompt"
-                            metadata['prompt'] = full_prompt
-                            logger.debug(f"Extracted prompt via selector: {full_prompt[:100]}... (Length: {len(full_prompt)} chars)")
-                        else:
-                            # Last resort: any span with aria-describedby
-                            prompt_elements = await page.query_selector_all("span[aria-describedby]")
-                            for element in prompt_elements:
-                                text = await element.text_content()
-                                if text and len(text.strip()) > 20:
-                                    full_prompt = text.strip()
-                                    metadata['prompt'] = full_prompt
-                                    logger.debug(f"Extracted prompt via fallback: {full_prompt[:100]}... (Length: {len(full_prompt)} chars)")
-                                    break
-                            else:
-                                metadata['prompt'] = "Unknown Prompt"
-                            
-            except Exception as e:
-                logger.warning(f"Prompt extraction failed: {e}")
-                metadata['prompt'] = "Unknown Prompt"
-            
-            return metadata
+            # Use the same multi-landmark approach as the main extraction method
+            return await self.extract_metadata_with_landmark_strategy(page, -1)
             
         except Exception as e:
-            logger.error(f"Error extracting metadata: {e}")
-            return None
+            logger.error(f"Error in fallback multi-landmark extraction: {e}")
+            return {'generation_date': 'Unknown Date', 'prompt': 'Unknown Prompt'}
     
     async def find_and_click_download_button(self, page) -> bool:
         """Find and click the download button using multiple strategies"""
@@ -932,17 +1030,27 @@ class GenerationDownloadManager:
         except Exception as e:
             logger.debug(f"Strategy 2 failed: {e}")
         
-        # Strategy 3: Try to find by SVG icon reference
+        # Strategy 3: Enhanced SVG icon approach with better error handling
         try:
             logger.debug(f"Strategy 3: Looking for SVG with href {self.config.download_icon_href}")
             svg_selector = f"svg use[href='{self.config.download_icon_href}']"
             svg_element = await page.wait_for_selector(svg_selector, timeout=5000)
             if svg_element:
-                # Click the parent span element
+                # Click the parent span element with proper wait
                 parent_span = await svg_element.evaluate_handle("el => el.closest('span[role=\"img\"]')")
-                await parent_span.click()
-                logger.info("Successfully clicked download button using SVG icon strategy")
-                return True
+                if parent_span:
+                    # Ensure element is clickable
+                    is_visible = await parent_span.evaluate("el => el && el.offsetParent !== null")
+                    if is_visible:
+                        await parent_span.click()
+                        # Add small wait to ensure click is processed
+                        await page.wait_for_timeout(500)
+                        logger.info("Successfully clicked download button using SVG icon strategy")
+                        return True
+                    else:
+                        logger.debug("SVG parent element not visible")
+                else:
+                    logger.debug("Could not find parent span for SVG element")
         except Exception as e:
             logger.debug(f"Strategy 3 failed: {e}")
         
@@ -955,9 +1063,770 @@ class GenerationDownloadManager:
         except Exception as e:
             logger.debug(f"Strategy 4 failed: {e}")
         
-        logger.error("All strategies failed to find download button")
+        logger.error("All download button strategies failed")
         return False
     
+    async def _perform_landmark_readiness_checks(self, page) -> Dict[str, bool]:
+        """Perform comprehensive landmark readiness checks to ensure content is loaded"""
+        try:
+            checks = {
+                'creation_time_visible': False,
+                'prompt_content_visible': False,
+                'media_content_visible': False,
+                'button_panel_visible': False
+            }
+            
+            # Check for Creation Time landmark
+            try:
+                creation_elements = await page.query_selector_all(f"span:has-text('{self.config.creation_time_text}')")
+                if creation_elements:
+                    # Verify at least one is visible
+                    for element in creation_elements:
+                        if await element.is_visible():
+                            checks['creation_time_visible'] = True
+                            break
+            except Exception:
+                pass
+            
+            # Check for prompt content (ellipsis pattern)
+            try:
+                prompt_elements = await page.query_selector_all(f"*:has-text('{self.config.prompt_ellipsis_pattern}')")
+                if prompt_elements:
+                    checks['prompt_content_visible'] = len(prompt_elements) > 0
+            except Exception:
+                pass
+            
+            # Check for media content indicators
+            try:
+                media_indicators = await page.query_selector_all("video, img[src*='http'], canvas")
+                checks['media_content_visible'] = len(media_indicators) > 0
+            except Exception:
+                pass
+            
+            # Check for button panel
+            try:
+                button_panels = await page.query_selector_all(self.config.button_panel_selector)
+                if button_panels:
+                    for panel in button_panels:
+                        if await panel.is_visible():
+                            checks['button_panel_visible'] = True
+                            break
+            except Exception:
+                pass
+            
+            logger.debug(f"Landmark readiness checks: {checks}")
+            return checks
+            
+        except Exception as e:
+            logger.error(f"Error in landmark readiness checks: {e}")
+            return {
+                'creation_time_visible': False,
+                'prompt_content_visible': False,
+                'media_content_visible': False,
+                'button_panel_visible': False
+            }
+    
+    async def extract_metadata_with_landmark_strategy(self, page, thumbnail_index: int) -> Optional[Dict[str, str]]:
+        """Extract metadata using prompt-first validation approach after thumbnail selection"""
+        try:
+            logger.debug(f"Starting prompt-first metadata extraction for thumbnail {thumbnail_index}")
+            
+            metadata = {}
+            extraction_timestamp = datetime.now().isoformat()
+            
+            # LANDMARK STRATEGY: Wait for landmarks to be available
+            landmark_wait_attempts = 0
+            max_landmark_wait = 3
+            landmarks_ready = False
+            
+            while landmark_wait_attempts < max_landmark_wait and not landmarks_ready:
+                landmark_wait_attempts += 1
+                
+                landmark_checks = await self._perform_landmark_readiness_checks(page)
+                
+                if landmark_checks['creation_time_visible']:
+                    landmarks_ready = True
+                    logger.debug(f"Landmarks ready after {landmark_wait_attempts} attempts")
+                else:
+                    logger.debug(f"Landmarks not ready (attempt {landmark_wait_attempts}), waiting...")
+                    await page.wait_for_timeout(1500)
+            
+            if not landmarks_ready:
+                logger.warning(f"Landmarks not ready after {max_landmark_wait} attempts, proceeding with extraction")
+            
+            # STEP 1: Find the correct metadata container and extract prompt using "Inspiration Mode" + "Off" pattern
+            metadata_container = None
+            prompt_extracted = False
+            
+            try:
+                logger.info("🔍 Starting prompt extraction")
+                
+                # Check if we have cached selectors for this session
+                if not hasattr(self, '_cached_selectors'):
+                    self._cached_selectors = {}
+                
+                # NEW STRATEGY: Use optimized longest-div extraction for full prompts
+                logger.info("🔍 Using optimized longest-div extraction strategy for full prompts")
+                
+                # OPTIMIZED EXTRACTION: Direct longest-div strategy
+                prompt_extracted = await self._extract_full_prompt_optimized(page, metadata)
+                        
+            except Exception as e:
+                logger.debug(f"Error in Inspiration Mode prompt extraction: {e}")
+            
+            # STEP 2: Use "Inspiration Mode" + "Off" search pattern to find the correct metadata container
+            date_extracted = False
+            validated_container = None
+            
+            try:
+                logger.info("🔍 Starting 'Inspiration Mode' + 'Off' search for metadata container identification")
+                
+                # Cache for validated selectors during this session
+                if not hasattr(self, '_cached_selectors'):
+                    self._cached_selectors = {}
+                
+                # DISABLED: Caching causes all subsequent thumbnails to use the same Creation Time
+                # The cached selector points to the FIRST thumbnail's metadata container,
+                # not the currently active one. Each thumbnail needs fresh metadata search.
+                # if 'creation_time_container_selector' in self._cached_selectors:
+                #     logger.info("📋 Using cached Creation Time container selector")
+                #     ... caching code removed to fix duplicate Creation Time issue
+                
+                # Always perform fresh search for each thumbnail to get correct metadata
+                logger.info("🔄 Performing fresh metadata container search for current thumbnail")
+                
+                # If no cached selector worked, perform fresh search
+                if not validated_container:
+                    # Step 1: Find all spans containing "Inspiration Mode"
+                    inspiration_spans = await page.query_selector_all("span:has-text('Inspiration Mode')")
+                    logger.info(f"📦 Found {len(inspiration_spans)} spans containing 'Inspiration Mode'")
+                    
+                    metadata_candidates = []
+                    
+                    for i, inspiration_span in enumerate(inspiration_spans):
+                        try:
+                            if not await inspiration_span.is_visible():
+                                logger.debug(f"Inspiration Mode span {i} not visible, skipping")
+                                continue
+                            
+                            # Get inspiration span details
+                            inspiration_text = await inspiration_span.text_content()
+                            inspiration_class = await inspiration_span.get_attribute('class') or 'no-class'
+                            
+                            logger.debug(f"🎯 Processing Inspiration Mode span {i}: class='{inspiration_class}' text='{inspiration_text.strip()}'")
+                            
+                            # Step 2: Look for "Off" in the next sibling span
+                            parent = await inspiration_span.evaluate_handle("el => el.parentElement")
+                            if not parent:
+                                logger.debug(f"   No parent element for span {i}")
+                                continue
+                            
+                            parent_spans = await parent.query_selector_all("span")
+                            logger.debug(f"   Parent has {len(parent_spans)} spans")
+                            
+                            # Find the inspiration span index in parent
+                            inspiration_index = -1
+                            for j, span in enumerate(parent_spans):
+                                span_text = await span.text_content()
+                                if "Inspiration Mode" in span_text:
+                                    inspiration_index = j
+                                    break
+                            
+                            # Check if next span contains "Off"
+                            if inspiration_index >= 0 and inspiration_index + 1 < len(parent_spans):
+                                next_span = parent_spans[inspiration_index + 1]
+                                next_span_text = await next_span.text_content()
+                                next_span_class = await next_span.get_attribute('class') or 'no-class'
+                                
+                                logger.debug(f"   Next span: class='{next_span_class}' text='{next_span_text.strip()}'")
+                                
+                                if "Off" in next_span_text:
+                                    logger.info(f"   ✅ Found 'Inspiration Mode' + 'Off' pair in span {i}!")
+                                    
+                                    # Step 3: Search backwards for "Creation Time" + date
+                                    metadata_container = await self._search_creation_time_backwards(parent, i)
+                                    
+                                    if metadata_container:
+                                        # Analyze this metadata container
+                                        container_info = await self._analyze_metadata_container(metadata_container)
+                                        
+                                        if container_info['creation_date']:
+                                            metadata_candidates.append({
+                                                'container': metadata_container,
+                                                'info': container_info,
+                                                'index': i,
+                                                'inspiration_class': inspiration_class,
+                                                'off_class': next_span_class
+                                            })
+                                            
+                                            logger.info(f"   🏆 Found valid metadata container: {container_info['text_length']} chars, date: {container_info['creation_date']}")
+                                        else:
+                                            logger.debug(f"   ❌ Container found but no valid creation date")
+                                    else:
+                                        logger.debug(f"   ❌ No metadata container found for this Inspiration Mode + Off pair")
+                                else:
+                                    logger.debug(f"   ❌ Next span does not contain 'Off': '{next_span_text.strip()}'")
+                            else:
+                                logger.debug(f"   ❌ No next sibling span found or inspiration span not found in parent")
+                            
+                        except Exception as e:
+                            logger.debug(f"Error processing inspiration span {i}: {e}")
+                            continue
+                    
+                    # Select the best metadata candidate
+                    if metadata_candidates:
+                        # Sort by container size (smaller is better for metadata)
+                        metadata_candidates.sort(key=lambda x: x['info']['text_length'])
+                        best_candidate = metadata_candidates[0]
+                        validated_container = best_candidate['container']
+                        
+                        logger.info(f"🏆 Selected best metadata container:")
+                        logger.info(f"   Index: {best_candidate['index']}")
+                        logger.info(f"   Container class: {best_candidate['info']['class']}")
+                        logger.info(f"   Text length: {best_candidate['info']['text_length']} chars")
+                        logger.info(f"   Creation date: {best_candidate['info']['creation_date']}")
+                        
+                        # DISABLED: Do NOT cache the selector as it causes duplicate Creation Time
+                        # Each thumbnail has its own unique metadata container that must be found fresh
+                        # try:
+                        #     container_class = best_candidate['info']['class']
+                        #     if container_class and container_class != 'no-class':
+                        #         class_selector = f".{container_class.replace(' ', '.')}"
+                        #         self._cached_selectors['creation_time_container_selector'] = class_selector
+                        #         logger.info(f"💾 Cached Creation Time container selector: {class_selector}")
+                        # except Exception as e:
+                        #     logger.debug(f"Error caching selector: {e}")
+                        logger.info("📌 Not caching selector - each thumbnail needs fresh metadata search")
+                    else:
+                        logger.warning("❌ No valid metadata containers found using Inspiration Mode + Off search")
+                
+                # Now extract creation time from the validated container
+                if validated_container:
+                    logger.info(f"🕒 Extracting Creation Time from validated Inspiration Mode container")
+                    
+                    # Extract date using the cached information if available
+                    if 'metadata_candidates' in locals() and metadata_candidates and metadata_candidates[0]['info']['creation_date']:
+                        creation_date = metadata_candidates[0]['info']['creation_date']
+                        metadata['generation_date'] = creation_date
+                        date_extracted = True
+                        logger.info(f"🎉 SUCCESS! Extracted date from Inspiration Mode container: '{creation_date}'")
+                    else:
+                        # Fallback extraction if cached info not available
+                        creation_time_spans = await validated_container.query_selector_all(f"span:has-text('{self.config.creation_time_text}')")
+                        logger.info(f"   Found {len(creation_time_spans)} 'Creation Time' spans in validated container")
+                        
+                        for j, time_span in enumerate(creation_time_spans):
+                            try:
+                                if not await time_span.is_visible():
+                                    logger.debug(f"   Creation Time span {j}: Not visible, skipping")
+                                    continue
+                                
+                                logger.info(f"   📍 Processing Creation Time span {j}...")
+                                
+                                # Get the parent div of the "Creation Time" span
+                                time_parent = await time_span.evaluate_handle("el => el.parentElement")
+                                if not time_parent:
+                                    logger.debug(f"   Creation Time span {j}: No parent element, skipping")
+                                    continue
+                                
+                                # Find all spans in this parent (should be the date container div)
+                                parent_spans = await time_parent.query_selector_all("span")
+                                logger.debug(f"   Creation Time parent {j} has {len(parent_spans)} spans")
+                                
+                                # The structure should be: <span>Creation Time</span><span>26 Aug 2025 19:08:21</span>
+                                if len(parent_spans) >= 2:
+                                    date_span = parent_spans[1]  # Second span contains the actual date
+                                    date_text = await date_span.text_content()
+                                    
+                                    if date_text and date_text.strip() != self.config.creation_time_text:
+                                        cleaned_date = date_text.strip()
+                                        
+                                        # Validate this looks like a proper date format
+                                        if self._is_valid_date_text(cleaned_date):
+                                            metadata['generation_date'] = cleaned_date
+                                            date_extracted = True
+                                            logger.info(f"🎉 SUCCESS! Extracted date from validated container: '{cleaned_date}'")
+                                            break
+                                        else:
+                                            logger.warning(f"   ❌ Date candidate failed format validation: '{cleaned_date}'")
+                                    else:
+                                        logger.debug(f"   Date text is empty or same as Creation Time label")
+                                else:
+                                    logger.warning(f"   ❌ Parent has only {len(parent_spans)} spans, expected at least 2")
+                                
+                            except Exception as e:
+                                logger.error(f"   ❌ Error processing Creation Time span {j}: {e}")
+                                continue
+                        
+                        if date_extracted:
+                            logger.info(f"🎉 SUCCESS! Inspiration Mode search extracted correct date from validated container")
+                        else:
+                            logger.warning("Found validated container but failed to extract date from it")
+                else:
+                    logger.warning("No validated metadata container found using Inspiration Mode + Off search")
+                    
+            except Exception as e:
+                logger.error(f"Error in multi-landmark metadata extraction: {e}")
+            
+            # STEP 3: Fallback - if multi-landmark approach failed, try prompt-based container
+            if not date_extracted and metadata_container and prompt_extracted:
+                try:
+                    logger.debug("Multi-landmark failed, trying prompt-based metadata container")
+                    
+                    creation_time_elements = await metadata_container.query_selector_all(f"span:has-text('{self.config.creation_time_text}')")
+                    logger.debug(f"Found {len(creation_time_elements)} creation time elements in prompt-based container")
+                    
+                    for j, time_element in enumerate(creation_time_elements):
+                        try:
+                            if not await time_element.is_visible():
+                                continue
+                            
+                            time_parent = await time_element.evaluate_handle("el => el.parentElement")
+                            if not time_parent:
+                                continue
+                                
+                            spans = await time_parent.query_selector_all("span")
+                            
+                            if len(spans) >= 2:
+                                date_span = spans[1]
+                                date_text = await date_span.text_content()
+                                if date_text and date_text.strip() != self.config.creation_time_text:
+                                    cleaned_date = date_text.strip()
+                                    if len(cleaned_date) > 10 and ('Aug' in cleaned_date or '2025' in cleaned_date):
+                                        metadata['generation_date'] = cleaned_date
+                                        date_extracted = True
+                                        logger.info(f"Extracted date from prompt-based container: {cleaned_date}")
+                                        break
+                        except Exception as e:
+                            logger.debug(f"Error processing time element {j}: {e}")
+                            continue
+                            
+                except Exception as e:
+                    logger.debug(f"Error extracting date from prompt-based container: {e}")
+            
+            # STEP 4: Final fallback - traditional approach (least reliable)
+            if not date_extracted:
+                logger.warning("All advanced approaches failed, falling back to traditional date extraction")
+                try:
+                    creation_time_elements = await page.query_selector_all(f"span:has-text('{self.config.creation_time_text}')")
+                    logger.debug(f"Final fallback: Found {len(creation_time_elements)} creation time elements on page")
+                    
+                    for element in creation_time_elements:
+                        try:
+                            if not await element.is_visible():
+                                continue
+                            
+                            parent = await element.evaluate_handle("el => el.parentElement")
+                            if not parent:
+                                continue
+                                
+                            spans = await parent.query_selector_all("span")
+                            
+                            if len(spans) >= 2:
+                                date_span = spans[1]
+                                date_text = await date_span.text_content()
+                                if date_text and date_text.strip() != self.config.creation_time_text:
+                                    metadata['generation_date'] = date_text.strip()
+                                    date_extracted = True
+                                    logger.debug(f"Final fallback extracted date: {date_text.strip()}")
+                                    break
+                        except Exception as e:
+                            logger.debug(f"Error in final fallback date extraction: {e}")
+                            continue
+                    
+                except Exception as e:
+                    logger.debug(f"Error in final fallback date extraction: {e}")
+            
+            # Log extraction results
+            if self.debug_logger:
+                self.debug_logger.log_step(thumbnail_index, "LANDMARK_EXTRACTION_COMPLETE", {
+                    "date_extracted": date_extracted,
+                    "prompt_extracted": prompt_extracted,
+                    "extraction_timestamp": extraction_timestamp,
+                    "landmarks_ready": landmarks_ready,
+                    "landmark_wait_attempts": landmark_wait_attempts,
+                    "used_metadata_container": metadata_container is not None
+                })
+            
+            # Provide defaults for failed extractions
+            if not date_extracted:
+                metadata['generation_date'] = 'Unknown Date'
+                logger.debug("Date extraction failed, using default")
+            
+            if not prompt_extracted:
+                metadata['prompt'] = 'Unknown Prompt'
+                logger.debug("Prompt extraction failed, using default")
+            
+            logger.info(f"Prompt-first extraction completed for thumbnail {thumbnail_index}: date={date_extracted}, prompt={prompt_extracted}")
+            return metadata
+            
+        except Exception as e:
+            logger.error(f"Error in prompt-first metadata extraction: {e}")
+            return {'generation_date': 'Unknown Date', 'prompt': 'Unknown Prompt'}
+    
+    async def _perform_comprehensive_state_validation(self, page, thumbnail_index: int) -> Dict[str, bool]:
+        """Perform comprehensive state validation to check if thumbnail click was successful"""
+        try:
+            validations = {
+                'content_changed': False,
+                'detail_panel_loaded': False,
+                'active_thumbnail_detected': False,
+                'landmark_elements_visible': False
+            }
+            
+            # Check for content changes using multiple indicators
+            try:
+                # Check for creation time text (indicates detail view loaded)
+                creation_elements = await page.query_selector_all(f"span:has-text('{self.config.creation_time_text}')")
+                validations['landmark_elements_visible'] = len([e for e in creation_elements if await e.is_visible()]) > 0
+            except Exception:
+                pass
+            
+            # Check for detail panel indicators
+            try:
+                # Look for typical detail panel elements
+                detail_indicators = [
+                    ".detail-panel", ".details", "[data-detail]", 
+                    ".generation-info", ".metadata-panel"
+                ]
+                
+                for indicator in detail_indicators:
+                    elements = await page.query_selector_all(indicator)
+                    if any(await e.is_visible() for e in elements):
+                        validations['detail_panel_loaded'] = True
+                        break
+            except Exception:
+                pass
+            
+            # Check for active thumbnail indicators
+            try:
+                active_selectors = [
+                    ".thumbnail-active", ".selected", ".current",
+                    "[data-active='true']", ".thumbnail.active"
+                ]
+                
+                for selector in active_selectors:
+                    elements = await page.query_selector_all(selector)
+                    if elements:
+                        validations['active_thumbnail_detected'] = True
+                        break
+            except Exception:
+                pass
+            
+            # Overall content change assessment
+            validations['content_changed'] = any([
+                validations['landmark_elements_visible'],
+                validations['detail_panel_loaded']
+            ])
+            
+            logger.debug(f"State validation for thumbnail {thumbnail_index}: {validations}")
+            return validations
+            
+        except Exception as e:
+            logger.error(f"Error in comprehensive state validation: {e}")
+            return {
+                'content_changed': False,
+                'detail_panel_loaded': False,
+                'active_thumbnail_detected': False,
+                'landmark_elements_visible': False
+            }
+    
+    async def execute_download_sequence(self, page) -> bool:
+        """Execute the complete download sequence: SVG icon → watermark option"""
+        try:
+            logger.debug("Starting enhanced download sequence...")
+            
+            # Step 1: Click the download button (SVG icon)
+            download_button_clicked = await self.find_and_click_download_button(page)
+            if not download_button_clicked:
+                logger.error("Failed to click download button in sequence")
+                return False
+            
+            logger.debug("Download button clicked successfully, waiting for options...")
+            
+            # Step 2: Wait for download options to appear
+            await page.wait_for_timeout(1500)
+            
+            # Step 3: Look for and click the watermark option with enhanced strategy
+            watermark_clicked = await self._enhanced_watermark_click_sequence(page)
+            
+            if watermark_clicked:
+                logger.info("Complete download sequence successful: SVG → watermark")
+                return True
+            else:
+                logger.warning("Watermark option not found, but download button was clicked")
+                # Check if download started anyway
+                download_started = await self._check_download_initiated(page)
+                if download_started:
+                    logger.info("Download appears to have started without watermark option")
+                    return True
+                else:
+                    logger.warning("No download activity detected after button click")
+                    return False
+            
+        except Exception as e:
+            logger.error(f"Error in download sequence: {e}")
+            return False
+    
+    async def _enhanced_watermark_click_sequence(self, page) -> bool:
+        """Enhanced sequence for finding and clicking the watermark option"""
+        try:
+            logger.debug("Starting enhanced watermark click sequence...")
+            
+            # Multiple attempts with different strategies
+            for attempt in range(3):
+                logger.debug(f"Watermark click attempt {attempt + 1}/3")
+                
+                # Strategy 1: CSS selector (most reliable if available)
+                if await self._try_watermark_css_selector(page):
+                    return True
+                
+                # Strategy 2: Text-based search
+                if await self._try_watermark_text_search(page):
+                    return True
+                
+                # Strategy 3: Advanced DOM traversal
+                if await self._try_watermark_dom_traversal(page):
+                    return True
+                
+                # Wait before next attempt
+                if attempt < 2:
+                    await page.wait_for_timeout(1500)
+            
+            logger.debug("All watermark click strategies failed")
+            return False
+            
+        except Exception as e:
+            logger.error(f"Error in enhanced watermark sequence: {e}")
+            return False
+    
+    async def _try_watermark_css_selector(self, page) -> bool:
+        """Try clicking watermark option using CSS selector with enhanced targeting"""
+        try:
+            # Strategy 1: Try the original CSS selector
+            element = await page.wait_for_selector(self.config.download_no_watermark_selector, timeout=3000)
+            if element and await element.is_visible():
+                await element.click()
+                logger.info(f"Clicked watermark using original CSS selector: {self.config.download_no_watermark_selector}")
+                return True
+        except Exception as e:
+            logger.debug(f"Original CSS selector strategy failed: {e}")
+        
+        # Strategy 2: Try targeting the specific DOM structure from the user's example
+        try:
+            # Look for the specific watermark SVG icon and its parent containers
+            enhanced_selectors = [
+                # Target the icon-block container directly
+                'div.icon-block:has(use[xlink:href="#icon-icon_gongneng_20px_wushuiyin"])',
+                'div.line:has(use[xlink:href="#icon-icon_gongneng_20px_wushuiyin"])',
+                # Target by the watermark text in the specific structure
+                f'div.icon-block:has(.text:has-text("{self.config.download_no_watermark_text}"))',
+                f'div.line:has(.text:has-text("{self.config.download_no_watermark_text}"))',
+                # Target the anticon container and go up to clickable parent
+                'div.line:has(.anticon.lineIcon)',
+                'div.icon-block:has(.anticon.lineIcon)'
+            ]
+            
+            for selector in enhanced_selectors:
+                try:
+                    element = await page.wait_for_selector(selector, timeout=2000)
+                    if element and await element.is_visible():
+                        await element.click()
+                        logger.info(f"Clicked watermark using enhanced CSS selector: {selector}")
+                        return True
+                except Exception:
+                    continue
+                    
+        except Exception as e:
+            logger.debug(f"Enhanced CSS selector strategy failed: {e}")
+        
+        return False
+    
+    async def _try_watermark_text_search(self, page) -> bool:
+        """Try clicking watermark option using text search with parent container approach"""
+        try:
+            # Strategy 1: Look for the specific SVG icon first (most reliable)
+            svg_selectors = [
+                'use[xlink:href="#icon-icon_gongneng_20px_wushuiyin"]',
+                'svg use[xlink:href="#icon-icon_gongneng_20px_wushuiyin"]',
+                'svg:has(use[xlink:href="#icon-icon_gongneng_20px_wushuiyin"])'
+            ]
+            
+            for svg_selector in svg_selectors:
+                try:
+                    svg_element = await page.wait_for_selector(svg_selector, timeout=2000)
+                    if svg_element:
+                        # Find the clickable parent container (icon-block or line)
+                        parent_containers = [
+                            await svg_element.query_selector('xpath=ancestor::div[contains(@class, "icon-block")]'),
+                            await svg_element.query_selector('xpath=ancestor::div[contains(@class, "line")]'),
+                            await svg_element.query_selector('xpath=ancestor::div[contains(@class, "anticon")]/../..'),
+                            await svg_element.query_selector('xpath=ancestor::*[contains(text(), "Download without Watermark")]/..')
+                        ]
+                        
+                        for container in parent_containers:
+                            if container and await container.is_visible():
+                                await container.click()
+                                logger.info(f"Clicked watermark using SVG parent container approach")
+                                return True
+                except Exception:
+                    continue
+            
+            # Strategy 2: Look for text and find parent container
+            text_element = None
+            try:
+                # Find element containing the watermark text
+                text_selectors = [
+                    f"div.text:has-text('{self.config.download_no_watermark_text}')",
+                    f"*:has-text('{self.config.download_no_watermark_text}'):not(body):not(html)"
+                ]
+                
+                for text_selector in text_selectors:
+                    text_element = await page.wait_for_selector(text_selector, timeout=2000)
+                    if text_element:
+                        break
+                
+                if text_element:
+                    # Navigate up to find clickable parent
+                    parent_containers = [
+                        await text_element.query_selector('xpath=ancestor::div[contains(@class, "icon-block")]'),
+                        await text_element.query_selector('xpath=ancestor::div[contains(@class, "line")]'),
+                        await text_element.query_selector('xpath=../..'),  # Go up 2 levels
+                        await text_element.query_selector('xpath=..')      # Go up 1 level
+                    ]
+                    
+                    for container in parent_containers:
+                        if container and await container.is_visible():
+                            # Validate this looks like a button container
+                            class_name = await container.get_attribute('class') or ''
+                            if 'icon' in class_name.lower() or 'line' in class_name.lower() or 'button' in class_name.lower():
+                                await container.click()
+                                logger.info(f"Clicked watermark using text parent container approach")
+                                return True
+                            
+            except Exception as e:
+                logger.debug(f"Text-based parent search failed: {e}")
+            
+            # Strategy 3: Fallback to direct text matching (original approach)
+            selectors = [
+                f"*:has-text('{self.config.download_no_watermark_text}')",
+                f"div:has-text('{self.config.download_no_watermark_text}')",
+                f"span:has-text('{self.config.download_no_watermark_text}')",
+                f"button:has-text('{self.config.download_no_watermark_text}')"
+            ]
+            
+            for selector in selectors:
+                try:
+                    element = await page.wait_for_selector(selector, timeout=2000)
+                    if element and await element.is_visible():
+                        await element.click()
+                        logger.info(f"Clicked watermark using fallback text selector: {selector}")
+                        return True
+                except Exception:
+                    continue
+                    
+        except Exception as e:
+            logger.debug(f"Text search strategy failed: {e}")
+        return False
+    
+    async def _try_watermark_dom_traversal(self, page) -> bool:
+        """Try clicking watermark option using DOM traversal with parent container logic"""
+        try:
+            # Strategy 1: Look for elements with watermark text and find their clickable parents
+            elements = await page.query_selector_all("div, span, button, a, p")
+            
+            text_elements = []
+            for element in elements:
+                try:
+                    text_content = await element.text_content()
+                    if text_content and self.config.download_no_watermark_text in text_content.strip():
+                        if await element.is_visible():
+                            text_elements.append(element)
+                except Exception:
+                    continue
+            
+            # For each text element, try to find clickable parent
+            for text_element in text_elements:
+                try:
+                    # Try different parent levels
+                    parent_candidates = []
+                    current = text_element
+                    
+                    # Go up the DOM tree looking for clickable parents
+                    for level in range(5):  # Check up to 5 parent levels
+                        try:
+                            parent = await current.query_selector('xpath=..')
+                            if parent:
+                                parent_candidates.append(parent)
+                                current = parent
+                            else:
+                                break
+                        except:
+                            break
+                    
+                    # Try clicking each parent from most specific to most general
+                    for parent in parent_candidates:
+                        try:
+                            if await parent.is_visible():
+                                # Check if this parent looks like a clickable container
+                                tag_name = await parent.evaluate('el => el.tagName.toLowerCase()')
+                                class_name = await parent.get_attribute('class') or ''
+                                
+                                # Prefer containers that look clickable
+                                clickable_indicators = [
+                                    'icon' in class_name.lower(),
+                                    'line' in class_name.lower(), 
+                                    'button' in class_name.lower(),
+                                    'click' in class_name.lower(),
+                                    tag_name in ['button', 'a', 'div']
+                                ]
+                                
+                                if any(clickable_indicators):
+                                    await parent.click()
+                                    logger.info(f"Clicked watermark using DOM traversal parent container (tag: {tag_name}, class: {class_name})")
+                                    return True
+                        except Exception:
+                            continue
+                            
+                except Exception as e:
+                    logger.debug(f"Error processing text element: {e}")
+                    continue
+            
+            # Strategy 2: Fallback to direct text element clicking (original approach)
+            for element in text_elements:
+                try:
+                    if await element.is_visible() and await element.is_enabled():
+                        await element.click()
+                        logger.info("Clicked watermark using DOM traversal direct text")
+                        return True
+                except Exception:
+                    continue
+                    
+        except Exception as e:
+            logger.debug(f"DOM traversal strategy failed: {e}")
+        return False
+    
+    async def _check_download_initiated(self, page) -> bool:
+        """Check if download has been initiated by looking for download indicators"""
+        try:
+            indicators = [
+                ".download-progress", ".downloading", "[data-downloading]",
+                "text=Downloading", "text=Download started", ".download-initiated"
+            ]
+            
+            for indicator in indicators:
+                try:
+                    element = await page.wait_for_selector(indicator, timeout=1000)
+                    if element:
+                        logger.debug(f"Download indicator found: {indicator}")
+                        return True
+                except Exception:
+                    continue
+            
+            return False
+        except Exception:
+            return False
+
     async def find_and_click_no_watermark(self, page) -> bool:
         """Find and click the 'Download without Watermark' option"""
         logger.debug("Attempting to find 'Download without Watermark' option...")
@@ -1076,9 +1945,11 @@ class GenerationDownloadManager:
                 pass
             
             # Method 3: Press Escape to close any popups
+            # DISABLED: Escape key press causes gallery to close and navigate back to main page
+            # This breaks multi-thumbnail automation by leaving the detail view
             try:
-                await page.keyboard.press("Escape")
-                logger.debug("Pressed Escape to close popups")
+                # await page.keyboard.press("Escape")  # REMOVED - causes navigation issues
+                logger.debug("Skipped Escape key press to avoid navigation issues")
             except:
                 pass
             
@@ -1133,19 +2004,107 @@ class GenerationDownloadManager:
         try:
             logger.info(f"Starting download for thumbnail {thumbnail_index}")
             
+            # DEBUG: Log thumbnail click attempt
+            if self.debug_logger:
+                self.debug_logger.log_step(thumbnail_index, "THUMBNAIL_CLICK_START", {
+                    "thumbnail_index": thumbnail_index,
+                    "page_url": page.url,
+                    "timestamp": datetime.now().isoformat()
+                })
+            
             # Click on thumbnail to load generation details
-            # Try multiple thumbnail selectors
+            # Try multiple thumbnail selectors with enhanced error handling
             thumbnail_clicked = False
+            click_attempts = 0
+            max_click_attempts = 3
+            
             for selector in self.config.thumbnail_selector.split(", "):
-                try:
-                    thumbnail_selector = f"{selector}:nth-child({thumbnail_index + 1})"
-                    await page.click(thumbnail_selector, timeout=10000)
-                    await page.wait_for_timeout(2000)  # Wait for content to load
-                    thumbnail_clicked = True
-                    logger.debug(f"Successfully clicked thumbnail using selector: {selector}")
+                if thumbnail_clicked:
                     break
-                except Exception as e:
-                    logger.debug(f"Thumbnail selector {selector} failed: {e}")
+                    
+                for attempt in range(max_click_attempts):
+                    try:
+                        thumbnail_selector = f"{selector}:nth-child({thumbnail_index + 1})"
+                        
+                        # First verify the element exists and is visible
+                        element = await page.query_selector(thumbnail_selector)
+                        if not element:
+                            logger.debug(f"Element not found: {thumbnail_selector}")
+                            continue
+                            
+                        is_visible = await element.is_visible()
+                        if not is_visible:
+                            logger.debug(f"Element not visible: {thumbnail_selector}")
+                            continue
+                        
+                        # Try clicking with timeout
+                        await page.click(thumbnail_selector, timeout=5000)
+                        
+                        # CRITICAL FIX: Enhanced validation with multiple checks
+                        await page.wait_for_timeout(1500)  # Initial wait for UI update
+                        
+                        # Multiple validation approaches for state change
+                        state_validations = await self._perform_comprehensive_state_validation(page, thumbnail_index)
+                        
+                        # Check if any validation method confirms state change
+                        state_changed = any([
+                            state_validations.get('content_changed', False),
+                            state_validations.get('detail_panel_loaded', False),
+                            state_validations.get('active_thumbnail_detected', False)
+                        ])
+                        
+                        if not state_changed:
+                            logger.debug(f"Initial state validation failed for {thumbnail_selector}, trying extended wait")
+                            # Extended wait and retry
+                            await page.wait_for_timeout(3000)
+                            state_validations = await self._perform_comprehensive_state_validation(page, thumbnail_index)
+                            state_changed = any([
+                                state_validations.get('content_changed', False),
+                                state_validations.get('detail_panel_loaded', False),
+                                state_validations.get('active_thumbnail_detected', False)
+                            ])
+                            
+                            # Log detailed validation results
+                            if self.debug_logger:
+                                self.debug_logger.log_step(thumbnail_index, "EXTENDED_STATE_VALIDATION", state_validations)
+                        
+                        if state_changed:
+                            thumbnail_clicked = True
+                            logger.info(f"Successfully clicked thumbnail using selector: {selector} (attempt {attempt + 1})")
+                            
+                            # DEBUG: Log successful thumbnail click with validation details
+                            if self.debug_logger:
+                                self.debug_logger.log_thumbnail_click(
+                                    thumbnail_index=thumbnail_index,
+                                    thumbnail_selector=thumbnail_selector,
+                                    click_success=True
+                                )
+                                self.debug_logger.log_step(thumbnail_index, "THUMBNAIL_CLICK_SUCCESS", {
+                                    "selector": selector,
+                                    "attempt": attempt + 1,
+                                    "state_validations": state_validations
+                                })
+                            break
+                        else:
+                            logger.debug(f"State validation failed for {thumbnail_selector}, attempt {attempt + 1}")
+                            logger.debug(f"Validation details: {state_validations}")
+                            
+                    except Exception as e:
+                        click_attempts += 1
+                        logger.debug(f"Thumbnail selector {selector} failed (attempt {attempt + 1}): {e}")
+                        if self.debug_logger:
+                            self.debug_logger.log_thumbnail_click(
+                                thumbnail_index=thumbnail_index,
+                                thumbnail_selector=f"{selector}:nth-child({thumbnail_index + 1})",
+                                click_success=False
+                            )
+                        
+                        # Wait before retrying
+                        if attempt < max_click_attempts - 1:
+                            await page.wait_for_timeout(1000)
+                            
+                if thumbnail_clicked:
+                    break
             
             if not thumbnail_clicked:
                 logger.error(f"Failed to click thumbnail {thumbnail_index}")
@@ -1159,11 +2118,73 @@ class GenerationDownloadManager:
             initial_files = set(download_path.glob('*')) if download_path.exists() else set()
             logger.debug(f"Initial files in directory: {len(initial_files)}")
             
-            # Extract metadata before download
-            metadata_dict = await self.extract_metadata_from_page(page)
+            # CRITICAL FIX: Enhanced content loading validation with landmark-based approach
+            await page.wait_for_timeout(1500)  # Increased wait time
+            
+            # Validate content is properly loaded for this thumbnail
+            content_loaded = await self.validate_content_loaded_for_thumbnail(page, thumbnail_index)
+            
+            # Enhanced context validation with multiple checks
+            context_validation = await self._validate_thumbnail_context(page, thumbnail_index)
+            if self.debug_logger:
+                self.debug_logger.log_step(thumbnail_index, "PRE_EXTRACTION_CONTEXT_VALIDATION", {
+                    **context_validation,
+                    "content_loaded": content_loaded,
+                    "timestamp": datetime.now().isoformat()
+                })
+            
+            # CRITICAL: More robust content validation with retries
+            validation_attempts = 0
+            max_validation_attempts = 3
+            content_ready = False
+            
+            while validation_attempts < max_validation_attempts and not content_ready:
+                validation_attempts += 1
+                
+                # Check for landmark elements that indicate content is loaded
+                landmark_checks = await self._perform_landmark_readiness_checks(page)
+                
+                if landmark_checks['creation_time_visible'] and (landmark_checks['prompt_content_visible'] or landmark_checks['media_content_visible']):
+                    content_ready = True
+                    logger.info(f"Landmark validation passed for thumbnail {thumbnail_index} (attempt {validation_attempts})")
+                else:
+                    logger.debug(f"Landmark validation failed for thumbnail {thumbnail_index} (attempt {validation_attempts}): {landmark_checks}")
+                    if validation_attempts < max_validation_attempts:
+                        await page.wait_for_timeout(2000)  # Wait before retry
+            
+            if not content_ready:
+                logger.warning(f"Content readiness validation failed after {max_validation_attempts} attempts for thumbnail {thumbnail_index}")
+                # Continue but log the issue
+            
+            # LANDMARK STRATEGY: Extract metadata using enhanced landmark-based approach
+            metadata_dict = await self.extract_metadata_with_landmark_strategy(page, thumbnail_index)
+            if not metadata_dict or not metadata_dict.get('generation_date') or metadata_dict.get('generation_date') == 'Unknown':
+                logger.warning(f"Landmark strategy failed for thumbnail {thumbnail_index}, trying legacy extraction")
+                # Fallback to original method
+                metadata_dict = await self.extract_metadata_from_page(page)
+                
             if not metadata_dict:
-                logger.warning(f"Failed to extract metadata for thumbnail {thumbnail_index}, continuing anyway")
+                logger.warning(f"All metadata extraction failed for thumbnail {thumbnail_index}, using defaults")
                 metadata_dict = {'generation_date': 'Unknown', 'prompt': 'Unknown'}
+            
+            # DEBUG: Log extracted metadata with enhanced details and landmark info
+            if self.debug_logger:
+                extraction_success = bool(metadata_dict and metadata_dict.get('generation_date', 'Unknown') != 'Unknown')
+                self.debug_logger.log_metadata_extraction(
+                    thumbnail_index=thumbnail_index,
+                    extraction_method="enhanced_landmark_strategy",
+                    extracted_data=metadata_dict,
+                    success=extraction_success
+                )
+                
+                # Also log extraction strategy effectiveness
+                self.debug_logger.log_step(thumbnail_index, "METADATA_EXTRACTION_RESULT", {
+                    "success": extraction_success,
+                    "method": "enhanced_landmark_strategy",
+                    "has_date": bool(metadata_dict.get('generation_date') != 'Unknown'),
+                    "has_prompt": bool(metadata_dict.get('prompt') != 'Unknown'),
+                    "extraction_confidence": "high" if extraction_success else "low"
+                })
             
             # Get next file ID
             file_id = self.logger.get_next_file_id()
@@ -1182,59 +2203,16 @@ class GenerationDownloadManager:
             # Add download listener to page
             page.on("download", handle_download)
             
-            # Click download button using enhanced strategies
-            if not await self.find_and_click_download_button(page):
-                logger.error("Failed to click download button")
+            # CRITICAL FIX: Enhanced download button sequence with proper SVG → Watermark flow
+            download_initiated = await self.execute_download_sequence(page)
+            if not download_initiated:
+                logger.error("Failed to execute download sequence")
                 page.remove_listener("download", handle_download)
                 return False
             
-            # Wait for download modal/options to appear and try to find watermark option
-            logger.debug("Waiting for download options to appear...")
-            await page.wait_for_timeout(1000)
-            
-            # Try to click download without watermark with more aggressive timing
-            watermark_clicked = False
-            for attempt in range(3):
-                logger.debug(f"Attempt {attempt + 1} to find 'Download without Watermark'")
-                
-                if await self.find_and_click_no_watermark(page):
-                    watermark_clicked = True
-                    break
-                    
-                # Wait a bit more if first attempts fail
-                if attempt < 2:
-                    await page.wait_for_timeout(1500)
-            
-            if not watermark_clicked:
-                logger.warning("Failed to click 'Download without Watermark' after multiple attempts")
-                
-                # Check if download started anyway (sometimes download button alone is enough)
-                logger.debug("Checking if download started without watermark option...")
-                await page.wait_for_timeout(1000)
-                
-                # Look for download-related elements to see if download is in progress
-                download_indicators = [
-                    ".download-progress", ".downloading", "[data-downloading]",
-                    "text=Downloading", "text=Download started"
-                ]
-                
-                download_started = False
-                for indicator in download_indicators:
-                    try:
-                        element = await page.wait_for_selector(indicator, timeout=1000)
-                        if element:
-                            logger.info(f"Download appears to have started (found: {indicator})")
-                            download_started = True
-                            break
-                    except:
-                        continue
-                
-                if not download_started:
-                    logger.debug("No download indicators found, trying download button again")
-                    # Sometimes clicking download button again helps
-                    await self.find_and_click_download_button(page)
-            else:
-                logger.info("Successfully clicked 'Download without Watermark' option")
+            # The download sequence is now handled in execute_download_sequence method
+            # This includes both the SVG icon click and watermark option handling
+            logger.debug("Download sequence completed, checking for additional confirmations...")
             
             # Wait longer and check for additional UI elements
             await page.wait_for_timeout(2000)
@@ -1332,6 +2310,24 @@ class GenerationDownloadManager:
             
             # Rename file with enhanced naming
             creation_date = metadata_dict.get('generation_date', 'Unknown Date')
+            
+            # DEBUG: Log file naming process
+            if self.debug_logger:
+                self.debug_logger.log_file_naming(
+                    thumbnail_index=thumbnail_index,
+                    original_filename=downloaded_file.name,
+                    new_filename="PENDING",  # Will be updated after renaming
+                    naming_data={
+                        'use_descriptive_naming': self.config.use_descriptive_naming,
+                        'unique_id': self.config.unique_id,
+                        'creation_date': creation_date,
+                        'naming_format': self.config.naming_format,
+                        'date_format': self.config.date_format,
+                        'extracted_metadata': metadata_dict
+                    },
+                    success=True
+                )
+            
             renamed_file = self.file_manager.rename_file(
                 downloaded_file, 
                 new_id=file_id,  # Legacy fallback
@@ -1339,7 +2335,35 @@ class GenerationDownloadManager:
             )
             if not renamed_file:
                 logger.error(f"Failed to rename downloaded file")
+                
+                # DEBUG: Log renaming failure
+                if self.debug_logger:
+                    self.debug_logger.log_file_naming(
+                        thumbnail_index=thumbnail_index,
+                        original_filename=downloaded_file.name,
+                        new_filename="FAILED",
+                        naming_data={'error': 'rename_file returned None'},
+                        success=False,
+                        error="rename_file method returned None"
+                    )
                 return False
+            
+            # DEBUG: Log successful renaming
+            if self.debug_logger:
+                self.debug_logger.log_file_naming(
+                    thumbnail_index=thumbnail_index,
+                    original_filename=downloaded_file.name,
+                    new_filename=renamed_file.name,
+                    naming_data={
+                        'use_descriptive_naming': self.config.use_descriptive_naming,
+                        'unique_id': self.config.unique_id,
+                        'creation_date': creation_date,
+                        'naming_format': self.config.naming_format,
+                        'date_format': self.config.date_format,
+                        'final_result': str(renamed_file)
+                    },
+                    success=True
+                )
             
             # Create metadata object
             download_duration = time.time() - download_start_time
@@ -1385,6 +2409,14 @@ class GenerationDownloadManager:
         
         try:
             logger.info("🚀 Starting generation download automation with infinite scroll support")
+            
+            # STEP 1: Configure Chromium browser settings to suppress download popups
+            logger.info("⚙️ Configuring Chromium browser settings to suppress download notifications")
+            settings_configured = await self._configure_chromium_download_settings(page)
+            if not settings_configured:
+                logger.warning("⚠️ Failed to configure Chromium settings, continuing with automation (downloads popup may appear)")
+            else:
+                logger.info("✅ Chromium download settings configured successfully")
             
             # Navigate to completed tasks (9th item, index 8)
             try:
@@ -1505,6 +2537,354 @@ class GenerationDownloadManager:
         
         return results
     
+    async def _search_creation_time_backwards(self, parent_element, span_index: int) -> Optional[object]:
+        """Search backwards from 'Inspiration Mode' parent to find 'Creation Time' + date"""
+        logger.debug(f"   🔍 Searching backwards for 'Creation Time' + date from span {span_index}")
+        
+        try:
+            # Get the parent container (likely the metadata container)
+            metadata_container = await parent_element.evaluate_handle("el => el.parentElement")
+            if not metadata_container:
+                logger.debug("   ❌ No metadata container found")
+                return None
+            
+            # Look for all child divs that might contain Creation Time
+            child_divs = await metadata_container.query_selector_all("div")
+            logger.debug(f"   📦 Found {len(child_divs)} child divs in metadata container")
+            
+            for i, div in enumerate(child_divs):
+                try:
+                    div_text = await div.text_content() or ""
+                    
+                    if "Creation Time" in div_text:
+                        logger.debug(f"   ✅ Found 'Creation Time' in div {i}: '{div_text[:100]}...'")
+                        
+                        # Look for spans within this div
+                        div_spans = await div.query_selector_all("span")
+                        logger.debug(f"     Div has {len(div_spans)} spans")
+                        
+                        # Find Creation Time span and check for date in next span
+                        creation_time_index = -1
+                        for j, span in enumerate(div_spans):
+                            span_text = await span.text_content() or ""
+                            if "Creation Time" in span_text:
+                                creation_time_index = j
+                                break
+                        
+                        # Check if next span contains the date
+                        if creation_time_index >= 0 and creation_time_index + 1 < len(div_spans):
+                            date_span = div_spans[creation_time_index + 1]
+                            date_text = await date_span.text_content() or ""
+                            
+                            # Validate this looks like a date
+                            if self._is_valid_date_text(date_text):
+                                logger.debug(f"     ✅ Found valid Creation Time date: '{date_text.strip()}'")
+                                return metadata_container
+                            else:
+                                logger.debug(f"     ❌ Next span doesn't look like date: '{date_text.strip()}'")
+                
+                except Exception as e:
+                    logger.debug(f"Error processing div {i}: {e}")
+                    continue
+            
+            logger.debug("   ❌ No 'Creation Time' + date pair found")
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error searching for Creation Time: {e}")
+            return None
+
+    async def _analyze_metadata_container(self, metadata_container) -> Dict[str, Any]:
+        """Analyze the metadata container properties and extract creation date"""
+        try:
+            container_text = await metadata_container.text_content() or ""
+            container_class = await metadata_container.get_attribute('class') or 'no-class'
+            container_id = await metadata_container.get_attribute('id') or 'no-id'
+            
+            # Get bounding box if possible
+            bounding_box = None
+            try:
+                bounding_box = await metadata_container.bounding_box()
+            except:
+                pass
+            
+            # Extract creation date
+            creation_date = None
+            try:
+                creation_time_spans = await metadata_container.query_selector_all(f"span:has-text('{self.config.creation_time_text}')")
+                for time_span in creation_time_spans:
+                    time_parent = await time_span.evaluate_handle("el => el.parentElement")
+                    if time_parent:
+                        parent_spans = await time_parent.query_selector_all("span")
+                        if len(parent_spans) >= 2:
+                            date_span = parent_spans[1]
+                            date_text = await date_span.text_content()
+                            if date_text and self._is_valid_date_text(date_text):
+                                creation_date = date_text.strip()
+                                break
+            except Exception as e:
+                logger.debug(f"Error extracting creation date: {e}")
+            
+            container_info = {
+                'class': container_class,
+                'id': container_id,
+                'text_length': len(container_text),
+                'text_sample': container_text[:300] + "..." if len(container_text) > 300 else container_text,
+                'bounding_box': bounding_box,
+                'creation_date': creation_date
+            }
+            
+            logger.debug(f"   📦 Metadata container: class='{container_class}' id='{container_id}' text_length={len(container_text)} date={creation_date}")
+            
+            return container_info
+            
+        except Exception as e:
+            logger.error(f"Error analyzing metadata container: {e}")
+            return {'class': 'error', 'id': 'error', 'text_length': 0, 'text_sample': '', 'bounding_box': None, 'creation_date': None}
+
+    def _is_valid_date_text(self, text: str) -> bool:
+        """Check if text looks like a valid date"""
+        if not text or len(text.strip()) < 10:
+            return False
+        
+        text = text.strip()
+        
+        # Check for date indicators
+        date_indicators = ['Aug', '2025', ':', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Sep', 'Oct', 'Nov', 'Dec']
+        matches = sum(1 for indicator in date_indicators if indicator in text)
+        
+        return matches >= 2  # Should have at least month and year or time
+
+    async def _search_prompt_in_container(self, metadata_container, span_index: int, page=None) -> Optional[Dict[str, str]]:
+        """Search for prompt text within the metadata container using ellipsis pattern"""
+        logger.debug(f"   🔍 Searching for prompt in metadata container from span {span_index}")
+        
+        try:
+            # Look for ellipsis pattern within this container
+            ellipsis_elements = await metadata_container.query_selector_all(f"*:has-text('{self.config.prompt_ellipsis_pattern}')")
+            logger.debug(f"   📦 Found {len(ellipsis_elements)} elements with ellipsis in container")
+            
+            for i, element in enumerate(ellipsis_elements):
+                try:
+                    if not await element.is_visible():
+                        continue
+                    
+                    # Look for span with aria-describedby within this element
+                    prompt_span = await element.query_selector("span[aria-describedby]")
+                    if prompt_span:
+                        prompt_text = await prompt_span.text_content()
+                        
+                        # Check if prompt is truncated (ends with ellipsis or is suspiciously around 102 chars)
+                        is_truncated = (prompt_text and (
+                            len(prompt_text.strip()) in range(100, 106)  # Common truncation length
+                        ))
+                        
+                        if is_truncated:
+                            logger.debug(f"   ⚠️ Prompt appears truncated at {len(prompt_text)} chars: '{prompt_text[:50]}...'")
+                            # Try to get full text from aria-describedby tooltip or other sources
+                            try:
+                                # First try: Get the full text from the tooltip/describedby element
+                                aria_id = await prompt_span.get_attribute('aria-describedby')
+                                if aria_id:
+                                    tooltip_element = await metadata_container.query_selector(f"#{aria_id}")
+                                    if tooltip_element:
+                                        full_text = await tooltip_element.text_content()
+                                        if full_text and len(full_text) > len(prompt_text):
+                                            prompt_text = full_text
+                                            logger.info(f"   ✅ Got full prompt from tooltip: {len(full_text)} chars")
+                                
+                                # Second try: Check if there's a title attribute with full text
+                                title_text = await prompt_span.get_attribute('title')
+                                if title_text and len(title_text) > len(prompt_text):
+                                    prompt_text = title_text
+                                    logger.info(f"   ✅ Got full prompt from title attribute: {len(title_text)} chars")
+                                
+                                # Third try: Click on prompt to expand it if possible
+                                try:
+                                    await prompt_span.click()
+                                    await prompt_span.evaluate("el => new Promise(resolve => setTimeout(resolve, 500))")
+                                    # Re-get the text after clicking
+                                    expanded_text = await prompt_span.text_content()
+                                    if expanded_text and len(expanded_text) > len(prompt_text):
+                                        prompt_text = expanded_text
+                                        logger.info(f"   ✅ Got full prompt after expansion: {len(expanded_text)} chars")
+                                except:
+                                    pass
+                                    
+                            except Exception as e:
+                                logger.debug(f"   Error trying to get full prompt text: {e}")
+                        
+                        if prompt_text and self._is_valid_prompt_text(prompt_text):
+                            logger.info(f"   ✅ Found valid prompt text ({len(prompt_text)} chars): '{prompt_text[:50]}...'")
+                            
+                            # Try to create a selector for this span
+                            selector = None
+                            try:
+                                aria_describedby = await prompt_span.get_attribute('aria-describedby')
+                                if aria_describedby:
+                                    selector = f"span[aria-describedby='{aria_describedby}']"
+                            except:
+                                pass
+                            
+                            return {
+                                'text': prompt_text.strip(),
+                                'selector': selector
+                            }
+                        else:
+                            logger.debug(f"   ❌ Invalid prompt text: '{prompt_text[:30]}...'")
+                
+                except Exception as e:
+                    logger.debug(f"Error processing ellipsis element {i}: {e}")
+                    continue
+            
+            logger.debug("   ❌ No valid prompt found in container")
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error searching for prompt in container: {e}")
+            return None
+
+    def _is_valid_prompt_text(self, text: str) -> bool:
+        """Check if text looks like a valid prompt"""
+        if not text:
+            return False
+        
+        text = text.strip()
+        
+        # Basic length check
+        if len(text) < 20 or len(text) > 1000:
+            return False
+        
+        # Should not contain technical indicators
+        invalid_indicators = [
+            ':', '{', '}', 'anticon', 'display:', 'px', 'html', 'css', 
+            'javascript', 'style', 'class', 'div', 'span'
+        ]
+        
+        for indicator in invalid_indicators:
+            if indicator in text.lower():
+                return False
+        
+        # Should look like natural text
+        if not text[0].isupper():
+            return False
+        
+        # Should contain common words
+        common_words = ['the', 'a', 'and', 'with', 'of', 'to', 'in', 'is', 'are', 'was', 'were']
+        if not any(word in text.lower() for word in common_words):
+            return False
+        
+        return True
+
+    async def _extract_full_prompt_optimized(self, page, metadata: Dict[str, str]) -> bool:
+        """
+        Optimized prompt extraction using longest-div strategy.
+        
+        Based on analysis: DOM contains ~31 prompt divs with class 'sc-dDrhAi dnESm'
+        - 30 divs have truncated text (103-106 chars)
+        - 1 div has full prompt text (325+ chars)
+        
+        This method finds the div with longest text content.
+        
+        Returns:
+            bool: True if full prompt was extracted successfully
+        """
+        try:
+            logger.debug("🔍 Starting optimized longest-div prompt extraction")
+            
+            # Find all prompt divs with the configured class selector
+            prompt_divs = await page.query_selector_all(self.config.prompt_class_selector)
+            logger.info(f"📦 Found {len(prompt_divs)} prompt divs with selector '{self.config.prompt_class_selector}'")
+            
+            if not prompt_divs:
+                logger.warning(f"⚠️ No prompt divs found with selector: {self.config.prompt_class_selector}")
+                return False
+            
+            # Find the div with the longest text content (this should be the full prompt)
+            longest_div = None
+            longest_text = ""
+            longest_length = 0
+            
+            for i, div in enumerate(prompt_divs):
+                try:
+                    if not await div.is_visible():
+                        continue
+                    
+                    div_text = await div.text_content()
+                    if not div_text:
+                        continue
+                    
+                    # Look for divs that contain the expected prompt content
+                    div_text_clean = div_text.strip()
+                    text_length = len(div_text_clean)
+                    
+                    # Check if this looks like a prompt (contains configured prompt indicators)
+                    contains_prompt_words = any(word in div_text_clean.lower() for word in self.config.prompt_indicators)
+                    
+                    if contains_prompt_words and text_length > 50:  # Must be substantial text
+                        logger.debug(f"📏 Prompt div {i+1}: {text_length} chars - '{div_text_clean[:60]}...'")
+                        
+                        if text_length > longest_length:
+                            longest_length = text_length
+                            longest_text = div_text_clean
+                            longest_div = div
+                            logger.debug(f"🏆 New longest: {text_length} chars")
+                            
+                except Exception as e:
+                    logger.debug(f"Error processing prompt div {i}: {e}")
+                    continue
+            
+            # Use the longest text found (must be significantly longer than truncated text)
+            if longest_div and longest_length > self.config.min_prompt_length:
+                logger.info(f"🎉 SUCCESS! Found full prompt with {longest_length} characters")
+                logger.info(f"📝 Full prompt preview: {longest_text[:100]}...")
+                
+                # Validate the text quality
+                if self._is_valid_prompt_text(longest_text):
+                    metadata['prompt'] = longest_text
+                    logger.info(f"✅ Full prompt extracted and validated ({longest_length} chars)")
+                    return True
+                else:
+                    logger.warning(f"⚠️ Longest text failed validation: {longest_length} chars")
+                    
+            elif longest_length > 0:
+                logger.warning(f"⚠️ Longest prompt found was only {longest_length} chars (expected >150)")
+                logger.warning(f"⚠️ Text preview: '{longest_text[:100]}...'")
+            else:
+                logger.warning("⚠️ No prompt text found in any div")
+            
+            # Fallback: use the longest text even if it's truncated
+            if longest_text and self._is_valid_prompt_text(longest_text):
+                metadata['prompt'] = longest_text
+                logger.info(f"📝 Using longest available text as fallback ({longest_length} chars)")
+                return True
+                
+            return False
+            
+        except Exception as e:
+            logger.error(f"❌ Error in optimized prompt extraction: {e}")
+            return False
+
+    async def _configure_chromium_download_settings(self, page) -> bool:
+        """Configure Chromium browser settings to suppress download notifications"""
+        try:
+            logger.info("🔧 Chromium download notification suppression is handled by browser launch arguments")
+            logger.info("✅ Browser was launched with comprehensive download suppression flags:")
+            logger.info("   - --disable-features=DownloadShelf")
+            logger.info("   - --disable-download-notification")
+            logger.info("   - --disable-features=DownloadBubble,DownloadBubbleV2")
+            logger.info("   - --disable-features=DownloadNotification")
+            logger.info("📄 No runtime settings changes required - download popups are suppressed at browser level")
+            
+            # Small delay to simulate configuration time
+            await page.wait_for_timeout(500)
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error in download settings configuration: {e}")
+            return False
+
     def get_status(self) -> Dict[str, Any]:
         """Get current status of the download manager"""
         return {
