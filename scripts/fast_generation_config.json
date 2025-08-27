@@ -1,0 +1,96 @@
+{
+  "name": "Fast Generation Download Automation",
+  "url": "https://wan.video/generate",
+  "headless": false,
+  "viewport": {
+    "width": 2560,
+    "height": 1440
+  },
+  "actions": [
+    {
+      "type": "login",
+      "value": {
+        "username": "shyraoleg@outlook.com",
+        "password": "Wanv!de025",
+        "username_selector": "input[placeholder=\"Email address\"]",
+        "password_selector": "input[type=\"password\"]",
+        "submit_selector": "button:has-text(\"Log in\")[type=\"submit\"]"
+      },
+      "timeout": 15000,
+      "description": "Fast login to the generation platform"
+    },
+    {
+      "type": "wait",
+      "value": 2000,
+      "description": "Quick wait for page to load after login"
+    },
+    {
+      "type": "start_generation_downloads",
+      "value": {
+        "max_downloads": 50,
+        "downloads_folder": "/home/olereon/workspace/github.com/olereon/automaton/downloads/vids",
+        "logs_folder": "/home/olereon/workspace/github.com/olereon/automaton/logs",
+        "download_timeout": 5000,
+        "verification_timeout": 8000,
+        "retry_attempts": 2,
+        
+        "_comment_enhanced_naming": "Enhanced naming configuration",
+        "use_descriptive_naming": true,
+        "unique_id": "initTest",
+        "naming_format": "{media_type}_{creation_date}_{unique_id}",
+        "date_format": "%Y-%m-%d-%H-%M-%S",
+        "id_format": "#{:09d}",
+        
+        "_comment_optimized_extraction": "OPTIMIZED: Longest-div prompt extraction strategy",
+        "extraction_strategy": "longest_div",
+        "extraction_description": "Fast extraction using longest div among 31 prompt divs",
+        "min_prompt_length": 150,
+        "prompt_indicators": ["camera", "scene", "shot", "frame", "view", "angle", "light", "shows", "reveals"],
+        "enable_debug_logging": true,
+        "debug_log_file": "logs/fast_generation_extraction_debug.log",
+        
+        "_comment_fast_scroll": "Fast infinite scroll configuration",
+        "scroll_batch_size": 15,
+        "scroll_amount": 800,
+        "scroll_wait_time": 1000,
+        "max_scroll_attempts": 10,
+        
+        "_comment_fast_navigation": "Fast navigation between thumbnails",
+        "thumbnail_nav_timeout": 3000,
+        "metadata_extraction_timeout": 2000,
+        "download_click_timeout": 2000,
+        
+        "_comment_duplicate_detection": "Stop if existing file detected",
+        "stop_on_duplicate": true,
+        "duplicate_check_enabled": true,
+        "creation_time_comparison": true,
+        
+        "_comment_text_landmarks": "Text-based element finding",
+        "image_to_video_text": "Image to video",
+        "creation_time_text": "Creation Time",
+        "download_no_watermark_text": "Download without Watermark",
+        "prompt_ellipsis_pattern": "...",
+        
+        "_comment_selectors": "Page element selectors",
+        "completed_task_selector": "div[id$='__9']",
+        "thumbnail_selector": ".thumsItem, .thumbnail-item",
+        "thumbnail_container_selector": ".thumsInner",
+        "button_panel_selector": ".sc-eYHxxX.fmURBt",
+        "download_icon_href": "#icon-icon_tongyong_20px_xiazai",
+        "download_button_index": 2,
+        
+        "_comment_legacy_selectors": "CSS fallback selectors",
+        "download_button_selector": "[data-spm-anchor-id='a2ty_o02.30365920.0.i1.6daf47258YB5qi']",
+        "download_no_watermark_selector": ".sc-fbUgXY.hMAwvg",
+        "generation_date_selector": ".sc-eJlwcH.gjlyBM span.sc-cSMkSB.hUjUPD:nth-child(2)",
+        "prompt_selector": ".sc-jJRqov.cxtNJi span[aria-describedby]"
+      },
+      "timeout": 120000,
+      "description": "Start fast automated generation downloads with duplicate detection"
+    },
+    {
+      "type": "check_generation_status",
+      "description": "Check final download status"
+    }
+  ]
+}

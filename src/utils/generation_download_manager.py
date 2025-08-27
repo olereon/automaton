@@ -193,6 +193,13 @@ class GenerationDownloadConfig:
     prompt_class_selector: str = "div.sc-dDrhAi.dnESm"  # Target prompt div class
     prompt_indicators: list = None               # Keywords that indicate prompt content
     
+    # FAST DOWNLOAD OPTIMIZATION SETTINGS
+    stop_on_duplicate: bool = True               # Stop when duplicate creation time found
+    duplicate_check_enabled: bool = True         # Enable duplicate detection
+    creation_time_comparison: bool = True        # Compare by creation time
+    download_completion_detection: bool = True    # Wait for download completion
+    fast_navigation_mode: bool = True            # Optimize navigation speed
+    
     # Legacy selectors (kept for backward compatibility)
     download_button_selector: str = "[data-spm-anchor-id='a2ty_o02.30365920.0.i1.6daf47258YB5qi']"
     download_no_watermark_selector: str = "[data-spm-anchor-id='a2ty_o02.30365920.0.i2.6daf47258YB5qi']"
@@ -404,6 +411,7 @@ class GenerationDownloadManager:
         self.config = config
         self.logger = GenerationDownloadLogger(config)
         self.file_manager = GenerationFileManager(config)
+        self.file_namer = EnhancedFileNamer(config)
         
         # Initialize debug logger
         try:
@@ -444,11 +452,15 @@ class GenerationDownloadManager:
         self.downloads_completed = 0
         self.should_stop = False
         
-        # Scrolling state
+        # ENHANCED: Robust gallery navigation state
+        self.processed_thumbnails = set()  # Track thumbnails processed in this session
         self.visible_thumbnails_cache = []  # Cache of currently visible thumbnails
+        self.current_gallery_position = 0  # Absolute position in gallery
         self.total_thumbnails_seen = 0
         self.current_scroll_position = 0
         self.last_scroll_thumbnail_count = 0
+        self.gallery_end_detected = False  # Track if we've reached the end
+        self.consecutive_same_thumbnails = 0  # Track cycling through same content
         
     def should_continue_downloading(self) -> bool:
         """Check if we should continue downloading"""
@@ -465,6 +477,224 @@ class GenerationDownloadManager:
         """Request to stop the download process"""
         self.should_stop = True
         logger.info("Stop requested for generation downloads")
+    
+    def scan_existing_files(self) -> set:
+        """Scan downloads folder for existing files and extract creation times"""
+        if not self.config.duplicate_check_enabled:
+            return set()
+            
+        existing_times = set()
+        downloads_path = Path(self.config.downloads_folder)
+        
+        if not downloads_path.exists():
+            logger.info("📁 Downloads folder does not exist yet")
+            return existing_times
+        
+        logger.info(f"🔍 Scanning existing files in: {downloads_path}")
+        
+        # Pattern to match files with creation time: video_2025-08-27-02-20-06_gen_#000000001.mp4
+        import re
+        file_pattern = re.compile(r'video_(\d{4}-\d{2}-\d{2}-\d{2}-\d{2}-\d{2})_')
+        
+        file_count = 0
+        for file_path in downloads_path.glob("*.mp4"):
+            match = file_pattern.search(file_path.name)
+            if match:
+                creation_time = match.group(1)
+                existing_times.add(creation_time)
+                logger.debug(f"   📄 Found: {file_path.name} -> {creation_time}")
+                file_count += 1
+        
+        logger.info(f"✅ Found {file_count} existing files with {len(existing_times)} unique creation times")
+        return existing_times
+    
+    def check_duplicate_exists(self, creation_time: str, existing_files: set) -> bool:
+        """Check if a file with the given creation time already exists"""
+        if not self.config.duplicate_check_enabled or not creation_time:
+            return False
+            
+        # Convert format if needed: "27 Aug 2025 02:20:06" -> "2025-08-27-02-20-06" 
+        try:
+            from datetime import datetime
+            # Parse: "27 Aug 2025 02:20:06"
+            dt = datetime.strptime(creation_time.strip(), "%d %b %Y %H:%M:%S")
+            formatted_time = dt.strftime("%Y-%m-%d-%H-%M-%S")
+            
+            if formatted_time in existing_files:
+                logger.warning(f"🚫 Duplicate detected! Creation time {creation_time} -> {formatted_time} already exists")
+                return True
+                
+        except ValueError:
+            try:
+                # Parse: "2025-08-27-02-20-06" format
+                dt = datetime.strptime(creation_time.strip(), "%Y-%m-%d-%H-%M-%S")
+                if creation_time in existing_files:
+                    logger.warning(f"🚫 Duplicate detected! Creation time {creation_time} already exists")
+                    return True
+            except ValueError:
+                logger.warning(f"⚠️ Could not parse creation time format: {creation_time}")
+                
+        return False
+    
+    async def wait_for_download_completion(self, page, expected_filename: str = None, timeout: int = 10000) -> bool:
+        """Wait for download to complete by monitoring downloads folder"""
+        if not self.config.download_completion_detection:
+            # If completion detection is disabled, just wait a fixed time
+            await page.wait_for_timeout(2000)
+            return True
+            
+        downloads_path = Path(self.config.downloads_folder)
+        start_time = time.time()
+        timeout_seconds = timeout / 1000
+        
+        logger.debug(f"⏳ Waiting for download completion (timeout: {timeout_seconds}s)")
+        
+        initial_files = set(f.name for f in downloads_path.glob("*.mp4")) if downloads_path.exists() else set()
+        
+        while (time.time() - start_time) < timeout_seconds:
+            if downloads_path.exists():
+                current_files = set(f.name for f in downloads_path.glob("*.mp4"))
+                new_files = current_files - initial_files
+                
+                if new_files:
+                    new_file = list(new_files)[0]  # Get the first new file
+                    logger.info(f"✅ Download completed: {new_file}")
+                    return True
+            
+            await asyncio.sleep(0.5)  # Check every 500ms
+        
+        logger.warning(f"⏰ Download completion timeout after {timeout_seconds}s")
+        return False
+    
+    async def get_unique_thumbnail_identifier(self, page, thumbnail_element) -> Optional[str]:
+        """Get a unique identifier for a thumbnail based on its content"""
+        try:
+            # Try multiple methods to get a unique identifier
+            identifier_parts = []
+            
+            # Method 1: Try to get creation time or date from thumbnail
+            try:
+                date_elements = await thumbnail_element.query_selector_all('[class*="time"], [class*="date"], span[title]')
+                for elem in date_elements:
+                    text = await elem.text_content()
+                    if text and any(word in text.lower() for word in ['aug', 'jul', 'sep', '2025', '2024']):
+                        identifier_parts.append(f"date:{text.strip()}")
+                        break
+            except:
+                pass
+            
+            # Method 2: Try to get image source or background image
+            try:
+                img_elements = await thumbnail_element.query_selector_all('img')
+                for img in img_elements:
+                    src = await img.get_attribute('src')
+                    if src:
+                        # Extract unique part from URL (e.g., filename or ID)
+                        import re
+                        match = re.search(r'[a-zA-Z0-9_-]{10,}', src)
+                        if match:
+                            identifier_parts.append(f"img:{match.group()}")
+                            break
+            except:
+                pass
+            
+            # Method 3: Try to get unique data attributes
+            try:
+                for attr in ['data-id', 'data-key', 'data-item', 'id']:
+                    value = await thumbnail_element.get_attribute(attr)
+                    if value:
+                        identifier_parts.append(f"{attr}:{value}")
+                        break
+            except:
+                pass
+            
+            # Method 4: Use position-based fallback with content hash
+            try:
+                bbox = await thumbnail_element.bounding_box()
+                if bbox:
+                    position = f"pos:{int(bbox['x'])}:{int(bbox['y'])}"
+                    identifier_parts.append(position)
+            except:
+                pass
+            
+            # Create composite identifier
+            if identifier_parts:
+                unique_id = "|".join(identifier_parts[:2])  # Use top 2 most reliable parts
+                return unique_id
+            else:
+                # Fallback: use element handle reference
+                return f"elem:{id(thumbnail_element)}"
+                
+        except Exception as e:
+            logger.debug(f"Could not get unique identifier for thumbnail: {e}")
+            return None
+    
+    async def get_robust_thumbnail_list(self, page) -> List[Dict[str, Any]]:
+        """Get list of thumbnails with unique identifiers and metadata"""
+        try:
+            # Get all thumbnail elements
+            thumbnail_elements = await page.query_selector_all(f"{self.config.thumbnail_container_selector} {self.config.thumbnail_selector}")
+            
+            thumbnails = []
+            for i, element in enumerate(thumbnail_elements):
+                try:
+                    # Get unique identifier for this thumbnail
+                    unique_id = await self.get_unique_thumbnail_identifier(page, element)
+                    
+                    # Check if element is visible
+                    is_visible = await element.is_visible()
+                    
+                    # Get bounding box for position tracking
+                    bbox = await element.bounding_box()
+                    
+                    thumbnail_info = {
+                        'element': element,
+                        'unique_id': unique_id,
+                        'position': i,
+                        'visible': is_visible,
+                        'bbox': bbox,
+                        'processed': unique_id in self.processed_thumbnails if unique_id else False
+                    }
+                    
+                    thumbnails.append(thumbnail_info)
+                    
+                except Exception as e:
+                    logger.debug(f"Error processing thumbnail {i}: {e}")
+                    continue
+            
+            logger.debug(f"Found {len(thumbnails)} thumbnails ({sum(1 for t in thumbnails if t['visible'])} visible)")
+            return thumbnails
+            
+        except Exception as e:
+            logger.error(f"Error getting robust thumbnail list: {e}")
+            return []
+    
+    async def find_next_unprocessed_thumbnail(self, page) -> Optional[Dict[str, Any]]:
+        """Find the next thumbnail that hasn't been processed yet"""
+        try:
+            thumbnails = await self.get_robust_thumbnail_list(page)
+            
+            # Find first unprocessed, visible thumbnail
+            for thumbnail in thumbnails:
+                if thumbnail['visible'] and not thumbnail['processed'] and thumbnail['unique_id']:
+                    logger.info(f"🎯 Found next unprocessed thumbnail: {thumbnail['unique_id']} (position {thumbnail['position']})")
+                    return thumbnail
+            
+            # If no unprocessed visible thumbnails, check if we need to scroll
+            visible_count = sum(1 for t in thumbnails if t['visible'])
+            unprocessed_count = sum(1 for t in thumbnails if not t['processed'] and t['unique_id'])
+            
+            logger.info(f"📊 Thumbnail status: {visible_count} visible, {unprocessed_count} unprocessed")
+            
+            if unprocessed_count == 0:
+                logger.warning("⚠️ No unprocessed thumbnails found - may have reached end of gallery")
+                self.gallery_end_detected = True
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error finding next unprocessed thumbnail: {e}")
+            return None
     
     async def get_visible_thumbnail_identifiers(self, page) -> List[str]:
         """Get unique identifiers for currently visible thumbnails"""
@@ -1999,7 +2229,173 @@ class GenerationDownloadManager:
         except Exception as e:
             logger.debug(f"Error closing download shelf: {e}")
     
-    async def download_single_generation(self, page, thumbnail_index: int) -> bool:
+    async def download_single_generation_robust(self, page, thumbnail_info: Dict[str, Any], existing_files: set = None) -> bool:
+        """Download a single generation using robust thumbnail tracking"""
+        try:
+            thumbnail_element = thumbnail_info['element']
+            thumbnail_id = thumbnail_info['unique_id']
+            thumbnail_position = thumbnail_info['position']
+            
+            logger.info(f"Starting robust download for thumbnail: {thumbnail_id}")
+            
+            # DEBUG: Log thumbnail click attempt
+            if self.debug_logger:
+                self.debug_logger.log_step(thumbnail_position, "ROBUST_THUMBNAIL_CLICK_START", {
+                    "thumbnail_id": thumbnail_id,
+                    "thumbnail_position": thumbnail_position,
+                    "page_url": page.url,
+                    "timestamp": datetime.now().isoformat()
+                })
+            
+            # Click directly on the thumbnail element (no nth-child needed!)
+            try:
+                # Ensure element is still visible and in viewport
+                await thumbnail_element.scroll_into_view_if_needed()
+                await page.wait_for_timeout(500)  # Brief wait for scroll
+                
+                # Verify element is still clickable
+                is_visible = await thumbnail_element.is_visible()
+                if not is_visible:
+                    logger.warning(f"Thumbnail {thumbnail_id} is no longer visible")
+                    return False
+                
+                # Click the thumbnail directly
+                await thumbnail_element.click(timeout=10000)
+                logger.info(f"✅ Successfully clicked thumbnail: {thumbnail_id}")
+                
+            except Exception as e:
+                logger.error(f"Failed to click thumbnail {thumbnail_id}: {e}")
+                return False
+            
+            # Wait for content to load
+            await page.wait_for_timeout(2000)
+            
+            # ENHANCED: Extract metadata with duplicate checking
+            metadata_dict = await self.extract_metadata_with_landmark_strategy(page, thumbnail_position)
+            if not metadata_dict or not metadata_dict.get('generation_date') or metadata_dict.get('generation_date') == 'Unknown':
+                logger.warning(f"Landmark strategy failed for thumbnail {thumbnail_id}, trying legacy extraction")
+                metadata_dict = await self.extract_metadata_from_page(page)
+                
+            if not metadata_dict:
+                logger.warning(f"All metadata extraction failed for thumbnail {thumbnail_id}, using defaults")
+                metadata_dict = {'generation_date': 'Unknown', 'prompt': 'Unknown'}
+            
+            # CRITICAL: Check for duplicates using creation time AND thumbnail ID
+            if self.config.duplicate_check_enabled and metadata_dict and metadata_dict.get('generation_date'):
+                creation_time = metadata_dict.get('generation_date')
+                
+                # Check file-based duplicates (from disk)
+                if existing_files and self.check_duplicate_exists(creation_time, existing_files):
+                    if self.config.stop_on_duplicate:
+                        logger.info(f"🛑 STOPPING: File-based duplicate detected ({creation_time})")
+                        logger.info("🔄 All newer files have already been downloaded")
+                        self.should_stop = True
+                        return False
+                    else:
+                        logger.warning(f"⏭️  Skipping file duplicate with creation time: {creation_time}")
+                        return True
+                
+                # Check session-based duplicates (already processed in this run)
+                session_duplicate_id = f"{creation_time}|{thumbnail_id}"
+                if session_duplicate_id in self.processed_thumbnails:
+                    logger.warning(f"⏭️  Skipping session duplicate: {session_duplicate_id}")
+                    return True
+            
+            # Continue with download process using existing logic...
+            file_id = self.logger.get_next_file_id()
+            download_start_time = time.time()
+            
+            # Set up download handling
+            download_path = Path(self.config.downloads_folder)
+            logger.debug(f"Monitoring download directory: {download_path}")
+            
+            download_promise = None
+            def handle_download(download):
+                nonlocal download_promise
+                download_promise = download
+                logger.info(f"Download started: {download.suggested_filename}")
+            
+            page.on("download", handle_download)
+            
+            try:
+                # Trigger download using existing download sequence
+                download_triggered = await self.execute_download_sequence(page)
+                
+                if not download_triggered:
+                    logger.warning(f"Failed to trigger download for thumbnail {thumbnail_id}")
+                    return False
+                
+                # FAST OPTIMIZATION: Use download completion detection
+                if self.config.fast_navigation_mode:
+                    await page.wait_for_timeout(1000)
+                    completion_success = await self.wait_for_download_completion(
+                        page, 
+                        timeout=self.config.download_timeout if hasattr(self.config, 'download_timeout') else 8000
+                    )
+                    if not completion_success:
+                        logger.warning(f"⏰ Download may still be in progress for thumbnail {thumbnail_id}")
+                else:
+                    await page.wait_for_timeout(3000)
+                
+                # Handle download completion and file naming
+                downloaded_file = None
+                if download_promise:
+                    try:
+                        target_filename = f"{file_id}_temp.mp4"
+                        target_path = download_path / target_filename
+                        await download_promise.save_as(str(target_path))
+                        downloaded_file = target_path
+                        logger.info(f"Download saved: {downloaded_file.name}")
+                    except Exception as e:
+                        logger.error(f"Failed to save download: {e}")
+                
+                # Fallback file detection if needed
+                if not downloaded_file:
+                    downloaded_file = await self.file_manager.wait_for_download(timeout=10)
+                
+                if downloaded_file and downloaded_file.exists():
+                    # Generate proper filename and move file
+                    final_filename = self.file_namer.generate_filename(
+                        file_path=downloaded_file,
+                        creation_date=metadata_dict.get('generation_date'),
+                        sequence_number=file_id
+                    )
+                    final_path = download_path / final_filename
+                    
+                    downloaded_file.rename(final_path)
+                    logger.info(f"📁 File renamed to: {final_filename}")
+                    
+                    # Create GenerationMetadata object for logging
+                    metadata = GenerationMetadata(
+                        file_id=str(file_id),
+                        generation_date=metadata_dict.get('generation_date', ''),
+                        prompt=metadata_dict.get('prompt', ''),
+                        download_timestamp=datetime.now().isoformat(),
+                        file_path=str(final_path),
+                        original_filename=downloaded_file.name,
+                        file_size=final_path.stat().st_size if final_path.exists() else 0,
+                        download_duration=time.time() - download_start_time
+                    )
+                    
+                    # Log to file (remove incorrect await)
+                    self.logger.log_download(metadata)
+                    
+                    self.downloads_completed += 1
+                    logger.info(f"✅ Successfully downloaded: {final_filename}")
+                    return True
+                else:
+                    logger.error(f"Download file not found for thumbnail {thumbnail_id}")
+                    return False
+                    
+            finally:
+                # Remove download listener
+                page.remove_listener("download", handle_download)
+            
+        except Exception as e:
+            logger.error(f"Error in robust download for thumbnail {thumbnail_info.get('unique_id', 'unknown')}: {e}")
+            return False
+    
+    async def download_single_generation(self, page, thumbnail_index: int, existing_files: set = None) -> bool:
         """Download a single generation and handle all associated tasks"""
         try:
             logger.info(f"Starting download for thumbnail {thumbnail_index}")
@@ -2186,6 +2582,19 @@ class GenerationDownloadManager:
                     "extraction_confidence": "high" if extraction_success else "low"
                 })
             
+            # FAST OPTIMIZATION: Check for duplicate creation time before downloading
+            if self.config.duplicate_check_enabled and metadata_dict and metadata_dict.get('generation_date'):
+                creation_time = metadata_dict.get('generation_date')
+                if self.check_duplicate_exists(creation_time, existing_files):
+                    if self.config.stop_on_duplicate:
+                        logger.info(f"🛑 STOPPING: Duplicate creation time detected ({creation_time})")
+                        logger.info("🔄 All newer files have already been downloaded")
+                        self.should_stop = True
+                        return False  # Stop the entire automation
+                    else:
+                        logger.warning(f"⏭️  Skipping duplicate file with creation time: {creation_time}")
+                        return True  # Skip this file but continue
+            
             # Get next file ID
             file_id = self.logger.get_next_file_id()
             
@@ -2239,8 +2648,19 @@ class GenerationDownloadManager:
                 except:
                     continue
             
-            # Wait a bit more for download to start
-            await page.wait_for_timeout(3000)
+            # FAST OPTIMIZATION: Quick wait for download to start, then check completion
+            if self.config.fast_navigation_mode:
+                await page.wait_for_timeout(1000)  # Reduced from 3000ms
+                # Use fast completion detection
+                completion_success = await self.wait_for_download_completion(
+                    page, 
+                    timeout=self.config.download_timeout if hasattr(self.config, 'download_timeout') else 8000
+                )
+                if not completion_success:
+                    logger.warning(f"⏰ Download may still be in progress for thumbnail {thumbnail_index}")
+            else:
+                # Legacy wait time for compatibility
+                await page.wait_for_timeout(3000)
             
             # Try to close Chrome download shelf if it appears
             await self.close_download_shelf(page)
@@ -2410,6 +2830,13 @@ class GenerationDownloadManager:
         try:
             logger.info("🚀 Starting generation download automation with infinite scroll support")
             
+            # STEP 0: Scan for existing files to detect duplicates (if enabled)
+            existing_files = set()
+            if self.config.duplicate_check_enabled:
+                existing_files = self.scan_existing_files()
+                if existing_files and self.config.stop_on_duplicate:
+                    logger.info(f"🔍 Found {len(existing_files)} existing files - will stop if duplicate creation time detected")
+            
             # STEP 1: Configure Chromium browser settings to suppress download popups
             logger.info("⚙️ Configuring Chromium browser settings to suppress download notifications")
             settings_configured = await self._configure_chromium_download_settings(page)
@@ -2444,58 +2871,68 @@ class GenerationDownloadManager:
             initial_thumbnail_count = len(self.visible_thumbnails_cache)
             logger.info(f"📊 Initial batch: {initial_thumbnail_count} thumbnails visible")
             
-            # Main processing loop with intelligent scrolling
-            thumbnail_index = 0
+            # ENHANCED: Robust gallery navigation with duplicate prevention
             consecutive_failures = 0
             max_consecutive_failures = 5
+            no_progress_cycles = 0
+            max_no_progress_cycles = 3
             
-            while self.should_continue_downloading():
-                # Check if we need to scroll to get more thumbnails
-                if thumbnail_index > 0 and thumbnail_index % self.config.scroll_batch_size == 0:
-                    logger.info(f"📥 Completed {thumbnail_index} downloads, checking for more thumbnails...")
+            logger.info("🚀 Starting robust gallery navigation with duplicate detection")
+            
+            while self.should_continue_downloading() and not self.gallery_end_detected:
+                # Find next unprocessed thumbnail
+                next_thumbnail = await self.find_next_unprocessed_thumbnail(page)
+                
+                if not next_thumbnail:
+                    logger.info("📜 No unprocessed thumbnails visible, attempting to scroll for more content...")
                     
-                    # Ensure we have sufficient thumbnails for continued processing
-                    if not await self.ensure_sufficient_thumbnails(page, required_count=3):
-                        logger.warning("⚠️ Could not load more thumbnails, checking if we've reached the end")
+                    # Try to scroll to get more content
+                    scroll_success = await self.scroll_thumbnail_gallery(page)
+                    if scroll_success:
+                        results['scrolls_performed'] += 1
+                        logger.info(f"✅ Scrolled successfully (total scrolls: {results['scrolls_performed']})")
                         
-                        # Try one more scroll to be sure we've reached the end
-                        final_scroll_success = await self.scroll_thumbnail_gallery(page)
-                        if final_scroll_success:
-                            results['scrolls_performed'] += 1
-                            logger.info("✅ Found more thumbnails after final scroll attempt")
-                            continue
-                        else:
-                            logger.info("🏁 Reached the end of available thumbnails")
+                        # Try again to find unprocessed thumbnails
+                        next_thumbnail = await self.find_next_unprocessed_thumbnail(page)
+                        
+                        if not next_thumbnail:
+                            no_progress_cycles += 1
+                            logger.warning(f"⚠️ Still no new thumbnails after scroll (cycle {no_progress_cycles}/{max_no_progress_cycles})")
+                            
+                            if no_progress_cycles >= max_no_progress_cycles:
+                                logger.info("🏁 Reached end of gallery - no new content after multiple scroll attempts")
+                                break
+                    else:
+                        logger.warning("⚠️ Scroll failed, may have reached end of gallery")
+                        no_progress_cycles += 1
+                        if no_progress_cycles >= max_no_progress_cycles:
                             break
                     
-                    results['scrolls_performed'] += 1
-                    logger.info(f"✅ Successfully scrolled (total scrolls: {results['scrolls_performed']})")
-                
-                # Get currently visible thumbnails
-                current_visible = await self.get_visible_thumbnail_identifiers(page)
-                if not current_visible:
-                    logger.warning("No thumbnails currently visible")
-                    consecutive_failures += 1
-                    if consecutive_failures >= max_consecutive_failures:
-                        logger.error("Too many consecutive failures, stopping automation")
-                        break
+                    # Wait before retry
                     await page.wait_for_timeout(2000)
                     continue
                 
-                # Calculate the actual thumbnail index within the currently visible set
-                visible_index = thumbnail_index % len(current_visible)
+                # Reset no-progress counter when we find content
+                no_progress_cycles = 0
                 
-                logger.info(f"🎯 Processing thumbnail {thumbnail_index + 1} (visible index: {visible_index + 1}/{len(current_visible)})")
+                # Extract thumbnail information
+                thumbnail_id = next_thumbnail['unique_id']
+                thumbnail_position = next_thumbnail['position']
                 
-                # Download the current thumbnail
-                success = await self.download_single_generation(page, visible_index)
+                logger.info(f"🎯 Processing thumbnail at position {thumbnail_position + 1}: {thumbnail_id}")
+                
+                # Download the thumbnail using robust method
+                success = await self.download_single_generation_robust(page, next_thumbnail, existing_files)
                 
                 if success:
+                    # Mark thumbnail as processed
+                    self.processed_thumbnails.add(thumbnail_id)
                     results['downloads_completed'] = self.downloads_completed
                     consecutive_failures = 0  # Reset failure counter on success
                     logger.info(f"✅ Progress: {self.downloads_completed}/{self.config.max_downloads} downloads completed")
+                    logger.info(f"📊 Session processed: {len(self.processed_thumbnails)} unique thumbnails")
                 else:
-                    error_msg = f"Failed to download thumbnail at visible index {visible_index}"
+                    error_msg = f"Failed to download thumbnail: {thumbnail_id}"
                     logger.warning(error_msg)
                     results['errors'].append(error_msg)
                     consecutive_failures += 1
@@ -2504,15 +2941,15 @@ class GenerationDownloadManager:
                         logger.error(f"❌ Too many consecutive failures ({consecutive_failures}), stopping automation")
                         break
                 
-                thumbnail_index += 1
-                results['total_thumbnails_processed'] = thumbnail_index
+                results['total_thumbnails_processed'] = len(self.processed_thumbnails)
                 
-                # Small delay between downloads
-                await page.wait_for_timeout(2000)
+                # Smart delay between downloads based on fast mode
+                delay = 1000 if self.config.fast_navigation_mode else 2000
+                await page.wait_for_timeout(delay)
                 
                 # Log progress every 5 downloads
-                if thumbnail_index % 5 == 0:
-                    logger.info(f"📈 Batch progress: {thumbnail_index} thumbnails processed, {results['downloads_completed']} successful downloads")
+                if self.downloads_completed % 5 == 0 and self.downloads_completed > 0:
+                    logger.info(f"📈 Batch progress: {len(self.processed_thumbnails)} thumbnails processed, {results['downloads_completed']} successful downloads")
             
             # Set final results
             results['success'] = True
