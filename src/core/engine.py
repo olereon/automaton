@@ -403,8 +403,7 @@ class WebAutomationEngine(GenerationDownloadHandlers):
         # Enhanced window configuration for better popup placement
         if not self.config.headless:
             launch_args.extend([
-                "--auto-open-devtools-for-tabs",       # CRITICAL: Auto-open DevTools to push popups right
-                "--window-size=2560,1080",             # Set larger window size for DevTools
+                "--window-size=2560,1080",             # Set window size for consistent display
                 "--window-position=0,0",               # Position window at top-left
                 "--force-device-scale-factor=1",       # Ensure consistent scaling
                 "--disable-features=MediaRouter",      # Disable media router popup
@@ -425,11 +424,11 @@ class WebAutomationEngine(GenerationDownloadHandlers):
             }
         }
         
-        # Set viewport based on whether DevTools will be open
+        # Set viewport configuration
         if not self.config.headless:
-            # Use larger viewport to accommodate DevTools panel (which takes ~300px on right)
-            context_options["viewport"] = {"width": 1920, "height": 1080}  # Main content area (accommodate larger window)
-            logger.info("🔧 Browser configured with DevTools auto-open for popup displacement")
+            # Use full viewport for visible browser mode
+            context_options["viewport"] = {"width": 2560, "height": 1080}  # Use full window space
+            logger.info("🔧 Browser configured for full viewport display")
         else:
             # Use configured viewport for headless mode
             context_options["viewport"] = self.config.viewport
@@ -437,15 +436,9 @@ class WebAutomationEngine(GenerationDownloadHandlers):
         self.context = await self.browser.new_context(**context_options)
         self.page = await self.context.new_page()
         
-        # Ensure DevTools opens for non-headless mode (additional safeguard)
+        # Browser session configured for non-headless mode
         if not self.config.headless:
-            try:
-                # Use CDP to ensure DevTools is open
-                cdp_session = await self.context.new_cdp_session(self.page)
-                await cdp_session.send("Runtime.enable")
-                logger.info("✅ DevTools session established for popup displacement")
-            except Exception as e:
-                logger.debug(f"DevTools CDP setup failed (non-critical): {e}")
+            logger.info("✅ Browser session established with full viewport")
         
         # Try to use Chrome DevTools Protocol to disable download shelf
         try:
