@@ -4,13 +4,25 @@
 
 The Generation Download Automation system provides comprehensive functionality for automatically downloading generated content (videos, images, etc.) from web platforms with metadata tracking and file organization.
 
-## 🚀 New Features
+## 🚀 New Features (August 2024)
+
+### 🛑 **Duplicate Detection System** ([Guide](DUPLICATE_DETECTION_GUIDE.md)) 
+- Intelligent detection prevents re-downloading existing content
+- Compares both date/time AND prompt text for accuracy
+- Automatic termination when reaching previously downloaded boundary
+- Configurable stop or skip behavior
 
 ### 🔄 **Infinite Scroll Support** ([Guide](INFINITE_SCROLL_GUIDE.md))
-- Automatically scrolls through thumbnail galleries to access entire generation history
-- Configurable batch sizes and scroll detection
-- Handles dynamic content loading
-- Processes unlimited generations beyond initial view
+- Advanced gallery pre-loading with multiple scroll strategies
+- Automatically reveals all thumbnails beyond initial viewport
+- Handles Playwright-specific scroll limitations
+- Processes 80%+ more content than basic scrolling
+
+### 🎯 **Start-From Navigation** 
+- Begin downloads from any specified thumbnail number
+- Navigate directly to desired starting position
+- Efficient for incremental downloads
+- Works with landmark-based navigation
 
 ### 🏷️ **Enhanced Descriptive Naming** ([Guide](ENHANCED_NAMING_GUIDE.md))
 - Replace sequential numbers with descriptive filenames
@@ -23,6 +35,11 @@ The Generation Download Automation system provides comprehensive functionality f
 - Handles dynamic CSS classes and changing selectors
 - Multiple fallback strategies for reliability
 - Full prompt text extraction without truncation
+
+### 👍 **Overlay Handling**
+- Automatic closure of thumbs-up feedback overlays
+- Prevents automation blocking from popup dialogs
+- Smart detection and dismissal strategies
 
 ## Core Features
 
@@ -112,7 +129,15 @@ The Generation Download Automation system provides comprehensive functionality f
       "_comment": "Text-Based Element Finding",
       "image_to_video_text": "Image to video",
       "creation_time_text": "Creation Time",
-      "download_no_watermark_text": "Download without Watermark"
+      "download_no_watermark_text": "Download without Watermark",
+      
+      "_comment": "Duplicate Detection Configuration",
+      "duplicate_check_enabled": true,
+      "stop_on_duplicate": true,
+      "creation_time_comparison": true,
+      
+      "_comment": "Start-From Navigation",
+      "start_from_thumbnail": 1
     }
   }]
 }

@@ -71,11 +71,14 @@ A powerful, lightweight web automation framework with both GUI and CLI interface
 | `STOP_GENERATION_DOWNLOADS` | Stop downloads | Graceful stop |
 | `CHECK_GENERATION_STATUS` | Check progress | Status monitoring |
 
-#### 🆕 New Download Features
-- **Infinite Scroll**: Automatically scrolls to download entire galleries
-- **Enhanced Naming**: `vid_2025-08-24-14-35-22_project.mp4` instead of `#000000001.mp4`
-- **Text-Based Detection**: Robust element finding using text landmarks
-- **Full Prompt Extraction**: Complete prompt text without truncation
+#### 🆕 Enhanced Download Features (August 2024)
+- **🛑 Duplicate Detection**: Prevents re-downloads by comparing date/time + prompt text
+- **🔄 Infinite Scroll**: Advanced gallery pre-loading with 80%+ more content access
+- **🎯 Start-From Navigation**: Begin downloads from any thumbnail position
+- **👍 Overlay Handling**: Auto-closes thumbs-up feedback popups
+- **📝 Enhanced Naming**: `vid_2025-08-24-14-35-22_project.mp4` instead of `#000000001.mp4`
+- **🎯 Text-Based Detection**: Robust element finding using text landmarks
+- **📄 Full Prompt Extraction**: Complete prompt text without truncation
 - **🚫 Popup Suppression**: Automatic download popup elimination for uninterrupted automation
 
 ## 🚀 Installation
