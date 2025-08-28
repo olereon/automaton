@@ -120,6 +120,21 @@ tmp/
 temp/
 *.tmp
 
+# Archive directories (historical code/docs)
+*/archive/
+*/Archive/
+*_archive/
+archive_*
+
+# Test reports and results
+tests/reports/
+*test_report.json
+*test_results.json
+
+# Old/deprecated files
+!_Old-tasks/
+tasks/archive_old/
+
 # User data
 user_data/
 sessions/
@@ -150,3 +165,4 @@ claude-flow.bat
 claude-flow.ps1
 hive-mind-prompt-*.txt
 =41.0.0
+tasks/
