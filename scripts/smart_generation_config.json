@@ -61,7 +61,7 @@
         "prompt_ellipsis_pattern": "...",
         
         "_comment_selectors": "Page element selectors",
-        "completed_task_selector": "div[id$='__19']",
+        "completed_task_selector": "div[id$='__1']",
         "thumbnail_selector": ".thumsItem, .thumbnail-item",
         "thumbnail_container_selector": ".thumsInner",
         "button_panel_selector": ".sc-eYHxxX.fmURBt",

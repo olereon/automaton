@@ -27,7 +27,7 @@
     {
       "type": "start_generation_downloads",
       "value": {
-        "max_downloads": 50,
+        "max_downloads": 100,
         "downloads_folder": "/home/olereon/workspace/github.com/olereon/automaton/downloads/vids",
         "logs_folder": "/home/olereon/workspace/github.com/olereon/automaton/logs",
         "download_timeout": 5000,
@@ -50,7 +50,7 @@
         "debug_log_file": "logs/fast_generation_extraction_debug.log",
         
         "_comment_fast_scroll": "Fast infinite scroll configuration",
-        "scroll_batch_size": 15,
+        "scroll_batch_size": 10,
         "scroll_amount": 800,
         "scroll_wait_time": 1000,
         "max_scroll_attempts": 10,
@@ -72,7 +72,7 @@
         "prompt_ellipsis_pattern": "...",
         
         "_comment_selectors": "Page element selectors",
-        "completed_task_selector": "div[id$='__9']",
+        "completed_task_selector": "div[id$='__19']",
         "thumbnail_selector": ".thumsItem, .thumbnail-item",
         "thumbnail_container_selector": ".thumsInner",
         "button_panel_selector": ".sc-eYHxxX.fmURBt",

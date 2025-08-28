@@ -4077,6 +4077,111 @@ class GenerationDownloadManager:
             logger.error(f"Error in download_single_generation: {e}")
             return False
     
+    async def check_generation_status(self, page, selector: str) -> Dict[str, Any]:
+        """Check the status of a generation container to determine if it's completed, queued, or failed"""
+        try:
+            element = await page.query_selector(selector)
+            if not element:
+                return {'status': 'not_found', 'reason': 'Element not found'}
+            
+            # Get the text content to analyze
+            element_text = await element.text_content()
+            element_html = await element.inner_html()
+            
+            logger.debug(f"Checking generation status for {selector}")
+            logger.debug(f"Element text: {element_text[:200] if element_text else 'None'}...")
+            
+            # Check for queuing status (highest priority)
+            queuing_indicators = [
+                "Queuing…",
+                "Queuing...", 
+                "In queue",
+                "Waiting in queue",
+                "Processing...",
+                "Generating..."
+            ]
+            
+            for indicator in queuing_indicators:
+                if indicator in element_text:
+                    logger.info(f"🔄 Generation {selector} is queued/processing - contains: '{indicator}'")
+                    return {'status': 'queued', 'reason': indicator}
+            
+            # Check for failed generation patterns
+            failed_generation_patterns = [
+                "Failed to generate", 
+                "Generation failed",
+                "Error occurred", 
+                "Try again later",
+                "Generation error",
+                "Something went wrong"
+            ]
+            
+            for pattern in failed_generation_patterns:
+                if pattern in element_text:
+                    logger.warning(f"❌ Generation {selector} failed - contains: '{pattern}'")
+                    return {'status': 'failed', 'reason': pattern}
+            
+            # Check if it's a valid completed generation
+            # Look for thumbnail image or video content indicators
+            has_thumbnail = await element.query_selector('img, video, .thumbnail') is not None
+            has_content_indicators = any(indicator in element_text for indicator in [
+                'Image to video',
+                'Creation Time', 
+                'Download',
+                'Generate',
+                'seconds'  # Duration indicator
+            ])
+            
+            if has_thumbnail or has_content_indicators:
+                logger.info(f"✅ Generation {selector} appears completed")
+                return {'status': 'completed', 'reason': 'Has thumbnail or content indicators'}
+            else:
+                logger.debug(f"❓ Generation {selector} status unclear - no clear indicators")
+                return {'status': 'unclear', 'reason': 'No clear completion indicators'}
+                
+        except Exception as e:
+            logger.error(f"Error checking generation status for {selector}: {e}")
+            return {'status': 'error', 'reason': str(e)}
+
+    async def find_completed_generations_on_page(self, page) -> List[str]:
+        """Find all completed generations on the initial /generate page, skipping queued ones"""
+        try:
+            logger.info("🔍 Scanning initial /generate page for completed generations...")
+            
+            completed_selectors = []
+            
+            # Check all potential generation containers (usually __1 through __10)
+            for i in range(1, 11):  # Check first 10 containers
+                selector = f"div[id$='__{i}']"
+                status_info = await self.check_generation_status(page, selector)
+                
+                logger.debug(f"Container __{i}: Status = {status_info['status']} ({status_info['reason']})")
+                
+                if status_info['status'] == 'completed':
+                    completed_selectors.append(selector)
+                    logger.info(f"✅ Found completed generation: __{i}")
+                elif status_info['status'] == 'queued':
+                    logger.info(f"⏳ Skipping queued generation: __{i}")
+                elif status_info['status'] == 'failed':
+                    logger.warning(f"❌ Skipping failed generation: __{i}")
+                else:
+                    logger.debug(f"❓ Unknown status for __{i}: {status_info}")
+            
+            logger.info(f"📊 Found {len(completed_selectors)} completed generations out of 10 checked")
+            
+            if len(completed_selectors) == 0:
+                logger.warning("⚠️ No completed generations found on initial page!")
+                # Fallback: try the configured selector anyway
+                if self.config.completed_task_selector:
+                    logger.info(f"🔄 Fallback: trying configured selector {self.config.completed_task_selector}")
+                    completed_selectors = [self.config.completed_task_selector]
+            
+            return completed_selectors
+            
+        except Exception as e:
+            logger.error(f"Error finding completed generations: {e}")
+            return []
+
     async def run_download_automation(self, page) -> Dict[str, Any]:
         """Run the complete generation download automation with intelligent scrolling"""
         results = {
@@ -4090,7 +4195,7 @@ class GenerationDownloadManager:
         }
         
         try:
-            logger.info("🚀 Starting generation download automation with infinite scroll support")
+            logger.info("🚀 Starting generation download automation with intelligent completed generation detection")
             
             # STEP 0: Scan for existing files to detect duplicates (if enabled)
             existing_files = set()
@@ -4107,80 +4212,93 @@ class GenerationDownloadManager:
             else:
                 logger.info("✅ Chromium download settings configured successfully")
             
-            # STEP 2: Navigate to completed tasks - try multiple selectors, skipping failed generations
+            # STEP 2: Enhanced completed generation detection - scan page and skip queued generations
             navigation_success = False
-            failed_generation_patterns = [
-                "Something went wrong. Please try again later.",
-                "Generation failed",
-                "Failed to generate",
-                "Error occurred", 
-                "Try again later",
-                "Generation error"
-            ]
             
-            logger.info(f"🔍 Trying to navigate to completed tasks, checking for failed generations...")
+            # Use the new intelligent detection system
+            completed_generation_selectors = await self.find_completed_generations_on_page(page)
             
-            # First try the configured selector
-            if self.config.completed_task_selector:
-                # Extract the number from the selector (e.g., "__19" from "div[id$='__19']")
-                import re
-                match = re.search(r'__(\d+)', self.config.completed_task_selector)
-                if match:
-                    start_num = int(match.group(1))
-                    logger.info(f"📌 Using configured selector starting from __{start_num}")
-                else:
-                    start_num = 8
-                    logger.info(f"⚠️ Could not parse selector number, defaulting to __8")
-            else:
-                start_num = 8
-                logger.info(f"📌 No custom selector configured, starting from __8")
-            
-            # Try selectors starting from configured/default number (up to 9 attempts)
-            for i in range(start_num, min(start_num + 9, 30)):
-                selector = f"div[id$='__{i}']"
-                try:
-                    logger.info(f"📋 Attempt {i-start_num+1}/9: Checking selector {selector}")
-                    
-                    # Check if element exists first
-                    element = await page.query_selector(selector)
-                    if not element:
-                        logger.debug(f"Element not found: {selector}")
-                        continue
-                    
-                    # Check if this generation failed by looking for failure text
-                    element_text = await element.text_content()
-                    is_failed = False
-                    failed_reason = ""
-                    
-                    for pattern in failed_generation_patterns:
-                        if pattern in element_text:
-                            is_failed = True
-                            failed_reason = pattern
-                            break
-                    
-                    if is_failed:
-                        logger.warning(f"⚠️ Generation {selector} failed - contains: '{failed_reason}' - skipping...")
-                        continue
-                    
-                    logger.info(f"✅ Generation {selector} appears successful, attempting to click...")
-                    
-                    # Try to click the element
-                    await page.click(selector, timeout=5000)
-                    await page.wait_for_timeout(2000)  # Wait for navigation
-                    
-                    # Verify navigation worked by checking for thumbnails
+            if completed_generation_selectors:
+                logger.info(f"🎯 Found {len(completed_generation_selectors)} completed generations, trying to navigate...")
+                
+                # Try each completed generation until one works
+                for selector in completed_generation_selectors:
                     try:
-                        await page.wait_for_selector(self.config.thumbnail_selector, timeout=3000)
-                        logger.info(f"🎉 Successfully navigated to gallery using {selector}")
-                        navigation_success = True
-                        break
-                    except:
-                        logger.debug(f"No thumbnails found after clicking {selector}, trying next...")
+                        logger.info(f"🔄 Attempting to navigate using completed generation: {selector}")
+                        
+                        # Try to click the element
+                        await page.click(selector, timeout=5000)
+                        await page.wait_for_timeout(2000)  # Wait for navigation
+                        
+                        # Verify navigation worked by checking for thumbnails
+                        try:
+                            await page.wait_for_selector(self.config.thumbnail_selector, timeout=3000)
+                            logger.info(f"🎉 Successfully navigated to gallery using {selector}")
+                            navigation_success = True
+                            break
+                        except:
+                            logger.debug(f"No thumbnails found after clicking {selector}, trying next...")
+                            continue
+                            
+                    except Exception as e:
+                        logger.debug(f"Failed to navigate using {selector}: {e}")
                         continue
                         
-                except Exception as e:
-                    logger.debug(f"Failed to process {selector}: {e}")
-                    continue
+            else:
+                logger.warning("⚠️ No completed generations detected on initial page, trying fallback navigation...")
+                
+                # Fallback to configured selector if provided
+                if self.config.completed_task_selector:
+                    try:
+                        logger.info(f"🔄 Trying configured selector: {self.config.completed_task_selector}")
+                        await page.click(self.config.completed_task_selector, timeout=5000)
+                        await page.wait_for_timeout(2000)
+                        
+                        # Check for thumbnails
+                        try:
+                            await page.wait_for_selector(self.config.thumbnail_selector, timeout=3000)
+                            logger.info(f"🎉 Successfully navigated using configured selector")
+                            navigation_success = True
+                        except:
+                            logger.warning("Configured selector navigation failed - no thumbnails found")
+                            
+                    except Exception as e:
+                        logger.warning(f"Failed to use configured selector: {e}")
+                
+                # If still no success, try sequential approach as final fallback
+                if not navigation_success:
+                    logger.info("🔄 Trying sequential selector approach as final fallback...")
+                    
+                    # Extract starting number from config or use default
+                    start_num = 8
+                    if self.config.completed_task_selector:
+                        import re
+                        match = re.search(r'__(\d+)', self.config.completed_task_selector)
+                        if match:
+                            start_num = int(match.group(1))
+                    
+                    # Try selectors sequentially
+                    for i in range(start_num, min(start_num + 5, 30)):  # Limit to 5 attempts
+                        selector = f"div[id$='__{i}']"
+                        try:
+                            element = await page.query_selector(selector)
+                            if not element:
+                                continue
+                            
+                            await page.click(selector, timeout=5000)
+                            await page.wait_for_timeout(2000)
+                            
+                            try:
+                                await page.wait_for_selector(self.config.thumbnail_selector, timeout=3000)
+                                logger.info(f"🎉 Sequential fallback navigation successful using {selector}")
+                                navigation_success = True
+                                break
+                            except:
+                                continue
+                                
+                        except Exception as e:
+                            logger.debug(f"Sequential fallback failed for {selector}: {e}")
+                            continue
             
             if not navigation_success:
                 logger.warning("⚠️ Failed to navigate using any sequential selector, trying enhanced navigation...")
