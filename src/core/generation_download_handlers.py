@@ -23,7 +23,7 @@ class GenerationDownloadHandlers:
     async def _handle_start_generation_downloads(self, action) -> Dict[str, Any]:
         """Handle START_GENERATION_DOWNLOADS action"""
         try:
-            from ..utils.generation_download_manager import GenerationDownloadManager, GenerationDownloadConfig
+            from src.utils.generation_download_manager import GenerationDownloadManager, GenerationDownloadConfig
             
             # Parse configuration from action value
             config_data = action.value if action.value else {}
@@ -33,6 +33,7 @@ class GenerationDownloadHandlers:
                 downloads_folder=config_data.get('downloads_folder', '/home/olereon/workspace/github.com/olereon/automaton/downloads/vids'),
                 logs_folder=config_data.get('logs_folder', '/home/olereon/workspace/github.com/olereon/automaton/logs'),
                 max_downloads=config_data.get('max_downloads', 50),
+                start_from_thumbnail=config_data.get('start_from_thumbnail', 1),
                 download_timeout=config_data.get('download_timeout', 120000),
                 verification_timeout=config_data.get('verification_timeout', 30000),
                 retry_attempts=config_data.get('retry_attempts', 3),

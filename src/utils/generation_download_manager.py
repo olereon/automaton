@@ -167,7 +167,7 @@ class GenerationDownloadConfig:
     # Selectors for page elements
     completed_task_selector: str = "div[id$='__8']"  # 9th item (index 8)
     thumbnail_container_selector: str = ".thumsInner"  # Main thumbnail container
-    thumbnail_selector: str = ".thumbnail-item, .thumsItem"  # Multiple possible selectors
+    thumbnail_selector: str = ".thumsItem, .thumbnail-item, .gallery-item, .generation-item, div[class*='thum'], div[class*='gallery'], img[class*='thumbnail']"  # Multiple possible selectors
     
     # Scrolling configuration
     scroll_batch_size: int = 10  # Number of downloads before scrolling
@@ -209,6 +209,7 @@ class GenerationDownloadConfig:
     
     # Download settings
     max_downloads: int = 50
+    start_from_thumbnail: int = 1  # Thumbnail number to start from (1-based)
     download_timeout: int = 120000  # 2 minutes
     verification_timeout: int = 30000  # 30 seconds
     retry_attempts: int = 3
@@ -452,7 +453,7 @@ class GenerationDownloadManager:
         self.downloads_completed = 0
         self.should_stop = False
         
-        # ENHANCED: Robust gallery navigation state
+        # ENHANCED: Robust gallery navigation state with comprehensive tracking
         self.processed_thumbnails = set()  # Track thumbnails processed in this session
         self.visible_thumbnails_cache = []  # Cache of currently visible thumbnails
         self.current_gallery_position = 0  # Absolute position in gallery
@@ -461,6 +462,14 @@ class GenerationDownloadManager:
         self.last_scroll_thumbnail_count = 0
         self.gallery_end_detected = False  # Track if we've reached the end
         self.consecutive_same_thumbnails = 0  # Track cycling through same content
+        
+        # Enhanced state tracking for production reliability
+        self.content_signatures = set()  # Track content signatures for duplicate detection
+        self.failed_thumbnail_ids = set()  # Track thumbnails that failed processing
+        self.scroll_failure_count = 0  # Track consecutive scroll failures
+        self.max_scroll_failures = 5  # Maximum scroll failures before ending
+        self.processing_start_time = None  # Track session start time
+        self.last_successful_download = None  # Track last successful download time
         
     def should_continue_downloading(self) -> bool:
         """Check if we should continue downloading"""
@@ -567,12 +576,12 @@ class GenerationDownloadManager:
         return False
     
     async def get_unique_thumbnail_identifier(self, page, thumbnail_element) -> Optional[str]:
-        """Get a unique identifier for a thumbnail based on its content"""
+        """Get a unique identifier for a thumbnail based on its content with enhanced stability"""
         try:
             # Try multiple methods to get a unique identifier
             identifier_parts = []
             
-            # Method 1: Try to get creation time or date from thumbnail
+            # Method 1: Try to get creation time or date from thumbnail (MOST RELIABLE)
             try:
                 date_elements = await thumbnail_element.query_selector_all('[class*="time"], [class*="date"], span[title]')
                 for elem in date_elements:
@@ -583,7 +592,7 @@ class GenerationDownloadManager:
             except:
                 pass
             
-            # Method 2: Try to get image source or background image
+            # Method 2: Try to get image source or background image with enhanced matching
             try:
                 img_elements = await thumbnail_element.query_selector_all('img')
                 for img in img_elements:
@@ -591,53 +600,149 @@ class GenerationDownloadManager:
                     if src:
                         # Extract unique part from URL (e.g., filename or ID)
                         import re
-                        match = re.search(r'[a-zA-Z0-9_-]{10,}', src)
+                        # Look for long alphanumeric sequences or hashes
+                        match = re.search(r'([a-fA-F0-9]{16,}|[a-zA-Z0-9_-]{16,})', src)
                         if match:
-                            identifier_parts.append(f"img:{match.group()}")
+                            identifier_parts.append(f"img:{match.group(1)}")
                             break
             except:
                 pass
             
             # Method 3: Try to get unique data attributes
             try:
-                for attr in ['data-id', 'data-key', 'data-item', 'id']:
+                for attr in ['data-id', 'data-key', 'data-item', 'data-spm-anchor-id', 'id']:
                     value = await thumbnail_element.get_attribute(attr)
-                    if value:
+                    if value and len(value) > 5:  # Ensure meaningful values
                         identifier_parts.append(f"{attr}:{value}")
                         break
             except:
                 pass
             
-            # Method 4: Use position-based fallback ONLY if no other identifier found
-            # Position should NOT be part of the unique ID as it changes after downloads
+            # Method 4: Enhanced DOM-based identifier using multiple attributes
+            try:
+                dom_signature = await thumbnail_element.evaluate("""
+                    el => {
+                        // Create a stable signature from multiple DOM attributes
+                        const parts = [];
+                        
+                        // Get class signature (sorted for stability)
+                        if (el.className && el.className.length > 0) {
+                            const classes = el.className.split(' ').filter(c => c.length > 0).sort();
+                            if (classes.length > 0) {
+                                parts.push(`cls:${classes.join(',')}`);
+                            }
+                        }
+                        
+                        // Get index within parent (stable for gallery order)
+                        try {
+                            const siblings = Array.from(el.parentElement.children);
+                            const index = siblings.indexOf(el);
+                            if (index >= 0) {
+                                parts.push(`idx:${index}`);
+                            }
+                        } catch(e) {}
+                        
+                        // Get inner text hash for uniqueness (if present)
+                        const text = (el.textContent || '').trim();
+                        if (text.length > 0 && text.length < 100) {
+                            // Create simple text hash
+                            let hash = 0;
+                            for (let i = 0; i < text.length; i++) {
+                                hash = ((hash << 5) - hash + text.charCodeAt(i)) & 0xffffffff;
+                            }
+                            parts.push(`txt:${Math.abs(hash)}`);
+                        }
+                        
+                        return parts.join('|');
+                    }
+                """)
+                if dom_signature and len(dom_signature) > 5:
+                    identifier_parts.append(f"dom:{dom_signature}")
+            except:
+                pass
+            
+            # Method 5: Use position-based fallback ONLY if no other identifier found
+            # Position should NOT be primary as it changes after downloads
             if not identifier_parts:
                 try:
                     bbox = await thumbnail_element.bounding_box()
                     if bbox:
-                        position = f"pos:{int(bbox['x'])}:{int(bbox['y'])}"
+                        position = f"pos:{int(bbox['x'])}_{int(bbox['y'])}"
                         identifier_parts.append(position)
                 except:
                     pass
             
             # Create composite identifier
             if identifier_parts:
-                # Use only the FIRST (most reliable) identifier to avoid position pollution
-                # This ensures thumbnails maintain the same ID even if position changes
-                unique_id = identifier_parts[0]
+                # Use the FIRST (most reliable) identifier, but combine multiple for uniqueness
+                if len(identifier_parts) == 1:
+                    unique_id = identifier_parts[0]
+                else:
+                    # Combine top 2 most reliable identifiers
+                    unique_id = f"{identifier_parts[0]}#{identifier_parts[1] if len(identifier_parts) > 1 else ''}"
+                
+                logger.debug(f"Generated enhanced unique ID: {unique_id}")
                 return unique_id
             else:
                 # Fallback: use element handle reference
-                return f"elem:{id(thumbnail_element)}"
+                fallback_id = f"elem:{id(thumbnail_element)}"
+                logger.warning(f"Using fallback identifier: {fallback_id}")
+                return fallback_id
                 
         except Exception as e:
             logger.debug(f"Could not get unique identifier for thumbnail: {e}")
             return None
     
-    async def get_robust_thumbnail_list(self, page) -> List[Dict[str, Any]]:
-        """Get list of thumbnails with unique identifiers and metadata"""
+    async def refresh_element_reference(self, page, unique_id: str) -> Optional[object]:
+        """Refresh a stale element reference by finding it again using unique ID"""
         try:
-            # Get all thumbnail elements
+            logger.debug(f"Refreshing element reference for: {unique_id}")
+            
+            # Get all current thumbnail elements
             thumbnail_elements = await page.query_selector_all(f"{self.config.thumbnail_container_selector} {self.config.thumbnail_selector}")
+            
+            for element in thumbnail_elements:
+                try:
+                    # Get identifier for this element
+                    element_id = await self.get_unique_thumbnail_identifier(page, element)
+                    
+                    # Check if this matches our target
+                    if element_id == unique_id:
+                        logger.debug(f"Found fresh element reference for: {unique_id}")
+                        return element
+                        
+                except Exception as e:
+                    logger.debug(f"Error checking element during refresh: {e}")
+                    continue
+            
+            logger.warning(f"Could not find fresh element reference for: {unique_id}")
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error refreshing element reference: {e}")
+            return None
+
+    async def get_robust_thumbnail_list(self, page) -> List[Dict[str, Any]]:
+        """Get list of thumbnails with unique identifiers and enhanced metadata tracking"""
+        try:
+            # Get all thumbnail elements with retry on failure
+            thumbnail_elements = []
+            retry_count = 0
+            max_retries = 3
+            
+            while retry_count < max_retries:
+                try:
+                    thumbnail_elements = await page.query_selector_all(f"{self.config.thumbnail_container_selector} {self.config.thumbnail_selector}")
+                    if thumbnail_elements:
+                        break
+                except Exception as e:
+                    logger.debug(f"Retry {retry_count + 1} getting thumbnail elements: {e}")
+                    await page.wait_for_timeout(1000)
+                    retry_count += 1
+            
+            if not thumbnail_elements:
+                logger.warning("No thumbnail elements found after retries")
+                return []
             
             thumbnails = []
             for i, element in enumerate(thumbnail_elements):
@@ -645,11 +750,28 @@ class GenerationDownloadManager:
                     # Get unique identifier for this thumbnail
                     unique_id = await self.get_unique_thumbnail_identifier(page, element)
                     
-                    # Check if element is visible
-                    is_visible = await element.is_visible()
+                    if not unique_id:
+                        logger.debug(f"Could not generate unique ID for thumbnail {i}")
+                        continue
+                    
+                    # Check if element is visible with retry
+                    is_visible = False
+                    try:
+                        is_visible = await element.is_visible()
+                        # Double check visibility with bounding box
+                        bbox = await element.bounding_box()
+                        if bbox and (bbox['width'] == 0 or bbox['height'] == 0):
+                            is_visible = False
+                    except:
+                        # If visibility check fails, assume not visible
+                        is_visible = False
                     
                     # Get bounding box for position tracking
-                    bbox = await element.bounding_box()
+                    bbox = None
+                    try:
+                        bbox = await element.bounding_box()
+                    except:
+                        pass
                     
                     thumbnail_info = {
                         'element': element,
@@ -657,7 +779,8 @@ class GenerationDownloadManager:
                         'position': i,
                         'visible': is_visible,
                         'bbox': bbox,
-                        'processed': unique_id in self.processed_thumbnails if unique_id else False
+                        'processed': unique_id in self.processed_thumbnails if unique_id else False,
+                        'last_seen': datetime.now().isoformat()
                     }
                     
                     thumbnails.append(thumbnail_info)
@@ -666,7 +789,7 @@ class GenerationDownloadManager:
                     logger.debug(f"Error processing thumbnail {i}: {e}")
                     continue
             
-            logger.debug(f"Found {len(thumbnails)} thumbnails ({sum(1 for t in thumbnails if t['visible'])} visible)")
+            logger.debug(f"Found {len(thumbnails)} thumbnails ({sum(1 for t in thumbnails if t['visible'])} visible, {sum(1 for t in thumbnails if t['processed'])} processed)")
             return thumbnails
             
         except Exception as e:
@@ -699,6 +822,594 @@ class GenerationDownloadManager:
         except Exception as e:
             logger.error(f"Error finding next unprocessed thumbnail: {e}")
             return None
+    
+    # NEW: Active-class landmark-based navigation methods
+    async def find_active_thumbnail(self, page) -> Optional[object]:
+        """Find the currently active (selected) thumbnail using the 'active' class landmark"""
+        try:
+            # Look for thumbnail container with 'active' class (exclude mask elements)
+            active_selector = "div.thumsCou.active"
+            active_element = await page.query_selector(active_selector)
+            
+            if active_element:
+                # Get class attribute to verify it contains 'active' and is not a mask
+                class_attr = await active_element.get_attribute('class')
+                if 'active' in class_attr and '-mask' not in class_attr:
+                    logger.debug(f"🎯 Found active thumbnail with classes: {class_attr}")
+                    return active_element
+                else:
+                    logger.debug(f"⚠️ Element found but is invalid: {class_attr}")
+            
+            # Alternative selector patterns (all excluding masks)
+            alternative_selectors = [
+                "div[class*='thumsCou'][class*='active']:not([class*='mask'])",
+                "div[class~='thumsCou'][class*='active']",
+                ".thumsCou.active:not(.thumsCou-mask)"
+            ]
+            
+            for selector in alternative_selectors:
+                try:
+                    element = await page.query_selector(selector)
+                    if element:
+                        logger.debug(f"✅ Found active thumbnail using alternative selector: {selector}")
+                        return element
+                except Exception as e:
+                    logger.debug(f"Alternative selector {selector} failed: {e}")
+                    continue
+            
+            logger.debug("🔍 No active thumbnail found")
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error finding active thumbnail: {e}")
+            return None
+    
+    async def find_next_thumbnail_after_active(self, page, skip_active: bool = True) -> Optional[object]:
+        """Find the next thumbnail container after the active one"""
+        try:
+            # Get all thumbnail containers (excluding mask elements)
+            # Use more specific selector to avoid matching 'thumsCou-mask' elements
+            all_thumbnail_containers = await page.query_selector_all("div.thumsCou")
+            
+            # If that doesn't work, try alternative approach with filtering
+            if not all_thumbnail_containers:
+                logger.debug("🔍 Trying alternative selector for thumbnail containers")
+                potential_containers = await page.query_selector_all("div[class*='thumsCou']")
+                all_thumbnail_containers = []
+                
+                # Filter out mask elements
+                for container in potential_containers:
+                    class_attr = await container.get_attribute('class') or ''
+                    # Exclude elements with '-mask' in the class
+                    if 'thumsCou' in class_attr and '-mask' not in class_attr:
+                        all_thumbnail_containers.append(container)
+                
+                logger.debug(f"📊 Filtered to {len(all_thumbnail_containers)} actual thumbnail containers (excluded masks)")
+            
+            if not all_thumbnail_containers:
+                logger.debug("🔍 No thumbnail containers found")
+                return None
+            
+            logger.debug(f"📊 Found {len(all_thumbnail_containers)} thumbnail containers total")
+            
+            # Find the active thumbnail index
+            active_index = -1
+            for i, container in enumerate(all_thumbnail_containers):
+                class_attr = await container.get_attribute('class') or ''
+                if 'active' in class_attr:
+                    active_index = i
+                    logger.debug(f"🎯 Active thumbnail found at index {i} with classes: {class_attr}")
+                    break
+            
+            if active_index == -1:
+                logger.debug("⚠️ No active thumbnail found, returning first non-mask container")
+                # Return first container that's not a mask
+                for container in all_thumbnail_containers:
+                    class_attr = await container.get_attribute('class') or ''
+                    if '-mask' not in class_attr:
+                        logger.debug(f"🎯 Returning first non-mask container with classes: {class_attr}")
+                        return container
+                return None
+            
+            # Find next thumbnail after active
+            start_index = active_index + 1 if skip_active else active_index
+            
+            for i in range(start_index, len(all_thumbnail_containers)):
+                container = all_thumbnail_containers[i]
+                class_attr = await container.get_attribute('class') or ''
+                
+                # Look for non-active, non-mask thumbnail containers
+                if 'thumsCou' in class_attr and 'active' not in class_attr and '-mask' not in class_attr:
+                    logger.debug(f"✅ Found next thumbnail container at index {i} with classes: {class_attr}")
+                    return container
+            
+            logger.debug("🏁 No more thumbnail containers found after active one")
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error finding next thumbnail after active: {e}")
+            return None
+    
+    async def activate_next_thumbnail(self, page) -> bool:
+        """Click on the next thumbnail to make it active (landmark-based navigation)"""
+        try:
+            # Find the next thumbnail after the currently active one
+            next_thumbnail = await self.find_next_thumbnail_after_active(page, skip_active=True)
+            
+            if not next_thumbnail:
+                logger.debug("🔍 No next thumbnail found to activate")
+                return False
+            
+            # Get some info about what we're clicking
+            class_attr = await next_thumbnail.get_attribute('class') or ''
+            
+            # Verify this is not a mask element
+            if '-mask' in class_attr:
+                logger.warning(f"⚠️ Skipping mask element: {class_attr}")
+                return False
+            
+            logger.info(f"🖱️ Activating next thumbnail with classes: {class_attr}")
+            logger.debug(f"Will try multiple click strategies to handle overlay interception")
+            
+            # Multiple click strategies to handle overlay interception
+            click_success = False
+            
+            # Strategy 1: Click the image inside the container (avoids most overlays)
+            try:
+                img_element = await next_thumbnail.query_selector('img')
+                if img_element:
+                    logger.debug("🎨 Strategy 1: Clicking image element inside thumbnail container")
+                    await img_element.click(timeout=3000)
+                    click_success = True
+            except Exception as img_error:
+                logger.debug(f"Image click failed: {img_error}")
+            
+            # Strategy 2: Force click the container (bypasses overlay interception)
+            if not click_success:
+                try:
+                    logger.debug("🔨 Strategy 2: Force clicking thumbnail container")
+                    await next_thumbnail.click(force=True, timeout=3000)
+                    click_success = True
+                except Exception as force_error:
+                    logger.debug(f"Force click failed: {force_error}")
+            
+            # Strategy 3: Use page.click with coordinates (ultimate fallback)
+            if not click_success:
+                try:
+                    logger.debug("🎯 Strategy 3: Clicking at container coordinates")
+                    # Get the bounding box and click at center
+                    box = await next_thumbnail.bounding_box()
+                    if box:
+                        center_x = box['x'] + box['width'] / 2
+                        center_y = box['y'] + box['height'] / 2
+                        await page.click(f"css=body", position={'x': center_x, 'y': center_y}, force=True)
+                        click_success = True
+                except Exception as coord_error:
+                    logger.debug(f"Coordinate click failed: {coord_error}")
+            
+            # Strategy 4: Dispatch click event directly (last resort)
+            if not click_success:
+                try:
+                    logger.debug("🪄 Strategy 4: Dispatching click event directly")
+                    await next_thumbnail.dispatch_event('click')
+                    click_success = True
+                except Exception as dispatch_error:
+                    logger.error(f"All click strategies failed: {dispatch_error}")
+                    return False
+            
+            # Brief wait for the activation to take effect
+            await page.wait_for_timeout(500)
+            
+            # Verify the thumbnail became active
+            updated_class = await next_thumbnail.get_attribute('class') or ''
+            if 'active' in updated_class:
+                logger.info(f"✅ Successfully activated thumbnail - new classes: {updated_class}")
+                return True
+            else:
+                # Sometimes the active class moves to a different element, let's check
+                active_element = await self.find_active_thumbnail(page)
+                if active_element:
+                    logger.info("✅ Thumbnail activation successful (active class detected)")
+                    return True
+                else:
+                    logger.warning(f"⚠️ Click succeeded but thumbnail may not be active: {updated_class}")
+                    return True  # Still return True as the click succeeded
+                    
+        except Exception as e:
+            logger.error(f"Error activating next thumbnail: {e}")
+            return False
+    
+    async def navigate_to_next_thumbnail_landmark(self, page) -> bool:
+        """Navigate to next thumbnail using active-class landmark approach"""
+        try:
+            logger.info("🧭 Using landmark-based thumbnail navigation")
+            
+            # Step 1: Find current active thumbnail (for reference)
+            current_active = await self.find_active_thumbnail(page)
+            if current_active:
+                current_class = await current_active.get_attribute('class') or ''
+                logger.debug(f"📍 Current active thumbnail classes: {current_class}")
+            else:
+                logger.debug("📍 No currently active thumbnail detected")
+            
+            # Step 2: Activate the next thumbnail
+            success = await self.activate_next_thumbnail(page)
+            
+            if success:
+                logger.info("✅ Successfully navigated to next thumbnail using landmark method")
+                return True
+            else:
+                logger.warning("⚠️ Failed to navigate to next thumbnail - may need scrolling")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Error in landmark-based navigation: {e}")
+            return False
+    
+    async def preload_gallery_thumbnails(self, page) -> bool:
+        """Pre-load the gallery by scrolling to reveal all available thumbnails"""
+        try:
+            logger.info("🔄 Pre-loading gallery thumbnails with advanced infinite scroll triggers...")
+            
+            # Track initial state
+            initial_count = len(await self.get_visible_thumbnail_identifiers(page))
+            logger.info(f"📊 Initial thumbnail count: {initial_count}")
+            
+            # Diagnose scroll environment
+            await self._diagnose_scroll_environment(page)
+            
+            # Try multiple scroll strategies
+            strategies = [
+                self._try_enhanced_infinite_scroll_triggers,
+                self._try_network_idle_scroll,
+                self._try_intersection_observer_scroll,
+                self._try_manual_element_scroll
+            ]
+            
+            total_successful_scrolls = 0
+            final_count = initial_count
+            
+            for strategy_idx, strategy in enumerate(strategies):
+                logger.info(f"🎯 Trying scroll strategy {strategy_idx + 1}/{len(strategies)}: {strategy.__name__}")
+                
+                try:
+                    strategy_result = await strategy(page)
+                    if strategy_result > 0:
+                        total_successful_scrolls += strategy_result
+                        current_count = len(await self.get_visible_thumbnail_identifiers(page))
+                        if current_count > final_count:
+                            final_count = current_count
+                            logger.info(f"✅ Strategy {strategy_idx + 1} successful: +{strategy_result} scrolls, {current_count} thumbnails")
+                            break  # Found working strategy
+                    else:
+                        logger.debug(f"⚠️ Strategy {strategy_idx + 1} failed or no progress")
+                        
+                except Exception as e:
+                    logger.debug(f"❌ Strategy {strategy_idx + 1} error: {e}")
+                    continue
+            
+            logger.info(f"🎉 Pre-loading complete: {initial_count} → {final_count} thumbnails ({total_successful_scrolls} successful scrolls)")
+            
+            # Scroll back to top to start from beginning
+            if total_successful_scrolls > 0:
+                logger.info("⬆️ Scrolling back to top of gallery")
+                await page.evaluate("window.scrollTo(0, 0)")
+                await page.wait_for_timeout(1000)
+            
+            return final_count > initial_count
+            
+        except Exception as e:
+            logger.error(f"Error in gallery pre-loading: {e}")
+            return False
+
+    async def _diagnose_scroll_environment(self, page) -> None:
+        """Diagnose the scroll environment to understand why infinite scroll may not work"""
+        try:
+            logger.info("🔍 Diagnosing scroll environment...")
+            
+            # Check page dimensions and viewport
+            viewport_info = await page.evaluate("""() => {
+                return {
+                    windowHeight: window.innerHeight,
+                    windowWidth: window.innerWidth,
+                    documentHeight: document.documentElement.scrollHeight,
+                    documentWidth: document.documentElement.scrollWidth,
+                    scrollY: window.scrollY,
+                    scrollX: window.scrollX,
+                    maxScrollY: document.documentElement.scrollHeight - window.innerHeight,
+                    userAgent: navigator.userAgent,
+                    hasIntersectionObserver: 'IntersectionObserver' in window
+                }
+            }""")
+            
+            logger.info(f"📱 Viewport: {viewport_info['windowWidth']}x{viewport_info['windowHeight']}")
+            logger.info(f"📄 Document: {viewport_info['documentWidth']}x{viewport_info['documentHeight']}")
+            logger.info(f"📍 Scroll position: ({viewport_info['scrollX']}, {viewport_info['scrollY']}) / max: {viewport_info['maxScrollY']}")
+            logger.info(f"🔬 IntersectionObserver available: {viewport_info['hasIntersectionObserver']}")
+            
+            # Check for infinite scroll indicators
+            scroll_indicators = await page.evaluate("""() => {
+                const indicators = [];
+                
+                // Look for common infinite scroll patterns
+                if (document.querySelector('[data-infinite-scroll]')) indicators.push('data-infinite-scroll');
+                if (document.querySelector('.infinite-scroll')) indicators.push('.infinite-scroll');
+                if (document.querySelector('[data-scroll-loading]')) indicators.push('data-scroll-loading');
+                
+                // Check for loading indicators
+                const loadingElements = document.querySelectorAll('[class*="loading"], [class*="spinner"], [class*="loader"]');
+                if (loadingElements.length > 0) indicators.push(`${loadingElements.length} loading elements`);
+                
+                // Check for scroll event listeners
+                const hasScrollListeners = window.addEventListener.toString().includes('scroll') || 
+                                         document.addEventListener.toString().includes('scroll');
+                                         
+                return {
+                    indicators,
+                    totalElements: document.querySelectorAll('*').length,
+                    scripts: document.scripts.length,
+                    hasScrollListeners
+                };
+            }""")
+            
+            logger.info(f"🎯 Scroll indicators found: {scroll_indicators['indicators']}")
+            logger.info(f"📊 Total DOM elements: {scroll_indicators['totalElements']}, Scripts: {scroll_indicators['scripts']}")
+            
+        except Exception as e:
+            logger.debug(f"Error diagnosing scroll environment: {e}")
+
+    async def _try_enhanced_infinite_scroll_triggers(self, page) -> int:
+        """Try enhanced infinite scroll triggering with network monitoring"""
+        try:
+            logger.debug("🚀 Trying enhanced infinite scroll triggers...")
+            
+            successful_scrolls = 0
+            max_attempts = 8
+            
+            for attempt in range(max_attempts):
+                # Get baseline
+                before_count = len(await self.get_visible_thumbnail_identifiers(page))
+                
+                # Multiple scroll triggers in sequence
+                await page.evaluate(f"""
+                    // Trigger multiple scroll events
+                    window.scrollBy(0, {self.config.scroll_amount});
+                    
+                    // Dispatch manual scroll events
+                    window.dispatchEvent(new Event('scroll'));
+                    document.dispatchEvent(new Event('scroll'));
+                    
+                    // Trigger at bottom detection
+                    const scrollPercent = (window.scrollY + window.innerHeight) / document.documentElement.scrollHeight;
+                    if (scrollPercent > 0.8) {{
+                        window.dispatchEvent(new CustomEvent('nearBottom'));
+                        document.dispatchEvent(new CustomEvent('loadMore'));
+                    }}
+                """)
+                
+                # Wait for network activity
+                await page.wait_for_timeout(2000)
+                
+                # Try additional triggers
+                await page.evaluate("""
+                    // Simulate user interaction that might trigger infinite scroll
+                    const gallery = document.querySelector('.thumsInner, .gallery-container, [class*="gallery"]');
+                    if (gallery) {
+                        gallery.dispatchEvent(new Event('scroll'));
+                        gallery.scrollTop += 100;
+                    }
+                    
+                    // Try intersection observer trigger simulation
+                    const lastThumbnail = document.querySelector('.thumsCou:last-child, .thumbnail:last-child');
+                    if (lastThumbnail) {
+                        lastThumbnail.scrollIntoView({ behavior: 'smooth', block: 'end' });
+                    }
+                """)
+                
+                # Wait for potential network requests
+                await page.wait_for_timeout(3000)
+                
+                # Check for new content
+                after_count = len(await self.get_visible_thumbnail_identifiers(page))
+                new_thumbnails = after_count - before_count
+                
+                if new_thumbnails > 0:
+                    successful_scrolls += 1
+                    logger.debug(f"✅ Enhanced trigger {attempt + 1}: +{new_thumbnails} thumbnails")
+                else:
+                    logger.debug(f"⚠️ Enhanced trigger {attempt + 1}: no new content")
+                    break
+                    
+            return successful_scrolls
+            
+        except Exception as e:
+            logger.debug(f"Enhanced scroll triggers failed: {e}")
+            return 0
+
+    async def _try_network_idle_scroll(self, page) -> int:
+        """Try scrolling with network idle detection"""
+        try:
+            logger.debug("🌐 Trying network idle scroll strategy...")
+            
+            successful_scrolls = 0
+            
+            for attempt in range(5):
+                before_count = len(await self.get_visible_thumbnail_identifiers(page))
+                
+                # Scroll and wait for network idle
+                await page.evaluate(f"window.scrollBy(0, {self.config.scroll_amount})")
+                
+                try:
+                    # Wait for network idle (no requests for 500ms)
+                    await page.wait_for_load_state("networkidle", timeout=5000)
+                    logger.debug(f"Network idle detected after scroll {attempt + 1}")
+                except:
+                    # Fallback to timed wait
+                    await page.wait_for_timeout(3000)
+                
+                after_count = len(await self.get_visible_thumbnail_identifiers(page))
+                if after_count > before_count:
+                    successful_scrolls += 1
+                    logger.debug(f"✅ Network idle scroll {attempt + 1}: +{after_count - before_count} thumbnails")
+                else:
+                    break
+                    
+            return successful_scrolls
+            
+        except Exception as e:
+            logger.debug(f"Network idle scroll failed: {e}")
+            return 0
+
+    async def _try_intersection_observer_scroll(self, page) -> int:
+        """Try using intersection observer to trigger loading"""
+        try:
+            logger.debug("👁️ Trying intersection observer scroll strategy...")
+            
+            # Set up intersection observer for infinite scroll
+            await page.evaluate("""
+                if ('IntersectionObserver' in window) {
+                    const observer = new IntersectionObserver((entries) => {
+                        entries.forEach(entry => {
+                            if (entry.isIntersecting) {
+                                // Trigger potential load more events
+                                window.dispatchEvent(new CustomEvent('loadMore'));
+                                document.dispatchEvent(new CustomEvent('infiniteScroll'));
+                                
+                                // Try to find and trigger any load buttons
+                                const loadButton = document.querySelector('[class*="load-more"], [class*="show-more"], [data-load-more]');
+                                if (loadButton) loadButton.click();
+                            }
+                        });
+                    }, { threshold: 0.1 });
+                    
+                    // Observe the last thumbnail
+                    const lastThumbnail = document.querySelector('.thumsCou:last-child');
+                    if (lastThumbnail) {
+                        observer.observe(lastThumbnail);
+                        window.scrollToLastThumbnail = () => lastThumbnail.scrollIntoView({ behavior: 'smooth' });
+                    }
+                }
+            """)
+            
+            successful_scrolls = 0
+            
+            for attempt in range(3):
+                before_count = len(await self.get_visible_thumbnail_identifiers(page))
+                
+                # Trigger intersection observer
+                await page.evaluate("if (window.scrollToLastThumbnail) window.scrollToLastThumbnail()")
+                await page.wait_for_timeout(2000)
+                
+                # Manual scroll as backup
+                await page.evaluate(f"window.scrollBy(0, {self.config.scroll_amount})")
+                await page.wait_for_timeout(2000)
+                
+                after_count = len(await self.get_visible_thumbnail_identifiers(page))
+                if after_count > before_count:
+                    successful_scrolls += 1
+                else:
+                    break
+                    
+            return successful_scrolls
+            
+        except Exception as e:
+            logger.debug(f"Intersection observer scroll failed: {e}")
+            return 0
+
+    async def _try_manual_element_scroll(self, page) -> int:
+        """Try scrolling specific gallery elements"""
+        try:
+            logger.debug("🎯 Trying manual element scroll strategy...")
+            
+            # Find gallery containers
+            gallery_selectors = [
+                ".thumsInner",
+                ".gallery-container",
+                "[class*='gallery']",
+                "[class*='grid']",
+                ".content-wrapper"
+            ]
+            
+            successful_scrolls = 0
+            
+            for selector in gallery_selectors:
+                try:
+                    containers = await page.query_selector_all(selector)
+                    
+                    for container in containers:
+                        before_count = len(await self.get_visible_thumbnail_identifiers(page))
+                        
+                        # Try scrolling this specific container
+                        await container.evaluate(f"el => el.scrollBy(0, {self.config.scroll_amount})")
+                        await page.wait_for_timeout(1500)
+                        
+                        after_count = len(await self.get_visible_thumbnail_identifiers(page))
+                        if after_count > before_count:
+                            successful_scrolls += 1
+                            logger.debug(f"✅ Element scroll on {selector}: +{after_count - before_count} thumbnails")
+                            return successful_scrolls
+                            
+                except Exception as e:
+                    logger.debug(f"Element scroll failed for {selector}: {e}")
+                    continue
+                    
+            return successful_scrolls
+            
+        except Exception as e:
+            logger.debug(f"Manual element scroll failed: {e}")
+            return 0
+
+    async def scroll_and_find_more_thumbnails(self, page) -> bool:
+        """Scroll the gallery and check for new thumbnails using landmark approach"""
+        try:
+            logger.info("📜 Scrolling to find more thumbnails...")
+            
+            # Get thumbnail count before scroll (excluding masks)
+            before_containers = await page.query_selector_all("div.thumsCou")
+            if not before_containers:
+                # Fallback with filtering
+                all_elements = await page.query_selector_all("div[class*='thumsCou']")
+                before_containers = []
+                for elem in all_elements:
+                    class_attr = await elem.get_attribute('class') or ''
+                    if 'thumsCou' in class_attr and '-mask' not in class_attr:
+                        before_containers.append(elem)
+            
+            before_count = len(before_containers)
+            
+            # Find scrollable container and scroll
+            scrollable_container = await self._find_scrollable_container(page)
+            if scrollable_container:
+                await scrollable_container.evaluate(f"el => el.scrollBy(0, {self.config.scroll_amount})")
+                await page.wait_for_timeout(1000)  # Wait for new content to load
+                
+                # Check if new thumbnails appeared (excluding masks)
+                after_containers = await page.query_selector_all("div.thumsCou")
+                if not after_containers:
+                    # Fallback with filtering
+                    all_elements = await page.query_selector_all("div[class*='thumsCou']")
+                    after_containers = []
+                    for elem in all_elements:
+                        class_attr = await elem.get_attribute('class') or ''
+                        if 'thumsCou' in class_attr and '-mask' not in class_attr:
+                            after_containers.append(elem)
+                
+                after_count = len(after_containers)
+                
+                if after_count > before_count:
+                    new_count = after_count - before_count
+                    logger.info(f"✅ Scroll successful: {new_count} new thumbnail containers loaded")
+                    return True
+                else:
+                    logger.debug(f"📊 Scroll completed but no new containers ({before_count} → {after_count})")
+                    return False
+            else:
+                logger.warning("⚠️ Could not find scrollable container")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Error scrolling for more thumbnails: {e}")
+            return False
     
     async def get_visible_thumbnail_identifiers(self, page) -> List[str]:
         """Get unique identifiers for currently visible thumbnails"""
@@ -1082,79 +1793,382 @@ class GenerationDownloadManager:
         return best_date[0]
     
     async def scroll_thumbnail_gallery(self, page) -> bool:
-        """Scroll the thumbnail gallery to reveal more thumbnails"""
+        """Enhanced scroll method with multiple validation and recovery mechanisms"""
         try:
-            logger.info("🔄 Scrolling thumbnail gallery to reveal more generations...")
+            logger.info("🔄 Scrolling thumbnail gallery with enhanced detection...")
             
-            # Get current visible thumbnails before scrolling
-            before_scroll_ids = await self.get_visible_thumbnail_identifiers(page)
+            # Phase 1: Get comprehensive before-scroll state
+            before_scroll_thumbnails = await self.get_robust_thumbnail_list(page)
+            before_scroll_ids = [t['unique_id'] for t in before_scroll_thumbnails if t['unique_id']]
             before_count = len(before_scroll_ids)
             
-            logger.debug(f"Thumbnails before scroll: {before_count}")
+            logger.debug(f"Thumbnails before scroll: {before_count} total, {sum(1 for t in before_scroll_thumbnails if t['visible'])} visible")
             
-            # Find the scrollable container
-            container_selectors = [
-                self.config.thumbnail_container_selector,
-                ".thumbnail-container",
-                ".gallery-container", 
-                ".scroll-container",
-                # Fallback to parent containers
-                f"{self.config.thumbnail_container_selector} .."
-            ]
+            # Phase 2: Multi-strategy scrollable container detection
+            scrollable_container = await self._find_scrollable_container(page)
             
-            scrollable_container = None
-            for selector in container_selectors:
+            # Phase 3: Execute scroll with validation
+            scroll_executed = False
+            
+            if scrollable_container:
                 try:
-                    container = await page.wait_for_selector(selector, timeout=3000)
-                    if container:
-                        # Check if this element is scrollable
-                        is_scrollable = await container.evaluate("""el => {
-                            return el.scrollHeight > el.clientHeight || 
-                                   el.scrollWidth > el.clientWidth ||
-                                   getComputedStyle(el).overflowY === 'scroll' ||
-                                   getComputedStyle(el).overflowY === 'auto';
-                        }""")
+                    # Get scroll position before
+                    scroll_before = await scrollable_container.evaluate("el => el.scrollTop")
+                    
+                    # Execute scroll
+                    await scrollable_container.evaluate(f"el => el.scrollBy(0, {self.config.scroll_amount})")
+                    scroll_executed = True
+                    
+                    # Verify scroll actually happened
+                    await page.wait_for_timeout(500)  # Brief wait for scroll to complete
+                    scroll_after = await scrollable_container.evaluate("el => el.scrollTop")
+                    
+                    if scroll_after <= scroll_before:
+                        logger.warning(f"⚠️ Container scroll position didn't change ({scroll_before} → {scroll_after})")
+                        scroll_executed = False
                         
-                        if is_scrollable:
-                            scrollable_container = container
-                            logger.debug(f"Found scrollable container: {selector}")
-                            break
-                except:
-                    continue
+                except Exception as e:
+                    logger.debug(f"Container scroll failed: {e}")
+                    scroll_executed = False
             
-            if not scrollable_container:
-                logger.warning("Could not find scrollable container, trying page scroll")
-                # Fallback to page scrolling
-                await page.evaluate(f"window.scrollBy(0, {self.config.scroll_amount})")
-            else:
-                # Scroll the container
-                await scrollable_container.evaluate(f"el => el.scrollBy(0, {self.config.scroll_amount})")
+            # Phase 4: Fallback scrolling methods
+            if not scroll_executed:
+                logger.debug("Trying fallback scroll methods...")
+                
+                # Method 1: Page scroll
+                try:
+                    await page.evaluate(f"window.scrollBy(0, {self.config.scroll_amount})")
+                    scroll_executed = True
+                    logger.debug("Used page scroll fallback")
+                except Exception as e:
+                    logger.debug(f"Page scroll failed: {e}")
+                
+                # Method 2: Keyboard scroll
+                if not scroll_executed:
+                    try:
+                        await page.keyboard.press("PageDown")
+                        scroll_executed = True
+                        logger.debug("Used keyboard scroll fallback")
+                    except Exception as e:
+                        logger.debug(f"Keyboard scroll failed: {e}")
+                
+                # Method 3: Mouse wheel scroll
+                if not scroll_executed:
+                    try:
+                        await page.mouse.wheel(0, self.config.scroll_amount)
+                        scroll_executed = True
+                        logger.debug("Used mouse wheel scroll fallback")
+                    except Exception as e:
+                        logger.debug(f"Mouse wheel scroll failed: {e}")
             
-            # Wait for new content to load
-            await page.wait_for_timeout(self.config.scroll_wait_time)
+            if not scroll_executed:
+                logger.error("❌ All scroll methods failed")
+                return False
             
-            # Check if new thumbnails appeared
-            after_scroll_ids = await self.get_visible_thumbnail_identifiers(page)
-            after_count = len(after_scroll_ids)
+            # Phase 5: Wait for content to load with progressive checks
+            await self._wait_for_scroll_content_load(page)
             
-            # Find truly new thumbnails (not just moved into view)
-            new_thumbnails = [tid for tid in after_scroll_ids if tid not in before_scroll_ids]
-            new_count = len(new_thumbnails)
+            # Phase 6: Multi-method validation of new content
+            validation_results = await self._validate_scroll_success(page, before_scroll_ids, before_count)
             
-            logger.info(f"📊 Scroll result: {before_count} → {after_count} thumbnails ({new_count} new)")
-            
-            if new_count >= self.config.scroll_detection_threshold:
-                self.visible_thumbnails_cache = after_scroll_ids
+            if validation_results['success']:
+                # Update internal state
+                self.visible_thumbnails_cache = validation_results['current_ids']
                 self.current_scroll_position += self.config.scroll_amount
-                logger.info("✅ Successfully scrolled and found new thumbnails")
+                self.last_scroll_thumbnail_count = validation_results['current_count']
+                
+                logger.info(f"✅ Enhanced scroll successful: {before_count} → {validation_results['current_count']} thumbnails ({validation_results['new_count']} new)")
                 return True
             else:
-                logger.warning(f"⚠️ Scroll did not reveal enough new thumbnails (found {new_count}, need {self.config.scroll_detection_threshold})")
+                logger.warning(f"⚠️ Enhanced scroll validation failed: {validation_results['reason']}")
                 return False
                 
         except Exception as e:
-            logger.error(f"Error scrolling thumbnail gallery: {e}")
+            logger.error(f"Error in enhanced scroll: {e}")
             return False
+    
+    async def _find_scrollable_container(self, page) -> Optional[object]:
+        """Find the best scrollable container using enhanced detection"""
+        container_selectors = [
+            self.config.thumbnail_container_selector,
+            ".thumbnail-container",
+            ".gallery-container", 
+            ".scroll-container",
+            ".gallery-content",
+            ".content-wrapper",
+            # Parent container patterns
+            f"{self.config.thumbnail_container_selector}",
+            f"{self.config.thumbnail_selector}:first-child",
+        ]
+        
+        for selector in container_selectors:
+            try:
+                containers = await page.query_selector_all(selector)
+                
+                for container in containers:
+                    try:
+                        # Enhanced scrollability check
+                        scroll_info = await container.evaluate("""el => {
+                            const style = getComputedStyle(el);
+                            const scrollHeight = el.scrollHeight;
+                            const clientHeight = el.clientHeight;
+                            const scrollWidth = el.scrollWidth;
+                            const clientWidth = el.clientWidth;
+                            
+                            return {
+                                hasVerticalScroll: scrollHeight > clientHeight,
+                                hasHorizontalScroll: scrollWidth > clientWidth,
+                                overflowY: style.overflowY,
+                                overflowX: style.overflowX,
+                                scrollable: scrollHeight > clientHeight || 
+                                           scrollWidth > clientWidth ||
+                                           style.overflowY === 'scroll' ||
+                                           style.overflowY === 'auto' ||
+                                           style.overflowX === 'scroll' ||
+                                           style.overflowX === 'auto',
+                                rect: el.getBoundingClientRect(),
+                                scrollTop: el.scrollTop,
+                                scrollLeft: el.scrollLeft
+                            };
+                        }""")
+                        
+                        if scroll_info['scrollable'] and scroll_info['rect']['height'] > 100:
+                            logger.debug(f"Found scrollable container: {selector} (scrollHeight: {scroll_info.get('hasVerticalScroll', False)})")
+                            return container
+                            
+                    except Exception as e:
+                        logger.debug(f"Error checking container {selector}: {e}")
+                        continue
+                        
+            except Exception as e:
+                logger.debug(f"Error with selector {selector}: {e}")
+                continue
+        
+        logger.debug("No suitable scrollable container found")
+        return None
+    
+    async def _wait_for_scroll_content_load(self, page) -> None:
+        """Wait for content to load after scroll with progressive validation"""
+        # Initial wait
+        await page.wait_for_timeout(self.config.scroll_wait_time)
+        
+        # Progressive content load detection
+        stable_count = 0
+        last_element_count = 0
+        
+        for check in range(3):  # Check 3 times over 1.5 seconds
+            try:
+                current_elements = await page.query_selector_all(f"{self.config.thumbnail_container_selector} {self.config.thumbnail_selector}")
+                current_count = len(current_elements)
+                
+                if current_count == last_element_count:
+                    stable_count += 1
+                else:
+                    stable_count = 0
+                    last_element_count = current_count
+                
+                if stable_count >= 2:  # Content stable for 2 checks
+                    logger.debug(f"Content stable at {current_count} elements")
+                    break
+                    
+                await page.wait_for_timeout(500)  # Wait 500ms between checks
+                
+            except Exception as e:
+                logger.debug(f"Error during content load check {check}: {e}")
+                break
+    
+    async def _validate_scroll_success(self, page, before_scroll_ids: List[str], before_count: int) -> Dict[str, Any]:
+        """Multi-method validation of scroll success"""
+        try:
+            # Get current state
+            current_thumbnails = await self.get_robust_thumbnail_list(page)
+            current_ids = [t['unique_id'] for t in current_thumbnails if t['unique_id']]
+            current_count = len(current_ids)
+            
+            # Method 1: New thumbnail detection (primary)
+            truly_new_ids = [tid for tid in current_ids if tid not in before_scroll_ids]
+            new_count = len(truly_new_ids)
+            
+            # Method 2: Total count increase validation
+            count_increased = current_count > before_count
+            
+            # Method 3: Visibility validation (check if more thumbnails are now visible)
+            visible_count = sum(1 for t in current_thumbnails if t['visible'])
+            before_visible = sum(1 for tid in before_scroll_ids if tid in self.visible_thumbnails_cache)
+            
+            # Method 4: Position-based validation (check if we have thumbnails at new positions)
+            max_before_position = max([i for i, tid in enumerate(before_scroll_ids)] + [-1])
+            max_current_position = max([t['position'] for t in current_thumbnails] + [-1])
+            position_advanced = max_current_position > max_before_position
+            
+            # Evaluate success criteria
+            primary_success = new_count >= self.config.scroll_detection_threshold
+            secondary_success = count_increased and (visible_count > before_visible or position_advanced)
+            
+            success = primary_success or secondary_success
+            
+            result = {
+                'success': success,
+                'current_ids': current_ids,
+                'current_count': current_count,
+                'new_count': new_count,
+                'visible_count': visible_count,
+                'position_advanced': position_advanced,
+                'reason': ''
+            }
+            
+            if not success:
+                if new_count == 0 and not count_increased:
+                    result['reason'] = f"No new content detected (threshold: {self.config.scroll_detection_threshold})"
+                elif new_count < self.config.scroll_detection_threshold:
+                    result['reason'] = f"Insufficient new thumbnails ({new_count} < {self.config.scroll_detection_threshold})"
+                else:
+                    result['reason'] = "Secondary validation failed"
+            
+            logger.debug(f"Scroll validation: new={new_count}, count_change={before_count}→{current_count}, visible_change={before_visible}→{visible_count}, pos_advanced={position_advanced}")
+            return result
+            
+        except Exception as e:
+            logger.error(f"Error validating scroll success: {e}")
+            return {
+                'success': False,
+                'current_ids': before_scroll_ids,
+                'current_count': before_count,
+                'new_count': 0,
+                'visible_count': 0,
+                'position_advanced': False,
+                'reason': f"Validation error: {e}"
+            }
+    
+    async def _robust_thumbnail_click(self, page, thumbnail_element, thumbnail_id: str) -> bool:
+        """Enhanced thumbnail click with comprehensive stale element recovery"""
+        try:
+            max_click_attempts = 3
+            
+            for attempt in range(max_click_attempts):
+                try:
+                    logger.debug(f"Click attempt {attempt + 1} for thumbnail: {thumbnail_id}")
+                    
+                    # Ensure element is scrolled into view
+                    await thumbnail_element.scroll_into_view_if_needed()
+                    await page.wait_for_timeout(300)  # Brief wait for scroll
+                    
+                    # Check if element is still visible and attached
+                    is_visible = await thumbnail_element.is_visible()
+                    if not is_visible:
+                        logger.debug(f"Thumbnail {thumbnail_id} not visible, attempt {attempt + 1}")
+                        if attempt < max_click_attempts - 1:  # Not the last attempt
+                            await page.wait_for_timeout(500)
+                            continue
+                        else:
+                            return False
+                    
+                    # Perform the click
+                    await thumbnail_element.click(timeout=8000)
+                    logger.info(f"✅ Successfully clicked thumbnail: {thumbnail_id}")
+                    return True
+                    
+                except Exception as e:
+                    error_msg = str(e).lower()
+                    logger.debug(f"Click attempt {attempt + 1} failed for {thumbnail_id}: {e}")
+                    
+                    # Check if it's a stale element reference
+                    if any(keyword in error_msg for keyword in ["not attached", "detached", "stale", "intercepts pointer"]):
+                        logger.info(f"🔄 Stale element detected, refreshing reference for {thumbnail_id}")
+                        
+                        # Try to refresh the element reference
+                        fresh_element = await self.refresh_element_reference(page, thumbnail_id)
+                        if fresh_element:
+                            thumbnail_element = fresh_element  # Use fresh element for next attempt
+                            logger.debug(f"Refreshed element reference for {thumbnail_id}")
+                        else:
+                            logger.warning(f"Could not refresh element reference for {thumbnail_id}")
+                            if attempt == max_click_attempts - 1:  # Last attempt
+                                return False
+                    
+                    # Wait before retry
+                    if attempt < max_click_attempts - 1:
+                        await page.wait_for_timeout(1000)
+            
+            logger.error(f"All click attempts failed for thumbnail: {thumbnail_id}")
+            return False
+            
+        except Exception as e:
+            logger.error(f"Unexpected error in robust click for {thumbnail_id}: {e}")
+            return False
+    
+    async def check_comprehensive_duplicate(self, page, thumbnail_id: str, existing_files: set = None) -> bool:
+        """Enhanced duplicate detection using multiple comparison methods"""
+        try:
+            # Method 1: Extract creation metadata for comparison
+            metadata = await self.extract_metadata_from_page(page)
+            if not metadata:
+                logger.debug(f"No metadata extracted for duplicate check: {thumbnail_id}")
+                return False
+            
+            generation_date = metadata.get('generation_date', '')
+            prompt = metadata.get('prompt', '')
+            
+            # Method 2: Compare with existing files (if provided)
+            if existing_files and generation_date:
+                # Try different date format comparisons
+                date_formats_to_check = [
+                    generation_date,
+                    self._normalize_date_format(generation_date)
+                ]
+                
+                for date_format in date_formats_to_check:
+                    if date_format in existing_files:
+                        logger.info(f"🔍 Duplicate detected by date comparison: {date_format}")
+                        return True
+            
+            # Method 3: Compare with processed thumbnails in current session
+            if thumbnail_id in self.processed_thumbnails:
+                logger.info(f"🔍 Duplicate detected in current session: {thumbnail_id}")
+                return True
+            
+            # Method 4: Content-based duplicate detection
+            if hasattr(self, 'content_signatures'):
+                content_signature = f"{generation_date}#{prompt[:50] if prompt else 'no_prompt'}"
+                if content_signature in self.content_signatures:
+                    logger.info(f"🔍 Duplicate detected by content signature: {content_signature}")
+                    return True
+                else:
+                    self.content_signatures.add(content_signature)
+            else:
+                # Initialize content signatures tracking
+                self.content_signatures = set()
+                content_signature = f"{generation_date}#{prompt[:50] if prompt else 'no_prompt'}"
+                self.content_signatures.add(content_signature)
+            
+            return False  # No duplicate detected
+            
+        except Exception as e:
+            logger.debug(f"Error in comprehensive duplicate check: {e}")
+            return False
+    
+    def _normalize_date_format(self, date_string: str) -> str:
+        """Normalize different date formats for consistent comparison"""
+        try:
+            # Try to parse and reformat date
+            date_formats = [
+                "%d %b %Y %H:%M:%S",    # "24 Aug 2025 01:37:01"
+                "%Y-%m-%d %H:%M:%S",    # "2025-08-24 01:37:01"
+                "%Y-%m-%d-%H-%M-%S",    # "2025-08-24-01-37-01"
+            ]
+            
+            for fmt in date_formats:
+                try:
+                    parsed_date = datetime.strptime(date_string.strip(), fmt)
+                    return parsed_date.strftime("%Y-%m-%d-%H-%M-%S")  # Standardized format
+                except ValueError:
+                    continue
+            
+            # If no format matches, return original
+            return date_string
+            
+        except Exception:
+            return date_string
     
     async def ensure_sufficient_thumbnails(self, page, required_count: int = 1) -> bool:
         """Ensure there are sufficient thumbnails visible for continued processing"""
@@ -1786,6 +2800,16 @@ class GenerationDownloadManager:
             
             if watermark_clicked:
                 logger.info("Complete download sequence successful: SVG → watermark")
+                
+                # CRITICAL FIX: Close overlay popup with thumbs-up click to enable next thumbnail navigation
+                logger.debug("🔧 Closing overlay popup to enable next thumbnail navigation...")
+                overlay_closed = await self.close_overlay_popup_with_thumbs_up(page)
+                
+                if overlay_closed:
+                    logger.info("✅ Overlay popup closed - next thumbnail navigation should work")
+                else:
+                    logger.warning("⚠️ Could not close overlay - navigation may be blocked")
+                
                 return True
             else:
                 logger.warning("Watermark option not found, but download button was clicked")
@@ -1793,6 +2817,11 @@ class GenerationDownloadManager:
                 download_started = await self._check_download_initiated(page)
                 if download_started:
                     logger.info("Download appears to have started without watermark option")
+                    
+                    # Also close overlay popup in this case
+                    logger.debug("🔧 Closing overlay popup after direct download...")
+                    await self.close_overlay_popup_with_thumbs_up(page)
+                    
                     return True
                 else:
                     logger.warning("No download activity detected after button click")
@@ -2159,6 +3188,147 @@ class GenerationDownloadManager:
         logger.error("All strategies failed to find 'Download without Watermark' option")
         return False
     
+    async def close_overlay_popup_with_thumbs_up(self, page) -> bool:
+        """Click the thumbs-up icon to close overlay popup after download"""
+        try:
+            logger.debug("🎯 Attempting to close overlay popup with thumbs-up click...")
+            
+            # Wait a moment for the overlay to fully appear
+            await page.wait_for_timeout(1000)
+            
+            # Strategy 1: Target the specific thumbs-up icon using the provided HTML structure
+            thumbs_up_selectors = [
+                # Most specific: First span in the icon container with the thumbs-up SVG
+                "div.sc-bcyJnU.gucrTM span:first-child svg use[href*='icon_tongyong_20px_zan']",
+                "div.sc-bcyJnU.gucrTM span:first-child",
+                
+                # Fallback: Look for thumbs-up icon by SVG use element
+                "svg use[href*='icon_tongyong_20px_zan']",
+                "svg use[xlink\\:href*='icon_tongyong_20px_zan']",
+                
+                # More general: First clickable span in icon panel
+                "div.sc-bcyJnU span[role='img']:first-child",
+                "span[role='img'] svg use[href*='zan']",
+                
+                # Generic: Any thumbs-up like icon
+                "span[style*='cursor: pointer'] svg use[href*='zan']",
+                "[class*='anticon'] svg use[href*='zan']"
+            ]
+            
+            for selector in thumbs_up_selectors:
+                try:
+                    logger.debug(f"Trying thumbs-up selector: {selector}")
+                    element = await page.wait_for_selector(selector, timeout=3000)
+                    
+                    if element and await element.is_visible():
+                        # Get the clickable parent (span element)
+                        clickable_element = element
+                        if selector.endswith('svg') or selector.endswith('use') or 'svg use' in selector:
+                            # If we found the SVG/use, get the parent span
+                            clickable_element = await element.query_selector('xpath=ancestor::span[@role="img"]')
+                            if not clickable_element:
+                                clickable_element = await element.query_selector('xpath=ancestor::span')
+                        
+                        if clickable_element:
+                            await clickable_element.click()
+                            logger.info(f"✅ Successfully clicked thumbs-up icon using selector: {selector}")
+                            
+                            # Wait to ensure overlay closes
+                            await page.wait_for_timeout(500)
+                            return True
+                    
+                except Exception as e:
+                    logger.debug(f"Selector {selector} failed: {e}")
+                    continue
+            
+            # Strategy 2: Look for any clickable element in the icon panel area
+            try:
+                logger.debug("Strategy 2: Looking for first clickable icon in panel...")
+                
+                icon_panel_selectors = [
+                    "div.sc-bcyJnU.gucrTM span[role='img']:first-child",
+                    "div[class*='gucrTM'] span:first-child",
+                    "[role='img'][style*='cursor: pointer']:first-of-type"
+                ]
+                
+                for panel_selector in icon_panel_selectors:
+                    element = await page.query_selector(panel_selector)
+                    if element and await element.is_visible():
+                        await element.click()
+                        logger.info(f"✅ Clicked first icon in panel using: {panel_selector}")
+                        await page.wait_for_timeout(500)
+                        return True
+                        
+            except Exception as e:
+                logger.debug(f"Icon panel strategy failed: {e}")
+            
+            logger.warning("❌ Could not find thumbs-up icon to close overlay")
+            return False
+            
+        except Exception as e:
+            logger.error(f"Error closing overlay with thumbs-up: {e}")
+            return False
+    
+    async def navigate_to_starting_thumbnail(self, page, target_thumbnail_number: int) -> bool:
+        """Navigate to the specified starting thumbnail number"""
+        try:
+            if target_thumbnail_number <= 1:
+                logger.info("Starting from thumbnail #1 - no navigation needed")
+                return True
+            
+            logger.info(f"🧭 Navigating to starting thumbnail #{target_thumbnail_number}...")
+            
+            current_position = 1
+            max_navigation_attempts = target_thumbnail_number * 2  # Safety limit
+            navigation_attempts = 0
+            
+            while current_position < target_thumbnail_number and navigation_attempts < max_navigation_attempts:
+                navigation_attempts += 1
+                
+                # Find current active thumbnail
+                active_thumbnail = await self.find_active_thumbnail(page)
+                if not active_thumbnail:
+                    logger.error(f"❌ Could not find active thumbnail at position {current_position}")
+                    return False
+                
+                # Navigate to next thumbnail
+                logger.debug(f"📍 Current position: {current_position}, target: {target_thumbnail_number}")
+                navigation_success = await self.navigate_to_next_thumbnail_landmark(page)
+                
+                if navigation_success:
+                    current_position += 1
+                    logger.debug(f"✅ Successfully navigated to thumbnail #{current_position}")
+                    
+                    # Add a small delay between navigation steps
+                    await page.wait_for_timeout(500)
+                else:
+                    logger.warning(f"⚠️ Navigation failed at position {current_position}")
+                    
+                    # Try scrolling if navigation fails (might be end of visible thumbnails)
+                    logger.debug("🔄 Attempting scroll to reveal more thumbnails...")
+                    await page.evaluate(f"window.scrollBy(0, {self.config.scroll_amount})")
+                    await page.wait_for_timeout(self.config.scroll_wait_time)
+                    
+                    # Retry navigation after scroll
+                    navigation_success = await self.navigate_to_next_thumbnail_landmark(page)
+                    if navigation_success:
+                        current_position += 1
+                        logger.debug(f"✅ Successfully navigated after scroll to thumbnail #{current_position}")
+                    else:
+                        logger.error(f"❌ Navigation failed even after scrolling at position {current_position}")
+                        break
+            
+            if current_position >= target_thumbnail_number:
+                logger.info(f"🎯 Successfully navigated to starting thumbnail #{target_thumbnail_number}")
+                return True
+            else:
+                logger.error(f"❌ Failed to reach target thumbnail #{target_thumbnail_number}, stopped at #{current_position}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Error navigating to starting thumbnail: {e}")
+            return False
+    
     async def close_download_shelf(self, page) -> None:
         """Attempt to close Chrome download shelf / Recent Downloads popup"""
         try:
@@ -2251,42 +3421,12 @@ class GenerationDownloadManager:
                     "timestamp": datetime.now().isoformat()
                 })
             
-            # Click directly on the thumbnail element with retry for stale references
-            click_success = False
-            try:
-                # First attempt: Use cached element reference
-                await thumbnail_element.scroll_into_view_if_needed()
-                await page.wait_for_timeout(500)
+            # Enhanced click with comprehensive stale element recovery
+            click_success = await self._robust_thumbnail_click(page, thumbnail_element, thumbnail_id)
                 
-                is_visible = await thumbnail_element.is_visible()
-                if not is_visible:
-                    logger.warning(f"Thumbnail {thumbnail_id} is no longer visible")
-                    return False
-                
-                await thumbnail_element.click(timeout=10000)
-                click_success = True
-                logger.info(f"✅ Successfully clicked thumbnail: {thumbnail_id}")
-                
-            except Exception as e:
-                # If element is stale/detached, try to find it again by unique ID
-                error_msg = str(e).lower()
-                if "not attached" in error_msg or "intercepts pointer events" in error_msg:
-                    logger.info(f"🔄 Element stale, retrying with fresh lookup for {thumbnail_id}")
-                    try:
-                        # Get fresh thumbnail list and find our target
-                        fresh_thumbnails = await self.get_robust_thumbnail_list(page)
-                        for fresh_thumb in fresh_thumbnails:
-                            if fresh_thumb['unique_id'] == thumbnail_id and fresh_thumb['visible']:
-                                await fresh_thumb['element'].click(timeout=5000)
-                                click_success = True
-                                logger.info(f"✅ Successfully clicked thumbnail on retry: {thumbnail_id}")
-                                break
-                    except Exception as retry_error:
-                        logger.debug(f"Retry also failed: {retry_error}")
-                
-                if not click_success:
-                    logger.error(f"Failed to click thumbnail {thumbnail_id}: {e}")
-                    return False
+            if not click_success:
+                logger.error(f"Failed to click thumbnail {thumbnail_id} after all retry attempts")
+                return False
             
             # Wait for content to load
             await page.wait_for_timeout(2000)
@@ -2866,31 +4006,183 @@ class GenerationDownloadManager:
             else:
                 logger.info("✅ Chromium download settings configured successfully")
             
-            # Navigate to completed tasks (9th item, index 8)
-            try:
-                await page.click(self.config.completed_task_selector, timeout=15000)
-                await page.wait_for_timeout(3000)  # Wait for page to load
-                logger.info("Navigated to completed tasks page")
-            except Exception as e:
-                error_msg = f"Failed to navigate to completed tasks: {e}"
+            # STEP 2: Navigate to completed tasks - try multiple selectors, skipping failed generations
+            navigation_success = False
+            failed_generation_patterns = [
+                "Something went wrong. Please try again later.",
+                "Generation failed",
+                "Failed to generate",
+                "Error occurred", 
+                "Try again later",
+                "Generation error"
+            ]
+            
+            logger.info(f"🔍 Trying to navigate to completed tasks, checking for failed generations...")
+            
+            # Try selectors from __8 to __16 (8 attempts total)
+            for i in range(8, 17):
+                selector = f"div[id$='__{i}']"
+                try:
+                    logger.info(f"📋 Attempt {i-7}/9: Checking selector {selector}")
+                    
+                    # Check if element exists first
+                    element = await page.query_selector(selector)
+                    if not element:
+                        logger.debug(f"Element not found: {selector}")
+                        continue
+                    
+                    # Check if this generation failed by looking for failure text
+                    element_text = await element.text_content()
+                    is_failed = False
+                    failed_reason = ""
+                    
+                    for pattern in failed_generation_patterns:
+                        if pattern in element_text:
+                            is_failed = True
+                            failed_reason = pattern
+                            break
+                    
+                    if is_failed:
+                        logger.warning(f"⚠️ Generation {selector} failed - contains: '{failed_reason}' - skipping...")
+                        continue
+                    
+                    logger.info(f"✅ Generation {selector} appears successful, attempting to click...")
+                    
+                    # Try to click the element
+                    await page.click(selector, timeout=5000)
+                    await page.wait_for_timeout(2000)  # Wait for navigation
+                    
+                    # Verify navigation worked by checking for thumbnails
+                    try:
+                        await page.wait_for_selector(self.config.thumbnail_selector, timeout=3000)
+                        logger.info(f"🎉 Successfully navigated to gallery using {selector}")
+                        navigation_success = True
+                        break
+                    except:
+                        logger.debug(f"No thumbnails found after clicking {selector}, trying next...")
+                        continue
+                        
+                except Exception as e:
+                    logger.debug(f"Failed to process {selector}: {e}")
+                    continue
+            
+            if not navigation_success:
+                logger.warning("⚠️ Failed to navigate using any sequential selector, trying enhanced navigation...")
+                try:
+                    # Strategy 1: Direct URL navigation
+                    await page.goto("https://wan.video/generate#completed", wait_until="networkidle", timeout=30000)
+                    logger.info("Navigated to completed tasks via direct URL")
+                    navigation_success = True
+                except Exception as e:
+                    logger.warning(f"Direct navigation failed, trying alternative: {e}")
+                    try:
+                        # Strategy 2: Click on completed tab if available
+                        completed_tab_selectors = [
+                            "button:has-text('Completed')",
+                            "a:has-text('Completed')",
+                            "div:has-text('Completed'):not(:has(div))",
+                            "[data-tab='completed']",
+                            ".tab-completed"
+                        ]
+
+                        for selector in completed_tab_selectors:
+                            try:
+                                await page.click(selector, timeout=5000)
+                                logger.info(f"Clicked completed tab using: {selector}")
+                                navigation_success = True
+                                break
+                            except:
+                                continue
+                    except:
+                        logger.warning("Could not click completed tab, continuing with current page")
+
+                # Wait for page to stabilize
+                await page.wait_for_load_state("domcontentloaded")
+                await asyncio.sleep(2)  # Give dynamic content time to load
+                
+            if not navigation_success:
+                error_msg = "Failed to navigate to completed tasks using any method"
                 logger.error(error_msg)
                 results['errors'].append(error_msg)
                 return results
             
+            logger.info("Navigated to completed tasks page")
+            
+            # STEP 3: Navigate to starting thumbnail if specified (AFTER gallery is loaded)
+            if self.config.start_from_thumbnail > 1:
+                logger.info(f"🎯 Starting download from thumbnail #{self.config.start_from_thumbnail}")
+                starting_navigation_success = await self.navigate_to_starting_thumbnail(page, self.config.start_from_thumbnail)
+                
+                if not starting_navigation_success:
+                    logger.error(f"❌ Failed to navigate to starting thumbnail #{self.config.start_from_thumbnail}")
+                    results['errors'].append(f"Failed to navigate to starting thumbnail #{self.config.start_from_thumbnail}")
+                    results['success'] = False
+                    return results
+                
+                logger.info(f"✅ Successfully positioned at starting thumbnail #{self.config.start_from_thumbnail}")
+            else:
+                logger.info("📍 Starting from thumbnail #1 (beginning of gallery)")
+            
             # Wait for initial thumbnails to load
             try:
-                await page.wait_for_selector(self.config.thumbnail_selector, timeout=15000)
-                logger.info("Initial thumbnails loaded successfully")
+
+                        # Enhanced thumbnail detection with multiple strategies
+                        thumbnail_found = False
+                        thumbnail_strategies = [
+                            # Strategy 1: Wait for configured selectors
+                            {"method": "selector", "value": self.config.thumbnail_selector},
+                            # Strategy 2: Wait for images in gallery
+                            {"method": "selector", "value": "img[src*='wan']"},
+                            # Strategy 3: Wait for any clickable items in container
+                            {"method": "selector", "value": f"{self.config.thumbnail_container_selector} > div"},
+                            # Strategy 4: Wait for generation items
+                            {"method": "selector", "value": "div[id*='generation']"},
+                            # Strategy 5: Generic image search
+                            {"method": "selector", "value": "img[width][height]"}
+                        ]
+
+                        for strategy in thumbnail_strategies:
+                            try:
+                                elements = await page.wait_for_selector(
+                                    strategy["value"], 
+                                    timeout=5000,
+                                    state="visible"
+                                )
+                                if elements:
+                                    thumbnail_found = True
+                                    actual_selector = strategy["value"]
+                                    logger.info(f"Thumbnails found using strategy: {strategy['method']} with selector: {actual_selector}")
+                                    # Update config to use working selector
+                                    self.config.thumbnail_selector = actual_selector
+                                    break
+                            except Exception as e:
+                                logger.debug(f"Strategy {strategy['method']} failed: {e}")
+                                continue
+
+                        if not thumbnail_found:
+                            # Final fallback: Check if there are any images on the page
+                            all_images = await page.query_selector_all("img")
+                            if all_images:
+                                logger.info(f"Found {len(all_images)} images on page, attempting to use them as thumbnails")
+                                self.config.thumbnail_selector = "img"
+                                thumbnail_found = True
+                            else:
+                                raise Exception("No thumbnails found with any strategy")
+
             except Exception as e:
                 error_msg = f"Initial thumbnails did not load: {e}"
                 logger.error(error_msg)
                 results['errors'].append(error_msg)
                 return results
             
+            # NEW: Proactive gallery loading phase to populate infinite scroll
+            logger.info("🔄 Pre-loading gallery with initial scroll phase to populate thumbnails...")
+            await self.preload_gallery_thumbnails(page)
+            
             # Initialize thumbnail tracking
             self.visible_thumbnails_cache = await self.get_visible_thumbnail_identifiers(page)
             initial_thumbnail_count = len(self.visible_thumbnails_cache)
-            logger.info(f"📊 Initial batch: {initial_thumbnail_count} thumbnails visible")
+            logger.info(f"📊 After gallery pre-loading: {initial_thumbnail_count} thumbnails visible")
             
             # ENHANCED: Robust gallery navigation with duplicate prevention
             consecutive_failures = 0
@@ -2898,69 +4190,164 @@ class GenerationDownloadManager:
             no_progress_cycles = 0
             max_no_progress_cycles = 3
             
-            logger.info("🚀 Starting robust gallery navigation with duplicate detection")
+            logger.info("🚀 Starting enhanced gallery navigation with production reliability")
+            
+            # Initialize session tracking
+            self.processing_start_time = datetime.now()
+            
+            # NEW: Simplified landmark-based navigation loop
+            # Start counting from the specified starting thumbnail
+            thumbnail_count = self.config.start_from_thumbnail - 1  # Will be incremented to correct number in loop
+            consecutive_failures = 0  # Initialize at the beginning
             
             while self.should_continue_downloading() and not self.gallery_end_detected:
-                # Find next unprocessed thumbnail
-                next_thumbnail = await self.find_next_unprocessed_thumbnail(page)
-                
-                if not next_thumbnail:
-                    logger.info("📜 No unprocessed thumbnails visible, attempting to scroll for more content...")
+                try:
+                    # Find current active thumbnail to process
+                    active_thumbnail = await self.find_active_thumbnail(page)
                     
-                    # Try to scroll to get more content
-                    scroll_success = await self.scroll_thumbnail_gallery(page)
-                    if scroll_success:
-                        results['scrolls_performed'] += 1
-                        logger.info(f"✅ Scrolled successfully (total scrolls: {results['scrolls_performed']})")
+                    if not active_thumbnail:
+                        logger.info("📜 No active thumbnail found, attempting to find any thumbnail...")
                         
-                        # Try again to find unprocessed thumbnails
-                        next_thumbnail = await self.find_next_unprocessed_thumbnail(page)
+                        # Try to find any thumbnail container and click it to make it active
+                        all_containers = await page.query_selector_all("div[class*='thumsCou']")
+                        if all_containers:
+                            first_container = all_containers[0]
+                            logger.info("🎯 Clicking first thumbnail container to make it active")
+                            await first_container.click(timeout=3000)
+                            await page.wait_for_timeout(500)
+                            active_thumbnail = await self.find_active_thumbnail(page)
                         
-                        if not next_thumbnail:
-                            no_progress_cycles += 1
-                            logger.warning(f"⚠️ Still no new thumbnails after scroll (cycle {no_progress_cycles}/{max_no_progress_cycles})")
+                        if not active_thumbnail:
+                            # Try scrolling to find more thumbnails
+                            logger.info("📜 No thumbnails available, attempting scroll...")
+                            scroll_success = await self.scroll_and_find_more_thumbnails(page)
+                            if scroll_success:
+                                results['scrolls_performed'] += 1
+                                self.scroll_failure_count = 0
+                                logger.info(f"✅ Scroll successful (total scrolls: {results['scrolls_performed']})")
+                                await page.wait_for_timeout(1000)
+                                continue
+                            else:
+                                self.scroll_failure_count += 1
+                                logger.warning(f"⚠️ Scroll failed (failures: {self.scroll_failure_count}/{self.max_scroll_failures})")
+                                
+                                if self.scroll_failure_count >= self.max_scroll_failures:
+                                    logger.info("🏁 Gallery end reached - too many scroll failures")
+                                    self.gallery_end_detected = True
+                                    break
+                                
+                                await page.wait_for_timeout(2000)
+                                continue
+                    
+                    # Process current active thumbnail
+                    if active_thumbnail:
+                        thumbnail_count += 1
+                        logger.info(f"🎯 Processing thumbnail #{thumbnail_count} (active landmark method)")
+                        
+                        # Create simplified thumbnail info for the download method
+                        thumbnail_info = {
+                            'element': active_thumbnail,
+                            'unique_id': f"landmark_thumbnail_{thumbnail_count}",
+                            'position': thumbnail_count - 1,
+                            'visible': True,
+                            'processed': False
+                        }
+                        
+                        # Download the current active thumbnail
+                        success = await self.download_single_generation_robust(page, thumbnail_info, existing_files)
+                        
+                        # Extract thumbnail_id for tracking purposes
+                        thumbnail_id = thumbnail_info['unique_id']
+                        
+                        if success:
+                            results['downloads_completed'] += 1
+                            logger.info(f"✅ Successfully downloaded thumbnail #{thumbnail_count}")
+                            consecutive_failures = 0  # Reset failure counter
+                        else:
+                            consecutive_failures += 1
+                            logger.warning(f"⚠️ Failed to download thumbnail #{thumbnail_count} (consecutive failures: {consecutive_failures})")
                             
-                            if no_progress_cycles >= max_no_progress_cycles:
-                                logger.info("🏁 Reached end of gallery - no new content after multiple scroll attempts")
+                            if consecutive_failures >= max_consecutive_failures:
+                                logger.warning(f"🛑 Too many consecutive failures ({consecutive_failures}), stopping...")
                                 break
-                    else:
-                        logger.warning("⚠️ Scroll failed, may have reached end of gallery")
-                        no_progress_cycles += 1
-                        if no_progress_cycles >= max_no_progress_cycles:
-                            break
+                        
+                        # Navigate to next thumbnail using landmark method
+                        logger.info("🧭 Navigating to next thumbnail using landmark method...")
+                        navigation_success = await self.navigate_to_next_thumbnail_landmark(page)
+                        
+                        if not navigation_success:
+                            # Try scrolling to find more thumbnails
+                            logger.info("📜 Navigation failed, trying scroll...")
+                            scroll_success = await self.scroll_and_find_more_thumbnails(page)
+                            if scroll_success:
+                                results['scrolls_performed'] += 1
+                                logger.info(f"✅ Scroll successful, continuing... (total scrolls: {results['scrolls_performed']})")
+                                no_progress_cycles = 0
+                            else:
+                                no_progress_cycles += 1
+                                logger.warning(f"⚠️ No navigation progress possible (cycle {no_progress_cycles}/{max_no_progress_cycles})")
+                                
+                                if no_progress_cycles >= max_no_progress_cycles:
+                                    logger.info("🏁 Gallery end reached - no more navigation possible")
+                                    self.gallery_end_detected = True
+                                    break
+                        else:
+                            no_progress_cycles = 0  # Reset when navigation succeeds
+                        
+                        # Brief wait between thumbnails
+                        await page.wait_for_timeout(1000)
                     
-                    # Wait before retry
+                except Exception as processing_error:
+                    logger.error(f"Error during landmark-based thumbnail processing: {processing_error}")
+                    consecutive_failures += 1
+                    
+                    # Ensure thumbnail_count is defined for error messages
+                    if 'thumbnail_count' not in locals():
+                        thumbnail_count = 0
+                    
+                    if consecutive_failures >= max_consecutive_failures:
+                        logger.error(f"🛑 Too many consecutive processing errors ({consecutive_failures}), stopping...")
+                        break
+                    
+                    # Try to recover by finding any active thumbnail or navigating
+                    logger.info("🔄 Attempting recovery...")
+                    try:
+                        # Try to navigate to next thumbnail to recover from error
+                        recovery_success = await self.navigate_to_next_thumbnail_landmark(page)
+                        if not recovery_success:
+                            # Try scrolling as recovery
+                            await self.scroll_and_find_more_thumbnails(page)
+                    except Exception as recovery_error:
+                        logger.error(f"Recovery attempt failed: {recovery_error}")
+                    
                     await page.wait_for_timeout(2000)
                     continue
                 
-                # Reset no-progress counter when we find content
-                no_progress_cycles = 0
-                
-                # Extract thumbnail information
-                thumbnail_id = next_thumbnail['unique_id']
-                thumbnail_position = next_thumbnail['position']
-                
-                logger.info(f"🎯 Processing thumbnail at position {thumbnail_position + 1}: {thumbnail_id}")
-                
-                # Download the thumbnail using robust method
-                success = await self.download_single_generation_robust(page, next_thumbnail, existing_files)
-                
                 if success:
-                    # Mark thumbnail as processed
+                    # Mark thumbnail as processed and update tracking
                     self.processed_thumbnails.add(thumbnail_id)
                     results['downloads_completed'] = self.downloads_completed
                     consecutive_failures = 0  # Reset failure counter on success
+                    self.last_successful_download = datetime.now()
                     logger.info(f"✅ Progress: {self.downloads_completed}/{self.config.max_downloads} downloads completed")
                     logger.info(f"📊 Session processed: {len(self.processed_thumbnails)} unique thumbnails")
                 else:
+                    # Track failed thumbnails to avoid reprocessing
+                    self.failed_thumbnail_ids.add(thumbnail_id)
                     error_msg = f"Failed to download thumbnail: {thumbnail_id}"
                     logger.warning(error_msg)
                     results['errors'].append(error_msg)
                     consecutive_failures += 1
                     
+                    # Enhanced failure handling
                     if consecutive_failures >= max_consecutive_failures:
                         logger.error(f"❌ Too many consecutive failures ({consecutive_failures}), stopping automation")
                         break
+                    
+                    # Log failure patterns for debugging
+                    if len(self.failed_thumbnail_ids) > 0 and len(self.failed_thumbnail_ids) % 5 == 0:
+                        failure_rate = len(self.failed_thumbnail_ids) / (len(self.processed_thumbnails) + len(self.failed_thumbnail_ids))
+                        logger.warning(f"⚠️ High failure rate detected: {failure_rate:.2%} ({len(self.failed_thumbnail_ids)} failed)")
                 
                 results['total_thumbnails_processed'] = len(self.processed_thumbnails)
                 
@@ -2981,7 +4368,19 @@ class GenerationDownloadManager:
                 results['errors'].append("No downloads were completed successfully")
             
             logger.info(f"🎉 Download automation completed successfully!")
-            logger.info(f"📊 Final stats: {results['downloads_completed']} downloads, {results['scrolls_performed']} scrolls, {results['total_thumbnails_processed']} thumbnails processed")
+            # Generate comprehensive session statistics
+            session_duration = (datetime.now() - self.processing_start_time).total_seconds() if self.processing_start_time else 0
+            avg_download_time = session_duration / results['downloads_completed'] if results['downloads_completed'] > 0 else 0
+            success_rate = results['downloads_completed'] / (len(self.processed_thumbnails) + len(self.failed_thumbnail_ids)) if (len(self.processed_thumbnails) + len(self.failed_thumbnail_ids)) > 0 else 0
+            
+            logger.info(f"📊 Enhanced session statistics:")
+            logger.info(f"   💾 Downloads: {results['downloads_completed']}/{self.config.max_downloads}")
+            logger.info(f"   🔄 Scrolls performed: {results['scrolls_performed']}")
+            logger.info(f"   🎯 Thumbnails processed: {results['total_thumbnails_processed']}")
+            logger.info(f"   ❌ Failed thumbnails: {len(self.failed_thumbnail_ids)}")
+            logger.info(f"   📈 Success rate: {success_rate:.1%}")
+            logger.info(f"   ⏱️ Session duration: {session_duration:.1f}s")
+            logger.info(f"   🚀 Avg per download: {avg_download_time:.1f}s")
             
         except Exception as e:
             error_msg = f"Critical error in download automation: {e}"
