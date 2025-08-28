@@ -2097,6 +2097,68 @@ class GenerationDownloadManager:
             logger.error(f"Unexpected error in robust click for {thumbnail_id}: {e}")
             return False
     
+    def _load_existing_log_entries(self) -> Dict[str, Dict[str, str]]:
+        """Load existing log entries from generation_downloads.txt"""
+        log_entries = {}
+        log_path = Path(self.config.logs_folder) / "generation_downloads.txt"
+        
+        if not log_path.exists():
+            logger.debug("No existing log file found for duplicate detection")
+            return log_entries
+            
+        try:
+            with open(log_path, 'r', encoding='utf-8') as f:
+                lines = f.readlines()
+            
+            current_id = None
+            current_date = None
+            current_prompt = None
+            
+            for line in lines:
+                line = line.strip()
+                
+                # Skip empty lines and separators
+                if not line or line.startswith('========'):
+                    continue
+                
+                # Check if this is an ID line (starts with #)
+                if line.startswith('#'):
+                    # Save previous entry if complete
+                    if current_id and current_date and current_prompt:
+                        log_entries[current_date] = {
+                            'id': current_id,
+                            'date': current_date,
+                            'prompt': current_prompt
+                        }
+                    
+                    # Start new entry
+                    current_id = line
+                    current_date = None
+                    current_prompt = None
+                
+                # Check if this is a date line (contains date pattern)
+                elif current_id and not current_date and self._is_valid_date_text(line):
+                    current_date = line
+                
+                # Everything else is prompt text (if we have ID and date)
+                elif current_id and current_date and not current_prompt:
+                    current_prompt = line
+            
+            # Save the last entry
+            if current_id and current_date and current_prompt:
+                log_entries[current_date] = {
+                    'id': current_id,
+                    'date': current_date,
+                    'prompt': current_prompt
+                }
+            
+            logger.info(f"📋 Loaded {len(log_entries)} existing log entries for duplicate detection")
+            return log_entries
+            
+        except Exception as e:
+            logger.error(f"Error loading existing log entries: {e}")
+            return {}
+
     async def check_comprehensive_duplicate(self, page, thumbnail_id: str, existing_files: set = None) -> bool:
         """Enhanced duplicate detection using multiple comparison methods"""
         try:
@@ -2109,7 +2171,34 @@ class GenerationDownloadManager:
             generation_date = metadata.get('generation_date', '')
             prompt = metadata.get('prompt', '')
             
-            # Method 2: Compare with existing files (if provided)
+            # Method 2: Load and compare with existing log entries (DATE + PROMPT match)
+            if generation_date and prompt:
+                existing_entries = self._load_existing_log_entries()
+                
+                # Check for exact date match
+                if generation_date in existing_entries:
+                    existing_entry = existing_entries[generation_date]
+                    
+                    # Compare prompts (truncated since logs may be truncated with "...")
+                    existing_prompt = existing_entry['prompt']
+                    current_prompt_start = prompt[:100] if len(prompt) > 100 else prompt
+                    existing_prompt_start = existing_prompt.replace('...', '').strip()
+                    
+                    # Check if prompts match (allowing for truncation)
+                    if (existing_prompt_start in current_prompt_start or 
+                        current_prompt_start in existing_prompt_start):
+                        logger.info(f"🛑 DUPLICATE DETECTED: Date='{generation_date}', Prompt match found")
+                        logger.info(f"   Existing: {existing_prompt_start[:100]}...")
+                        logger.info(f"   Current:  {current_prompt_start[:100]}...")
+                        
+                        # Log termination message
+                        if self.config.stop_on_duplicate:
+                            logger.info("🎯 AUTOMATION COMPLETE: Reached previously downloaded content")
+                            logger.info("✅ All new generations have been processed successfully")
+                        
+                        return True
+            
+            # Method 3: Compare with existing files (if provided)
             if existing_files and generation_date:
                 # Try different date format comparisons
                 date_formats_to_check = [
@@ -2122,12 +2211,12 @@ class GenerationDownloadManager:
                         logger.info(f"🔍 Duplicate detected by date comparison: {date_format}")
                         return True
             
-            # Method 3: Compare with processed thumbnails in current session
+            # Method 4: Compare with processed thumbnails in current session
             if thumbnail_id in self.processed_thumbnails:
                 logger.info(f"🔍 Duplicate detected in current session: {thumbnail_id}")
                 return True
             
-            # Method 4: Content-based duplicate detection
+            # Method 5: Content-based duplicate detection
             if hasattr(self, 'content_signatures'):
                 content_signature = f"{generation_date}#{prompt[:50] if prompt else 'no_prompt'}"
                 if content_signature in self.content_signatures:
@@ -3441,11 +3530,23 @@ class GenerationDownloadManager:
                 logger.warning(f"All metadata extraction failed for thumbnail {thumbnail_id}, using defaults")
                 metadata_dict = {'generation_date': 'Unknown', 'prompt': 'Unknown'}
             
-            # CRITICAL: Check for duplicates using creation time AND thumbnail ID
+            # ENHANCED: Comprehensive duplicate detection (log-based, file-based, and session-based)
             if self.config.duplicate_check_enabled and metadata_dict and metadata_dict.get('generation_date'):
                 creation_time = metadata_dict.get('generation_date')
                 
-                # Check file-based duplicates (from disk)
+                # Method 1: Check comprehensive duplicates (log entries + prompt matching)
+                is_comprehensive_duplicate = await self.check_comprehensive_duplicate(page, thumbnail_id, existing_files)
+                if is_comprehensive_duplicate:
+                    if self.config.stop_on_duplicate:
+                        logger.info(f"🛑 STOPPING: Comprehensive duplicate detected for {thumbnail_id}")
+                        logger.info("✅ Automation has reached previously downloaded content")
+                        self.should_stop = True
+                        return False
+                    else:
+                        logger.warning(f"⏭️  Skipping comprehensive duplicate: {thumbnail_id}")
+                        return True
+                
+                # Method 2: Check file-based duplicates (from disk) - fallback
                 if existing_files and self.check_duplicate_exists(creation_time, existing_files):
                     if self.config.stop_on_duplicate:
                         logger.info(f"🛑 STOPPING: File-based duplicate detected ({creation_time})")
@@ -3456,7 +3557,7 @@ class GenerationDownloadManager:
                         logger.warning(f"⏭️  Skipping file duplicate with creation time: {creation_time}")
                         return True
                 
-                # Check session-based duplicates (already processed in this run)
+                # Method 3: Check session-based duplicates (already processed in this run) - fallback
                 session_duplicate_id = f"{creation_time}|{thumbnail_id}"
                 if session_duplicate_id in self.processed_thumbnails:
                     logger.warning(f"⏭️  Skipping session duplicate: {session_duplicate_id}")
