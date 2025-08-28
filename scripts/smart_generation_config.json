@@ -1,0 +1,84 @@
+{
+  "name": "Smart Generation Download (Skip Failed)",
+  "url": "https://wan.video/generate",
+  "headless": false,
+  "viewport": {
+    "width": 2560,
+    "height": 1440
+  },
+  "actions": [
+    {
+      "type": "login",
+      "value": {
+        "username": "shyraoleg@outlook.com",
+        "password": "Wanv!de025",
+        "username_selector": "input[placeholder=\"Email address\"]",
+        "password_selector": "input[type=\"password\"]",
+        "submit_selector": "button:has-text(\"Log in\")[type=\"submit\"]"
+      },
+      "timeout": 15000,
+      "description": "Login to the generation platform"
+    },
+    {
+      "type": "wait",
+      "value": 3000,
+      "description": "Wait for page to load after login"
+    },
+    {
+      "type": "start_generation_downloads",
+      "value": {
+        "max_downloads": 100,
+        "start_from_thumbnail": 1,
+        "downloads_folder": "/home/olereon/workspace/github.com/olereon/automaton/downloads/vids",
+        "logs_folder": "/home/olereon/workspace/github.com/olereon/automaton/logs",
+        "download_timeout": 8000,
+        "verification_timeout": 12000,
+        "retry_attempts": 3,
+        
+        "use_descriptive_naming": true,
+        "unique_id": "smartTest",
+        "naming_format": "{media_type}_{creation_date}_{unique_id}",
+        "date_format": "%Y-%m-%d-%H-%M-%S",
+        
+        "stop_on_duplicate": true,
+        "duplicate_check_enabled": true,
+        "creation_time_comparison": true,
+        
+        "scroll_batch_size": 10,
+        "scroll_amount": 1000,
+        "scroll_wait_time": 2000,
+        "max_scroll_attempts": 10,
+        
+        "extraction_strategy": "longest_div",
+        "min_prompt_length": 150,
+        "prompt_indicators": ["camera", "scene", "shot", "frame", "view", "angle", "light", "shows", "reveals"],
+        "enable_debug_logging": true,
+        "debug_log_file": "logs/smart_generation_debug.log",
+        
+        "image_to_video_text": "Image to video",
+        "creation_time_text": "Creation Time",
+        "download_no_watermark_text": "Download without Watermark",
+        "prompt_ellipsis_pattern": "...",
+        
+        "_comment_selectors": "Page element selectors",
+        "completed_task_selector": "div[id$='__19']",
+        "thumbnail_selector": ".thumsItem, .thumbnail-item",
+        "thumbnail_container_selector": ".thumsInner",
+        "button_panel_selector": ".sc-eYHxxX.fmURBt",
+        "download_icon_href": "#icon-icon_tongyong_20px_xiazai",
+        "download_button_index": 2,
+        
+        "download_button_selector": "[data-spm-anchor-id='a2ty_o02.30365920.0.i1.6daf47258YB5qi']",
+        "download_no_watermark_selector": ".sc-fbUgXY.hMAwvg",
+        "generation_date_selector": ".sc-eJlwcH.gjlyBM span.sc-cSMkSB.hUjUPD:nth-child(2)",
+        "prompt_selector": ".sc-jJRqov.cxtNJi span[aria-describedby]"
+      },
+      "timeout": 200000,
+      "description": "Start smart generation downloads with failed generation detection"
+    },
+    {
+      "type": "check_generation_status",
+      "description": "Check final download status"
+    }
+  ]
+}

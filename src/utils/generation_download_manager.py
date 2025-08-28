@@ -4120,11 +4120,26 @@ class GenerationDownloadManager:
             
             logger.info(f"🔍 Trying to navigate to completed tasks, checking for failed generations...")
             
-            # Try selectors from __8 to __16 (8 attempts total)
-            for i in range(8, 17):
+            # First try the configured selector
+            if self.config.completed_task_selector:
+                # Extract the number from the selector (e.g., "__19" from "div[id$='__19']")
+                import re
+                match = re.search(r'__(\d+)', self.config.completed_task_selector)
+                if match:
+                    start_num = int(match.group(1))
+                    logger.info(f"📌 Using configured selector starting from __{start_num}")
+                else:
+                    start_num = 8
+                    logger.info(f"⚠️ Could not parse selector number, defaulting to __8")
+            else:
+                start_num = 8
+                logger.info(f"📌 No custom selector configured, starting from __8")
+            
+            # Try selectors starting from configured/default number (up to 9 attempts)
+            for i in range(start_num, min(start_num + 9, 30)):
                 selector = f"div[id$='__{i}']"
                 try:
-                    logger.info(f"📋 Attempt {i-7}/9: Checking selector {selector}")
+                    logger.info(f"📋 Attempt {i-start_num+1}/9: Checking selector {selector}")
                     
                     # Check if element exists first
                     element = await page.query_selector(selector)
