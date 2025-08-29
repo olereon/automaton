@@ -8,6 +8,7 @@ import asyncio
 import sys
 import os
 import json
+import argparse
 from pathlib import Path
 from datetime import datetime
 import re
@@ -28,10 +29,17 @@ except ImportError:
 class FastGenerationDownloader:
     """Optimized generation downloader with duplicate detection and fast processing"""
     
-    def __init__(self, config_path: str):
+    def __init__(self, config_path: str, duplicate_mode: str = "finish"):
         self.config_path = Path(config_path)
+        self.duplicate_mode = duplicate_mode.lower()
         self.downloads_folder = None
         self.existing_files = set()
+        
+        print(f"🔄 Duplicate Mode: {self.duplicate_mode.upper()}")
+        if self.duplicate_mode == "skip":
+            print("   📌 Will skip duplicates and continue searching for new generations")
+        else:
+            print("   📌 Will stop when reaching previously downloaded content")
         
     def scan_existing_files(self):
         """Scan downloads folder for existing files and extract creation times"""
@@ -75,6 +83,36 @@ class FastGenerationDownloader:
                 print(f"⚠️ Could not parse creation time format: {creation_time}")
                 return False
     
+    def modify_config_for_skip_mode(self, config_data):
+        """Modify configuration to enable SKIP mode for duplicate handling"""
+        if self.duplicate_mode != "skip":
+            return config_data
+        
+        print("⚙️ Modifying configuration for SKIP mode...")
+        
+        # Find the start_generation_downloads action and modify it
+        for action_data in config_data['actions']:
+            if action_data.get('type') == 'start_generation_downloads':
+                if 'value' not in action_data:
+                    action_data['value'] = {}
+                
+                # Set SKIP mode parameters
+                action_data['value']['stop_on_duplicate'] = False
+                action_data['value']['duplicate_mode'] = 'skip'
+                action_data['value']['skip_duplicates'] = True
+                
+                print("   ✅ Set stop_on_duplicate = False")
+                print("   ✅ Set duplicate_mode = 'skip'")
+                print("   ✅ Set skip_duplicates = True")
+                
+                # Add skip mode description
+                skip_description = action_data.get('description', '') + ' [SKIP MODE: Continue past duplicates]'
+                action_data['description'] = skip_description
+                
+                break
+        
+        return config_data
+    
     async def run_fast_download(self):
         """Run the optimized download automation"""
         
@@ -88,6 +126,9 @@ class FastGenerationDownloader:
         
         with open(self.config_path, 'r') as f:
             config_data = json.load(f)
+        
+        # Modify configuration for SKIP mode if needed
+        config_data = self.modify_config_for_skip_mode(config_data)
         
         # Extract downloads folder for duplicate checking
         for action_data in config_data['actions']:
@@ -183,17 +224,90 @@ class FastGenerationDownloader:
                 pass
 
 
+def parse_arguments():
+    """Parse command line arguments"""
+    parser = argparse.ArgumentParser(
+        description="Fast Generation Downloader with SKIP/FINISH mode support",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Run with default config (FINISH mode)
+  python fast_generation_downloader.py
+  
+  # Run with SKIP mode (continue past duplicates)
+  python fast_generation_downloader.py --mode skip
+  
+  # Use custom config file with SKIP mode
+  python fast_generation_downloader.py --config my_config.json --mode skip
+  
+  # Run with FINISH mode (stop on duplicates) - explicit
+  python fast_generation_downloader.py --mode finish
+        """
+    )
+    
+    parser.add_argument(
+        '--config', '-c',
+        type=str,
+        default=os.path.join(os.path.dirname(__file__), "fast_generation_config.json"),
+        help='Path to configuration file (default: fast_generation_config.json)'
+    )
+    
+    parser.add_argument(
+        '--mode', '-m',
+        choices=['skip', 'finish'],
+        default='finish',
+        help='Duplicate handling mode: "skip" continues past duplicates, "finish" stops on duplicates (default: finish)'
+    )
+    
+    parser.add_argument(
+        '--scan-only', '-s',
+        action='store_true',
+        help='Only scan existing files and exit (useful for debugging)'
+    )
+    
+    return parser.parse_args()
+
+
 async def main():
     """Main entry point"""
     
-    # Get config path from command line or use default
-    if len(sys.argv) > 1:
-        config_path = sys.argv[1]
-    else:
-        # Default to the fast config in the same directory
-        config_path = os.path.join(os.path.dirname(__file__), "fast_generation_config.json")
+    args = parse_arguments()
     
-    downloader = FastGenerationDownloader(config_path)
+    print("🚀 Fast Generation Downloader")
+    print("=" * 60)
+    print(f"📁 Config file: {args.config}")
+    print(f"🔄 Duplicate mode: {args.mode.upper()}")
+    
+    if args.mode == "skip":
+        print("📌 SKIP mode: Will continue searching past duplicate generations")
+    else:
+        print("📌 FINISH mode: Will stop when reaching previously downloaded content")
+    
+    print("=" * 60)
+    
+    downloader = FastGenerationDownloader(args.config, args.mode)
+    
+    # If scan-only mode, just scan and exit
+    if args.scan_only:
+        print("🔍 Scan-only mode: Analyzing existing files...")
+        
+        # Load config to get downloads folder
+        if Path(args.config).exists():
+            with open(args.config, 'r') as f:
+                config_data = json.load(f)
+            
+            for action_data in config_data['actions']:
+                if action_data.get('type') == 'start_generation_downloads':
+                    downloader.downloads_folder = action_data.get('value', {}).get('downloads_folder')
+                    break
+        
+        if downloader.downloads_folder:
+            downloader.scan_existing_files()
+            print("\n✅ Scan complete. Exiting.")
+            return 0
+        else:
+            print("❌ Could not determine downloads folder from config")
+            return 1
     
     try:
         success = await downloader.run_fast_download()

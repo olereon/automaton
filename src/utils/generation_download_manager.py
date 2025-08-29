@@ -14,10 +14,17 @@ from typing import Dict, List, Optional, Tuple, Any
 import logging
 import re
 from dataclasses import dataclass, asdict
+from enum import Enum
 
 from .download_manager import DownloadManager, DownloadConfig
 
 logger = logging.getLogger(__name__)
+
+
+class DuplicateMode(Enum):
+    """Duplicate handling modes for generation downloads"""
+    FINISH = "finish"  # Stop when reaching a duplicate (current behavior)
+    SKIP = "skip"      # Skip duplicates and continue searching for new generations
 
 
 class EnhancedFileNamer:
@@ -197,10 +204,27 @@ class GenerationDownloadConfig:
     stop_on_duplicate: bool = True               # Stop when duplicate creation time found
     duplicate_check_enabled: bool = True         # Enable duplicate detection
     creation_time_comparison: bool = True        # Compare by creation time
+    duplicate_mode: DuplicateMode = DuplicateMode.FINISH  # Duplicate handling mode
     download_completion_detection: bool = True    # Wait for download completion
     fast_navigation_mode: bool = True            # Optimize navigation speed
     
     # Legacy selectors (kept for backward compatibility)
+    
+    @classmethod
+    def create_with_skip_mode(cls, **kwargs):
+        """Create configuration with SKIP duplicate mode"""
+        config = cls(**kwargs)
+        config.duplicate_mode = DuplicateMode.SKIP
+        config.stop_on_duplicate = False  # Skip mode doesn't stop
+        return config
+    
+    @classmethod  
+    def create_with_finish_mode(cls, **kwargs):
+        """Create configuration with FINISH duplicate mode"""
+        config = cls(**kwargs)
+        config.duplicate_mode = DuplicateMode.FINISH
+        config.stop_on_duplicate = True  # Finish mode stops
+        return config
     download_button_selector: str = "[data-spm-anchor-id='a2ty_o02.30365920.0.i1.6daf47258YB5qi']"
     download_no_watermark_selector: str = "[data-spm-anchor-id='a2ty_o02.30365920.0.i2.6daf47258YB5qi']"
     
@@ -278,20 +302,200 @@ class GenerationDownloadLogger:
             return self.config.id_format.format(self.config.starting_file_id)
     
     def log_download(self, metadata: GenerationMetadata) -> bool:
-        """Log a generation download to the text file"""
+        """Log a generation download to the text file (chronological order)"""
+        try:
+            # Use the new chronological method
+            return self.log_download_chronologically(metadata)
+            
+        except Exception as e:
+            logger.error(f"Failed to log download: {e}")
+            return False
+    
+    def log_download_chronologically(self, metadata: GenerationMetadata) -> bool:
+        """Log a generation download in chronological order (newest first)"""
+        try:
+            # Parse the new entry's date
+            new_date = self._parse_date_for_comparison(metadata.generation_date)
+            if not new_date:
+                logger.warning(f"Invalid date format for chronological insertion: {metadata.generation_date}")
+                # Fall back to append mode
+                return self._log_download_append(metadata)
+            
+            # Read all existing entries
+            existing_entries = self._read_all_log_entries()
+            
+            # Create new entry
+            new_entry = {
+                'file_id': metadata.file_id,
+                'generation_date': metadata.generation_date,
+                'prompt': metadata.prompt,
+                'parsed_date': new_date
+            }
+            
+            # Insert in chronological order (newest first)
+            existing_entries.append(new_entry)
+            # Sort with None values last (for invalid dates)
+            existing_entries.sort(key=lambda x: (x['parsed_date'] is None, x['parsed_date']), reverse=True)
+            
+            # Rewrite entire file with sorted entries
+            write_success = self._write_all_log_entries(existing_entries)
+            if not write_success:
+                raise Exception("Failed to write log entries to file")
+            
+            logger.info(f"Logged download chronologically: {metadata.file_id}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to log download chronologically: {e}")
+            # Fall back to append mode
+            try:
+                return self._log_download_append(metadata)
+            except Exception as fallback_error:
+                logger.error(f"Failed to log download (fallback): {fallback_error}")
+                return False
+    
+    def _log_download_append(self, metadata: GenerationMetadata) -> bool:
+        """Original append-only logging method (fallback)"""
         try:
             log_entry = f"{metadata.file_id}\n{metadata.generation_date}\n{metadata.prompt}\n{'=' * 40}\n"
             
             with open(self.log_file_path, 'a', encoding='utf-8') as f:
                 f.write(log_entry)
                 
-            logger.info(f"Logged download: {metadata.file_id}")
+            logger.info(f"Logged download (append): {metadata.file_id}")
             return True
             
         except Exception as e:
-            logger.error(f"Failed to log download: {e}")
+            logger.error(f"Failed to log download (append): {e}")
             return False
     
+    def _parse_date_for_comparison(self, date_string: str) -> Optional[datetime]:
+        """Parse date string into datetime object for chronological comparison"""
+        if not date_string:
+            return None
+        
+        try:
+            # Use the existing normalization method from the manager
+            normalized_date = self._normalize_date_format(date_string)
+            
+            # Parse the normalized date
+            date_formats = [
+                "%Y-%m-%d-%H-%M-%S",     # Normalized format
+                "%d %b %Y %H:%M:%S",     # "24 Aug 2025 01:37:01"
+                "%Y-%m-%d %H:%M:%S",     # "2025-08-24 01:37:01"
+                "%Y-%m-%d %H:%M",        # "2025-08-24 01:37"
+                "%d/%m/%Y %H:%M:%S",     # "24/08/2025 01:37:01"
+                "%m/%d/%Y %H:%M:%S",     # "08/24/2025 01:37:01"
+            ]
+            
+            for fmt in date_formats:
+                try:
+                    return datetime.strptime(date_string.strip(), fmt)
+                except ValueError:
+                    continue
+                    
+            # If normalized format parsing fails, try the original
+            if normalized_date != date_string:
+                try:
+                    return datetime.strptime(normalized_date, "%Y-%m-%d-%H-%M-%S")
+                except ValueError:
+                    pass
+            
+            logger.warning(f"Could not parse date format: {date_string}")
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error parsing date '{date_string}': {e}")
+            return None
+    
+    def _normalize_date_format(self, date_string: str) -> str:
+        """Normalize different date formats for consistent comparison"""
+        try:
+            # Try to parse and reformat date
+            date_formats = [
+                "%d %b %Y %H:%M:%S",    # "24 Aug 2025 01:37:01"
+                "%Y-%m-%d %H:%M:%S",    # "2025-08-24 01:37:01"
+                "%Y-%m-%d-%H-%M-%S",    # "2025-08-24-01-37-01"
+                "%d/%m/%Y %H:%M:%S",    # "24/08/2025 01:37:01"
+                "%m/%d/%Y %H:%M:%S",    # "08/24/2025 01:37:01"
+            ]
+            
+            for fmt in date_formats:
+                try:
+                    parsed_date = datetime.strptime(date_string.strip(), fmt)
+                    return parsed_date.strftime("%Y-%m-%d-%H-%M-%S")  # Standardized format
+                except ValueError:
+                    continue
+            
+            # If no format matches, return original
+            return date_string
+            
+        except Exception:
+            return date_string
+    
+    def _read_all_log_entries(self) -> List[Dict]:
+        """Read all log entries from the file and return as list of dictionaries"""
+        entries = []
+        
+        if not self.log_file_path.exists():
+            return entries
+            
+        try:
+            with open(self.log_file_path, 'r', encoding='utf-8') as f:
+                content = f.read().strip()
+                
+            if not content:
+                return entries
+            
+            # Split by separator lines
+            sections = content.split('=' * 40)
+            
+            for section in sections:
+                section = section.strip()
+                if not section:
+                    continue
+                    
+                lines = section.split('\n')
+                if len(lines) >= 3:
+                    file_id = lines[0].strip()
+                    generation_date = lines[1].strip()
+                    prompt = '\n'.join(lines[2:]).strip()
+                    
+                    # Parse date for sorting
+                    parsed_date = self._parse_date_for_comparison(generation_date)
+                    
+                    if file_id and generation_date:  # Only add valid entries
+                        entries.append({
+                            'file_id': file_id,
+                            'generation_date': generation_date,
+                            'prompt': prompt,
+                            'parsed_date': parsed_date
+                        })
+                        
+        except Exception as e:
+            logger.error(f"Error reading log entries: {e}")
+            
+        return entries
+    
+    def _write_all_log_entries(self, entries: List[Dict]) -> bool:
+        """Write all entries to the log file in chronological order"""
+        try:
+            with open(self.log_file_path, 'w', encoding='utf-8') as f:
+                for entry in entries:
+                    # Use placeholder ID for new entries
+                    file_id = entry['file_id']
+                    if not file_id or file_id == 'NEW' or not file_id.startswith('#'):
+                        file_id = '#999999999'  # Placeholder for new entries
+                        
+                    log_entry = f"{file_id}\n{entry['generation_date']}\n{entry['prompt']}\n{'=' * 40}\n"
+                    f.write(log_entry)
+                    
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error writing log entries: {e}")
+            return False
+
     def get_download_count(self) -> int:
         """Get the current number of logged downloads"""
         if not self.log_file_path.exists():
@@ -2191,10 +2395,13 @@ class GenerationDownloadManager:
                         logger.info(f"   Existing: {existing_prompt_start[:100]}...")
                         logger.info(f"   Current:  {current_prompt_start[:100]}...")
                         
-                        # Log termination message
-                        if self.config.stop_on_duplicate:
+                        # Handle duplicate based on mode
+                        if self.config.duplicate_mode == DuplicateMode.FINISH and self.config.stop_on_duplicate:
                             logger.info("🎯 AUTOMATION COMPLETE: Reached previously downloaded content")
                             logger.info("✅ All new generations have been processed successfully")
+                        elif self.config.duplicate_mode == DuplicateMode.SKIP:
+                            logger.info("⏭️  SKIPPING: Duplicate detected, continuing search for new generations")
+                            return "skip"  # Special return value for skip mode
                         
                         return True
             
@@ -3536,8 +3743,12 @@ class GenerationDownloadManager:
                 
                 # Method 1: Check comprehensive duplicates (log entries + prompt matching)
                 is_comprehensive_duplicate = await self.check_comprehensive_duplicate(page, thumbnail_id, existing_files)
-                if is_comprehensive_duplicate:
-                    if self.config.stop_on_duplicate:
+                if is_comprehensive_duplicate == "skip":
+                    # Skip mode: continue to next generation
+                    logger.warning(f"⏭️  Skipping comprehensive duplicate: {thumbnail_id}")
+                    return True
+                elif is_comprehensive_duplicate:
+                    if self.config.stop_on_duplicate and self.config.duplicate_mode == DuplicateMode.FINISH:
                         logger.info(f"🛑 STOPPING: Comprehensive duplicate detected for {thumbnail_id}")
                         logger.info("✅ Automation has reached previously downloaded content")
                         self.should_stop = True
@@ -3548,7 +3759,7 @@ class GenerationDownloadManager:
                 
                 # Method 2: Check file-based duplicates (from disk) - fallback
                 if existing_files and self.check_duplicate_exists(creation_time, existing_files):
-                    if self.config.stop_on_duplicate:
+                    if self.config.stop_on_duplicate and self.config.duplicate_mode == DuplicateMode.FINISH:
                         logger.info(f"🛑 STOPPING: File-based duplicate detected ({creation_time})")
                         logger.info("🔄 All newer files have already been downloaded")
                         self.should_stop = True
@@ -3848,7 +4059,7 @@ class GenerationDownloadManager:
             if self.config.duplicate_check_enabled and metadata_dict and metadata_dict.get('generation_date'):
                 creation_time = metadata_dict.get('generation_date')
                 if self.check_duplicate_exists(creation_time, existing_files):
-                    if self.config.stop_on_duplicate:
+                    if self.config.stop_on_duplicate and self.config.duplicate_mode == DuplicateMode.FINISH:
                         logger.info(f"🛑 STOPPING: Duplicate creation time detected ({creation_time})")
                         logger.info("🔄 All newer files have already been downloaded")
                         self.should_stop = True
