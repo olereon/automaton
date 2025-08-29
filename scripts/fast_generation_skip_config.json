@@ -52,7 +52,6 @@
         "_comment_skip_mode_settings": "SKIP MODE: Continue past duplicates",
         "stop_on_duplicate": false,
         "duplicate_mode": "skip",
-        "skip_duplicates": true,
         "duplicate_check_enabled": true,
         "creation_time_comparison": true,
         

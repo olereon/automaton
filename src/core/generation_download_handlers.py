@@ -23,10 +23,17 @@ class GenerationDownloadHandlers:
     async def _handle_start_generation_downloads(self, action) -> Dict[str, Any]:
         """Handle START_GENERATION_DOWNLOADS action"""
         try:
-            from src.utils.generation_download_manager import GenerationDownloadManager, GenerationDownloadConfig
+            from src.utils.generation_download_manager import GenerationDownloadManager, GenerationDownloadConfig, DuplicateMode
             
             # Parse configuration from action value
             config_data = action.value if action.value else {}
+            
+            # Handle duplicate_mode string to enum conversion
+            duplicate_mode_str = config_data.get('duplicate_mode', 'finish').lower()
+            if duplicate_mode_str == 'skip':
+                duplicate_mode = DuplicateMode.SKIP
+            else:
+                duplicate_mode = DuplicateMode.FINISH
             
             # Create configuration with defaults and user overrides
             config = GenerationDownloadConfig(
@@ -81,7 +88,13 @@ class GenerationDownloadHandlers:
                 generation_date_selector=config_data.get('generation_date_selector', 
                     '.sc-eJlwcH.gjlyBM span.sc-cSMkSB.hUjUPD:nth-child(2)'),
                 prompt_selector=config_data.get('prompt_selector', 
-                    '.sc-jJRqov.cxtNJi span[aria-describedby]')
+                    '.sc-jJRqov.cxtNJi span[aria-describedby]'),
+                
+                # Duplicate handling configuration (ENHANCED SKIP MODE)
+                duplicate_mode=duplicate_mode,
+                stop_on_duplicate=config_data.get('stop_on_duplicate', duplicate_mode == DuplicateMode.FINISH),
+                duplicate_check_enabled=config_data.get('duplicate_check_enabled', True),
+                creation_time_comparison=config_data.get('creation_time_comparison', True)
             )
             
             # Initialize the generation download manager

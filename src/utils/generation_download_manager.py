@@ -511,6 +511,33 @@ class GenerationDownloadLogger:
         except Exception as e:
             logger.error(f"Error counting downloads: {e}")
             return 0
+    
+    def get_last_log_entry(self) -> Optional[Dict[str, str]]:
+        """Get the last (most recent) log entry as a checkpoint for fast-forward skip mode"""
+        if not self.log_file_path.exists():
+            logger.info("📄 No log file found - starting fresh download session")
+            return None
+            
+        try:
+            entries = self._read_all_log_entries()
+            if not entries:
+                logger.info("📄 Log file is empty - starting fresh download session")
+                return None
+            
+            # Get the first entry (newest due to chronological ordering)
+            last_entry = entries[0]
+            
+            logger.info(f"🔖 Last downloaded checkpoint found:")
+            logger.info(f"   📅 Creation Time: {last_entry.get('generation_date')}")
+            logger.info(f"   📝 Prompt: {last_entry.get('prompt', '')[:100]}{'...' if len(last_entry.get('prompt', '')) > 100 else ''}")
+            logger.info(f"   📁 File ID: {last_entry.get('file_id')}")
+            
+            return last_entry
+            
+        except Exception as e:
+            logger.error(f"Error reading last log entry: {e}")
+            return None
+    
 
 
 class GenerationFileManager:
@@ -639,6 +666,11 @@ class GenerationDownloadManager:
         except ImportError:
             self.debug_logger = None
             logger.warning("Debug logger not available")
+        
+        # Enhanced SKIP mode state tracking
+        self.checkpoint_found = False
+        self.fast_forward_mode = False
+        self.checkpoint_data = None
         
         # Initialize download manager
         download_config = DownloadConfig(
@@ -3700,13 +3732,24 @@ class GenerationDownloadManager:
             logger.debug(f"Error closing download shelf: {e}")
     
     async def download_single_generation_robust(self, page, thumbnail_info: Dict[str, Any], existing_files: set = None) -> bool:
-        """Download a single generation using robust thumbnail tracking"""
+        """Download a single generation using robust thumbnail tracking with Enhanced SKIP mode support"""
         try:
             thumbnail_element = thumbnail_info['element']
             thumbnail_id = thumbnail_info['unique_id']
             thumbnail_position = thumbnail_info['position']
             
             logger.info(f"Starting robust download for thumbnail: {thumbnail_id}")
+            
+            # ENHANCED SKIP MODE: Check if we should fast-forward past this thumbnail
+            if hasattr(self, 'fast_forward_mode') and self.fast_forward_mode:
+                action = await self.fast_forward_to_checkpoint(page, thumbnail_id)
+                if action == "skip":
+                    logger.info(f"⏩ FAST-FORWARD: Skipping thumbnail {thumbnail_id}")
+                    return True  # Skip this thumbnail
+                elif action == "skip_checkpoint":
+                    logger.info(f"📍 CHECKPOINT: Skipping {thumbnail_id} (checkpoint found, downloading starts next)")
+                    return True  # Skip this checkpoint thumbnail
+                # If action == "download", continue with normal download process
             
             # DEBUG: Log thumbnail click attempt
             if self.debug_logger:
@@ -3869,9 +3912,20 @@ class GenerationDownloadManager:
             return False
     
     async def download_single_generation(self, page, thumbnail_index: int, existing_files: set = None) -> bool:
-        """Download a single generation and handle all associated tasks"""
+        """Download a single generation and handle all associated tasks with Enhanced SKIP mode support"""
         try:
             logger.info(f"Starting download for thumbnail {thumbnail_index}")
+            
+            # ENHANCED SKIP MODE: Check if we should fast-forward past this thumbnail  
+            if hasattr(self, 'fast_forward_mode') and self.fast_forward_mode:
+                action = await self.fast_forward_to_checkpoint(page, f"thumbnail_{thumbnail_index}")
+                if action == "skip":
+                    logger.info(f"⏩ FAST-FORWARD: Skipping thumbnail {thumbnail_index}")
+                    return True  # Skip this thumbnail
+                elif action == "skip_checkpoint":
+                    logger.info(f"📍 CHECKPOINT: Skipping {thumbnail_index} (checkpoint found, downloading starts next)")
+                    return True  # Skip this checkpoint thumbnail
+                # If action == "download", continue with normal download process
             
             # DEBUG: Log thumbnail click attempt
             if self.debug_logger:
@@ -4414,6 +4468,11 @@ class GenerationDownloadManager:
                 existing_files = self.scan_existing_files()
                 if existing_files and self.config.stop_on_duplicate:
                     logger.info(f"🔍 Found {len(existing_files)} existing files - will stop if duplicate creation time detected")
+            
+            # STEP 0.5: Initialize Enhanced SKIP mode (NEW FEATURE)
+            enhanced_skip_enabled = self.initialize_enhanced_skip_mode()
+            if enhanced_skip_enabled:
+                logger.info("⚡ Enhanced SKIP mode is active - will fast-forward to last checkpoint")
             
             # STEP 1: Configure Chromium browser settings to suppress download popups
             logger.info("⚙️ Configuring Chromium browser settings to suppress download notifications")
@@ -5185,6 +5244,150 @@ class GenerationDownloadManager:
             
         except Exception as e:
             logger.error(f"Error in download settings configuration: {e}")
+            return False
+
+    def initialize_enhanced_skip_mode(self) -> bool:
+        """Initialize enhanced SKIP mode with checkpoint detection"""
+        if self.config.duplicate_mode != DuplicateMode.SKIP:
+            return False
+            
+        # Get the last log entry as checkpoint
+        self.checkpoint_data = self.logger.get_last_log_entry()
+        if not self.checkpoint_data:
+            logger.info("⚡ Enhanced SKIP mode: No checkpoint found, starting normal download process")
+            return False
+            
+        self.fast_forward_mode = True
+        self.checkpoint_found = False
+        
+        logger.info("🚀 Enhanced SKIP mode activated:")
+        logger.info(f"   🎯 Checkpoint: {self.checkpoint_data.get('generation_date')}")
+        logger.info(f"   🔍 Will fast-forward through gallery to find this checkpoint")
+        logger.info(f"   ⏩ Once found, will resume downloading from next item")
+        
+        return True
+        
+    async def fast_forward_to_checkpoint(self, page, thumbnail_id: str) -> str:
+        """Fast-forward through thumbnails to find checkpoint, return action to take"""
+        if not self.fast_forward_mode or self.checkpoint_found:
+            return "download"  # Normal download mode
+            
+        try:
+            logger.info(f"⏩ Fast-forward mode: Checking thumbnail {thumbnail_id}")
+            
+            # Extract metadata quickly without full processing
+            metadata = await self._extract_metadata_fast(page, thumbnail_id)
+            if not metadata:
+                logger.warning(f"   ⚠️ Could not extract metadata for {thumbnail_id}, continuing fast-forward")
+                return "skip"
+                
+            # Compare with checkpoint
+            if self._is_checkpoint_match(metadata, self.checkpoint_data):
+                logger.info(f"✅ CHECKPOINT FOUND: {thumbnail_id}")
+                logger.info(f"   📅 Creation Time: {metadata.get('generation_date')}")
+                logger.info(f"   🔗 Matches checkpoint - switching to download mode for next items")
+                
+                self.checkpoint_found = True
+                self.fast_forward_mode = False  # Stop fast-forward, start downloading
+                
+                return "skip_checkpoint"  # Skip this one (already downloaded) but start downloading next
+                
+            logger.info(f"   ⏩ Not checkpoint, continuing fast-forward")
+            return "skip"
+            
+        except Exception as e:
+            logger.error(f"Error in fast-forward mode: {e}")
+            # Fall back to normal skip behavior
+            return "skip"
+    
+    async def _extract_metadata_fast(self, page, thumbnail_id: str) -> Optional[Dict[str, str]]:
+        """Quickly extract metadata for checkpoint comparison without full processing"""
+        try:
+            # Extract just the creation time and a portion of the prompt for comparison
+            creation_time = None
+            prompt_start = None
+            
+            # Try to get creation time from DOM
+            creation_time_selectors = [
+                f"xpath=//span[contains(text(), '{self.config.creation_time_text}')]/following-sibling::span",
+                ".sc-eJlwcH.gjlyBM span.sc-cSMkSB.hUjUPD:nth-child(2)",
+                "span:has-text('Creation Time') + span"
+            ]
+            
+            for selector in creation_time_selectors:
+                try:
+                    element = page.locator(selector).first
+                    if await element.is_visible(timeout=1000):
+                        creation_time = await element.text_content()
+                        break
+                except:
+                    continue
+                    
+            # Try to get prompt start for comparison
+            prompt_selectors = [
+                ".sc-jJRqov.cxtNJi span[aria-describedby]",
+                "div.sc-dDrhAi.dnESm div",
+                "[class*='prompt'] span, [class*='description'] span"
+            ]
+            
+            for selector in prompt_selectors:
+                try:
+                    element = page.locator(selector).first
+                    if await element.is_visible(timeout=1000):
+                        full_prompt = await element.text_content()
+                        prompt_start = full_prompt[:200] if full_prompt else None  # First 200 chars
+                        break
+                except:
+                    continue
+            
+            if creation_time:
+                return {
+                    'generation_date': creation_time.strip(),
+                    'prompt_start': prompt_start or "Unknown prompt",
+                    'thumbnail_id': thumbnail_id
+                }
+                
+        except Exception as e:
+            logger.error(f"Error extracting fast metadata: {e}")
+            
+        return None
+    
+    def _is_checkpoint_match(self, current_metadata: Dict[str, str], checkpoint_data: Dict[str, str]) -> bool:
+        """Check if current metadata matches the checkpoint"""
+        try:
+            # Compare creation times
+            current_time = current_metadata.get('generation_date', '')
+            checkpoint_time = checkpoint_data.get('generation_date', '')
+            
+            # Normalize both times for comparison
+            current_normalized = self.logger._normalize_date_format(current_time)
+            checkpoint_normalized = self.logger._normalize_date_format(checkpoint_time)
+            
+            if current_normalized == checkpoint_normalized:
+                logger.info(f"   ✅ Creation time match: {current_normalized}")
+                
+                # Also check prompt similarity for extra confirmation
+                current_prompt = current_metadata.get('prompt_start', '')[:100]
+                checkpoint_prompt = checkpoint_data.get('prompt', '')[:100]
+                
+                # Simple similarity check (first 50 characters)
+                if current_prompt and checkpoint_prompt:
+                    similarity_check = current_prompt[:50] == checkpoint_prompt[:50]
+                    logger.info(f"   🔗 Prompt similarity: {'Match' if similarity_check else 'Different'}")
+                    
+                    if similarity_check:
+                        return True
+                    else:
+                        logger.info(f"   ⚠️ Time matches but prompt differs - continuing search")
+                        return False
+                else:
+                    # If prompt comparison fails, rely on time match
+                    return True
+                    
+            return False
+            
+        except Exception as e:
+            logger.error(f"Error comparing checkpoint: {e}")
             return False
 
     def get_status(self) -> Dict[str, Any]:
