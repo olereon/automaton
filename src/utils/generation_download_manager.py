@@ -7187,45 +7187,67 @@ class GenerationDownloadManager:
             logger.info("   ✅ Boundary scroll manager ready with verified scroll methods")
         
         try:
-            # Use enhanced boundary detection logic but search for specific datetime
-            logger.info("   🔍 Using enhanced container detection for start_from search...")
+            # Use same container scanning approach as boundary detection on /generate page
+            logger.info("   🔍 Using boundary detection container scanning on /generate page...")
             
-            # Get all generation containers on the page
-            containers = await page.query_selector_all("div[class*='thumsCou']")
-            initial_container_count = len(containers)
-            logger.info(f"   📊 Initial containers found: {initial_container_count}")
+            # Use same multi-selector strategy as boundary detection
+            container_selectors = []
+            for i in range(0, 50):  # Same range as boundary detection
+                container_selectors.append(f"div[id$='__{i}']")
             
-            if not containers:
-                logger.warning("   ⚠️ No containers found on initial page")
-                return {'found': False, 'error': 'No containers found'}
+            logger.info(f"   📋 Using {len(container_selectors)} selectors (same as boundary detection)")
+            
+            # Get all generation containers from current /generate page
+            all_containers = []
+            for selector in container_selectors:
+                try:
+                    containers = await page.query_selector_all(selector)
+                    if containers:
+                        all_containers.extend(containers)
+                except Exception as e:
+                    logger.debug(f"   Selector {selector} failed: {e}")
+            
+            initial_container_count = len(all_containers)
+            logger.info(f"   📊 Initial containers found on /generate page: {initial_container_count}")
+            
+            if not all_containers:
+                logger.warning("   ⚠️ No generation containers found on /generate page")
+                return {'found': False, 'error': 'No generation containers found on /generate page'}
             
             scroll_attempts = 0
             max_scroll_attempts = 100  # Allow extensive scrolling to find the target
             containers_scanned = 0
             
             while scroll_attempts <= max_scroll_attempts:
-                # Scan current containers for the target datetime
-                logger.debug(f"   🔍 Scanning containers (scroll attempt {scroll_attempts}/{max_scroll_attempts})...")
+                # Scan current containers for the target datetime (use boundary detection approach)
+                logger.debug(f"   🔍 Scanning generation containers on /generate page (attempt {scroll_attempts}/{max_scroll_attempts})...")
                 
-                # Re-get containers after potential scrolling
-                containers = await page.query_selector_all("div[class*='thumsCou']")
-                current_container_count = len(containers)
+                # Re-collect containers after potential scrolling using same approach as boundary detection
+                all_containers = []
+                for selector in container_selectors:
+                    try:
+                        containers = await page.query_selector_all(selector)
+                        if containers:
+                            all_containers.extend(containers)
+                    except Exception as e:
+                        logger.debug(f"   Selector {selector} failed: {e}")
                 
-                logger.debug(f"   📊 Containers available: {current_container_count}")
+                current_container_count = len(all_containers)
+                logger.debug(f"   📊 Generation containers available: {current_container_count}")
                 
-                # Check each container for the target datetime
-                for i, container in enumerate(containers):
+                # Check each generation container for the target datetime
+                for i, container in enumerate(all_containers):
                     containers_scanned += 1
                     
                     try:
-                        # Extract metadata from container using enhanced extraction
+                        # Extract metadata from generation container using enhanced extraction
                         text_content = await container.text_content()
                         if not text_content:
                             continue
                         
-                        logger.debug(f"   📝 Container {containers_scanned} text: {text_content[:100]}...")
+                        logger.debug(f"   📝 Generation container {containers_scanned} text: {text_content[:100]}...")
                         
-                        # Use enhanced metadata extraction
+                        # Use enhanced metadata extraction (same as boundary detection)
                         metadata = await extract_container_metadata_enhanced(container, text_content)
                         
                         if not metadata or not metadata.get('creation_time'):
@@ -7234,21 +7256,21 @@ class GenerationDownloadManager:
                         container_time = metadata['creation_time']
                         container_prompt = metadata.get('prompt', '')
                         
-                        logger.debug(f"   ⏰ Container {containers_scanned}: {container_time}")
+                        logger.debug(f"   ⏰ Generation container {containers_scanned}: {container_time}")
                         
                         # Check if this is our target datetime
                         if container_time == target_datetime:
-                            logger.info(f"   🎯 TARGET FOUND: Container {containers_scanned} matches '{target_datetime}'")
+                            logger.info(f"   🎯 TARGET FOUND: Generation container {containers_scanned} matches '{target_datetime}'")
                             logger.info(f"      📝 Prompt: {container_prompt[:100]}...")
                             
-                            # Click this container to navigate to the generation
-                            logger.info(f"   🖱️ Clicking target container to position gallery...")
+                            # Click this generation container to open the gallery (same as boundary detection)
+                            logger.info(f"   🖱️ Clicking target generation container to open gallery...")
                             
                             try:
                                 await container.click(timeout=5000)
-                                await page.wait_for_timeout(2000)  # Wait for gallery to open/navigate
+                                await page.wait_for_timeout(2000)  # Wait for gallery to open
                                 
-                                logger.info("✅ START_FROM: Successfully positioned at target generation")
+                                logger.info("✅ START_FROM: Successfully positioned at target generation in gallery")
                                 return {
                                     'found': True,
                                     'container_index': containers_scanned,
@@ -7257,7 +7279,7 @@ class GenerationDownloadManager:
                                 }
                                 
                             except Exception as click_error:
-                                logger.warning(f"   ⚠️ Failed to click target container: {click_error}")
+                                logger.warning(f"   ⚠️ Failed to click target generation container: {click_error}")
                                 # Still return success since we found it
                                 return {
                                     'found': True,
@@ -7267,17 +7289,16 @@ class GenerationDownloadManager:
                                 }
                         
                     except Exception as e:
-                        logger.debug(f"   ❌ Error processing container {containers_scanned}: {e}")
+                        logger.debug(f"   ❌ Error processing generation container {containers_scanned}: {e}")
                         continue
                 
-                # If target not found in current containers, try scrolling for more
+                # If target not found in current containers, scroll to find more (same as boundary detection)
                 if scroll_attempts < max_scroll_attempts:
-                    logger.debug(f"   📜 Target not found in current containers, scrolling for more...")
+                    logger.debug(f"   📜 Target not found in current generation containers, scrolling on /generate page...")
                     
                     # Use the same verified scrolling methods as boundary search
-                    # (Element.scrollIntoView() and container.scrollTop)
                     try:
-                        logger.debug("   🎯 Using BoundaryScrollManager verified scroll methods...")
+                        logger.debug("   🎯 Using BoundaryScrollManager verified scroll methods on /generate page...")
                         
                         # Use the proven scroll methods with fallback
                         scroll_result = await self.boundary_scroll_manager.perform_scroll_with_fallback(
@@ -7287,17 +7308,10 @@ class GenerationDownloadManager:
                         scroll_attempts += 1
                         
                         if scroll_result.success and scroll_result.scroll_distance > 50:
-                            logger.debug(f"   ✅ Verified scroll successful: {scroll_result.scroll_distance}px using {scroll_result.method_name}")
+                            logger.debug(f"   ✅ Verified scroll successful on /generate page: {scroll_result.scroll_distance}px using {scroll_result.method_name}")
                             
-                            # Check if new containers appeared
-                            new_containers = await page.query_selector_all("div[class*='thumsCou']")
-                            if len(new_containers) > current_container_count:
-                                logger.debug(f"   📊 New containers detected: {len(new_containers) - current_container_count}")
-                            else:
-                                logger.debug(f"   ⚠️ Scroll successful but no new containers visible yet")
-                                
-                            # Wait for DOM updates after successful scroll
-                            logger.debug("   ⏳ Waiting for DOM updates after verified scroll...")
+                            # Wait for DOM updates and new containers to appear
+                            logger.debug("   ⏳ Waiting for DOM updates and new generation containers...")
                             await page.wait_for_timeout(2000)  # Wait for content to load
                             try:
                                 await page.wait_for_load_state('networkidle', timeout=3000)
@@ -7312,11 +7326,11 @@ class GenerationDownloadManager:
                             await page.wait_for_timeout(1000)
                             
                     except Exception as scroll_error:
-                        logger.debug(f"   ❌ BoundaryScrollManager error: {scroll_error}")
+                        logger.debug(f"   ❌ BoundaryScrollManager error on /generate page: {scroll_error}")
                         scroll_attempts += 1
                         continue
                 else:
-                    logger.warning(f"   🔚 Reached maximum scroll attempts ({max_scroll_attempts}) without finding target")
+                    logger.warning(f"   🔚 Reached maximum scroll attempts ({max_scroll_attempts}) without finding target on /generate page")
                     break
             
             logger.warning(f"   🔍 START_FROM: Target datetime '{target_datetime}' not found after scanning {containers_scanned} containers")
@@ -7359,18 +7373,15 @@ class GenerationDownloadManager:
             if settings_configured:
                 logger.info("✅ Chromium download settings configured successfully")
             
-            # Continue with normal download flow but skip navigation steps
-            logger.info("🔥 Starting main download loop from start_from position (navigation skipped)")
+            # Continue with normal thumbnail download flow after start_from positioned us
+            logger.info("🔥 Target generation opened in gallery - starting thumbnail downloads from this position")
             
-            # Set flag to indicate start_from was successful so we can skip navigation
-            self._start_from_positioning_successful = True
-            
-            # Pre-load gallery with initial scroll phase
+            # Pre-load gallery with initial scroll phase to populate thumbnails
             logger.info("🔄 Pre-loading gallery with initial scroll phase to populate thumbnails...")
             await self._preload_gallery_with_scroll_triggers(page)
             
-            # Start enhanced gallery navigation (this is the main download loop)
-            navigation_success = False
+            # Start enhanced gallery navigation (this is the main thumbnail download loop)
+            logger.info("🚀 Starting enhanced gallery navigation for thumbnail downloads...")
             navigation_success = await self.enhanced_gallery_navigation(page, results)
             
             if navigation_success:

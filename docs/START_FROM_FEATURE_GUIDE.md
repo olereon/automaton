@@ -11,12 +11,13 @@ The `start_from` feature allows you to begin generation downloads from a specifi
 
 ## How It Works
 
-The `start_from` feature searches through the gallery containers to find a generation with the specified creation datetime. When found:
+The `start_from` feature works on the main **/generate page** (not the thumbnails gallery) by scanning generation containers to find the specified creation datetime. When found:
 
-1. **Target Location**: The system positions itself at the generation with the specified datetime
-2. **Next Generation Start**: Downloads begin from the **next generation** after the target
-3. **Enhanced Search**: Uses the same robust container detection as boundary scanning
-4. **Extensive Scrolling**: Supports up to 100 scroll attempts to find the target datetime
+1. **Generation Container Search**: Scans containers on /generate page using same selectors as boundary detection (`div[id$='__0']`, `div[id$='__1']`, etc.)
+2. **Target Location**: Finds the generation container with the specified datetime
+3. **Gallery Opening**: Clicks the target generation container to open it in the gallery
+4. **Download Start**: Downloads begin from this position in the gallery
+5. **Same as Boundary Detection**: Uses identical container scanning approach as proven boundary search
 
 ## Usage
 
@@ -95,25 +96,26 @@ Sep 03 2025 16:15:18   ❌ Wrong order
 - Checks datetime format before starting search
 - Returns error immediately if format is invalid
 
-### 2. Container Scanning  
-- Scans existing containers on the gallery page
-- Extracts metadata using enhanced extraction methods
-- Compares creation times for exact matches
+### 2. Generation Container Scanning  
+- Scans generation containers on /generate page using selectors: `div[id$='__0']`, `div[id$='__1']`, etc.
+- Extracts creation time metadata from each container using enhanced extraction methods
+- Compares creation times for exact matches with target datetime
 
-### 3. Scrolling Search
-- If target not found in visible containers
-- Scrolls down to load more containers
-- Supports up to 100 scroll attempts
-- Waits for DOM updates between scrolls
+### 3. Scrolling Search on /generate Page
+- If target not found in visible generation containers
+- Scrolls down on /generate page to load more containers
+- Uses same verified scroll methods as boundary detection
+- Supports up to 100 scroll attempts with DOM wait periods
 
 ### 4. Target Found
-- Clicks the target container to position gallery
-- System is ready to download from next generation
+- Clicks the target generation container to open it in gallery
+- Gallery opens positioned at the target generation
+- System is ready to download from this position
 - Logs success with container index and details
 
 ### 5. Target Not Found
-- Logs warning after exhausting search attempts
-- Falls back to starting from beginning of gallery
+- Logs warning after exhausting search attempts on /generate page
+- Falls back to normal queue detection and navigation flow
 - Downloads proceed normally from default start position
 
 ## Integration with Other Features
@@ -143,12 +145,13 @@ python3.11 scripts/fast_generation_downloader.py --mode finish --start-from "03 
 ### Success Messages
 ```
 🎯 START_FROM MODE: Searching for generation with datetime '03 Sep 2025 16:15:18'
-   🔍 Using enhanced container detection for start_from search...
-   📊 Initial containers found: 20
-   🎯 TARGET FOUND: Container 45 matches '03 Sep 2025 16:15:18'
+   🔍 Using boundary detection container scanning on /generate page...
+   📋 Using 50 selectors (same as boundary detection)
+   📊 Initial containers found on /generate page: 20
+   🎯 TARGET FOUND: Generation container 45 matches '03 Sep 2025 16:15:18'
       📝 Prompt: The camera begins with a low-angle medium shot, framing the...
-   🖱️ Clicking target container to position gallery...
-✅ START_FROM: Successfully positioned at target generation
+   🖱️ Clicking target generation container to open gallery...
+✅ START_FROM: Successfully positioned at target generation in gallery
 ```
 
 ### Warning Messages
