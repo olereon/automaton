@@ -83,12 +83,9 @@ class FastGenerationDownloader:
                 print(f"⚠️ Could not parse creation time format: {creation_time}")
                 return False
     
-    def modify_config_for_skip_mode(self, config_data):
-        """Modify configuration to enable SKIP mode for duplicate handling"""
-        if self.duplicate_mode != "skip":
-            return config_data
-        
-        print("⚙️ Modifying configuration for SKIP mode...")
+    def modify_config_for_duplicate_mode(self, config_data):
+        """Modify configuration for duplicate handling (both SKIP and FINISH modes)"""
+        print(f"⚙️ Modifying configuration for {self.duplicate_mode.upper()} mode...")
         
         # Find the start_generation_downloads action and modify it
         for action_data in config_data['actions']:
@@ -96,18 +93,37 @@ class FastGenerationDownloader:
                 if 'value' not in action_data:
                     action_data['value'] = {}
                 
-                # Set SKIP mode parameters
-                action_data['value']['stop_on_duplicate'] = False
-                action_data['value']['duplicate_mode'] = 'skip'
-                action_data['value']['skip_duplicates'] = True
+                # CRITICAL: Always ensure duplicate checking is enabled
+                action_data['value']['duplicate_check_enabled'] = True
+                print("   ✅ Set duplicate_check_enabled = True (CRITICAL FIX)")
                 
-                print("   ✅ Set stop_on_duplicate = False")
-                print("   ✅ Set duplicate_mode = 'skip'")
-                print("   ✅ Set skip_duplicates = True")
-                
-                # Add skip mode description
-                skip_description = action_data.get('description', '') + ' [SKIP MODE: Continue past duplicates]'
-                action_data['description'] = skip_description
+                if self.duplicate_mode == "skip":
+                    # Set SKIP mode parameters
+                    action_data['value']['stop_on_duplicate'] = False
+                    action_data['value']['duplicate_mode'] = 'skip'
+                    action_data['value']['skip_duplicates'] = True
+                    
+                    print("   ✅ Set stop_on_duplicate = False")
+                    print("   ✅ Set duplicate_mode = 'skip'")
+                    print("   ✅ Set skip_duplicates = True")
+                    
+                    # Add skip mode description
+                    skip_description = action_data.get('description', '') + ' [SKIP MODE: Continue past duplicates]'
+                    action_data['description'] = skip_description
+                    
+                else:
+                    # Set FINISH mode parameters (default behavior)
+                    action_data['value']['stop_on_duplicate'] = True
+                    action_data['value']['duplicate_mode'] = 'finish'
+                    action_data['value']['skip_duplicates'] = False
+                    
+                    print("   ✅ Set stop_on_duplicate = True")
+                    print("   ✅ Set duplicate_mode = 'finish'")
+                    print("   ✅ Set skip_duplicates = False")
+                    
+                    # Add finish mode description
+                    finish_description = action_data.get('description', '') + ' [FINISH MODE: Stop at duplicates]'
+                    action_data['description'] = finish_description
                 
                 break
         
@@ -127,8 +143,8 @@ class FastGenerationDownloader:
         with open(self.config_path, 'r') as f:
             config_data = json.load(f)
         
-        # Modify configuration for SKIP mode if needed
-        config_data = self.modify_config_for_skip_mode(config_data)
+        # Modify configuration for duplicate mode (SKIP or FINISH) 
+        config_data = self.modify_config_for_duplicate_mode(config_data)
         
         # Extract downloads folder for duplicate checking
         for action_data in config_data['actions']:

@@ -17,6 +17,8 @@ from dataclasses import dataclass, asdict
 from enum import Enum
 
 from .download_manager import DownloadManager, DownloadConfig
+from .boundary_scroll_manager import BoundaryScrollManager
+from .enhanced_metadata_extraction import extract_container_metadata_enhanced
 
 logger = logging.getLogger(__name__)
 
@@ -180,7 +182,7 @@ class GenerationDownloadConfig:
     scroll_batch_size: int = 10  # Number of downloads before scrolling
     scroll_amount: int = 600  # Pixels to scroll each time
     scroll_wait_time: int = 2000  # Wait time after scrolling (ms)
-    max_scroll_attempts: int = 5  # Max attempts to find new thumbnails
+    max_scroll_attempts: int = 2000  # Max attempts to find new thumbnails (support very large galleries)
     scroll_detection_threshold: int = 3  # Min new thumbnails to consider scroll successful
     
     # Button panel and icon-based selectors
@@ -207,6 +209,7 @@ class GenerationDownloadConfig:
     duplicate_mode: DuplicateMode = DuplicateMode.FINISH  # Duplicate handling mode
     download_completion_detection: bool = True    # Wait for download completion
     fast_navigation_mode: bool = True            # Optimize navigation speed
+    use_exit_scan_strategy: bool = True          # Use exit-scan-return strategy for Enhanced SKIP mode
     
     # Legacy selectors (kept for backward compatibility)
     
@@ -490,6 +493,11 @@ class GenerationDownloadLogger:
                     log_entry = f"{file_id}\n{entry['generation_date']}\n{entry['prompt']}\n{'=' * 40}\n"
                     f.write(log_entry)
                     
+                # Explicitly flush to ensure immediate disk write
+                f.flush()
+                import os
+                os.fsync(f.fileno())  # Force OS to write to disk
+                    
             return True
             
         except Exception as e:
@@ -671,6 +679,7 @@ class GenerationDownloadManager:
         self.checkpoint_found = False
         self.fast_forward_mode = False
         self.checkpoint_data = None
+        self.boundary_just_downloaded = False  # Track if boundary was just downloaded to prevent re-triggering exit-scan-return
         
         # Initialize download manager
         download_config = DownloadConfig(
@@ -703,9 +712,12 @@ class GenerationDownloadManager:
         self.content_signatures = set()  # Track content signatures for duplicate detection
         self.failed_thumbnail_ids = set()  # Track thumbnails that failed processing
         self.scroll_failure_count = 0  # Track consecutive scroll failures
-        self.max_scroll_failures = 5  # Maximum scroll failures before ending
+        self.max_scroll_failures = 100  # Maximum scroll failures before ending (support large galleries)
         self.processing_start_time = None  # Track session start time
         self.last_successful_download = None  # Track last successful download time
+        
+        # Boundary scroll manager (will be initialized when needed)
+        self.boundary_scroll_manager = None
         
     def should_continue_downloading(self) -> bool:
         """Check if we should continue downloading"""
@@ -722,6 +734,41 @@ class GenerationDownloadManager:
         """Request to stop the download process"""
         self.should_stop = True
         logger.info("Stop requested for generation downloads")
+    
+    def initialize_boundary_scroll_manager(self, page):
+        """Initialize the boundary scroll manager with verified scroll methods"""
+        if self.boundary_scroll_manager is None:
+            self.boundary_scroll_manager = BoundaryScrollManager(page)
+            logger.info("🎯 Initialized boundary scroll manager with verified methods:")
+            logger.info("   Primary: Element.scrollIntoView() - 1060px, 0.515s")
+            logger.info("   Fallback: container.scrollTop - 1016px, 0.515s")
+    
+    async def scroll_to_find_boundary_generations(self, page, boundary_criteria: Dict) -> Optional[Dict]:
+        """
+        Use verified scrolling methods to find boundary generations on /generate page.
+        Each scroll ensures >2000px distance with proper tracking.
+        """
+        logger.info("🎯 Starting boundary detection with verified scroll methods")
+        
+        # Initialize boundary scroll manager
+        self.initialize_boundary_scroll_manager(page)
+        
+        # Configure minimum scroll distance (>2000px as specified)
+        self.boundary_scroll_manager.min_scroll_distance = 2000
+        
+        # Start boundary search
+        boundary_found = await self.boundary_scroll_manager.scroll_until_boundary_found(boundary_criteria)
+        
+        # Get statistics
+        stats = self.boundary_scroll_manager.get_scroll_statistics()
+        
+        logger.info("🎯 Boundary search completed:")
+        logger.info(f"   Scrolls performed: {stats['scroll_attempts']}")
+        logger.info(f"   Total distance: {stats['total_scrolled_distance']}px")
+        logger.info(f"   Average per scroll: {stats['average_scroll_distance']:.0f}px")
+        logger.info(f"   Boundary found: {'✓ Yes' if boundary_found else '✗ No'}")
+        
+        return boundary_found
     
     def scan_existing_files(self) -> set:
         """Scan downloads folder for existing files and extract creation times"""
@@ -753,32 +800,48 @@ class GenerationDownloadManager:
         logger.info(f"✅ Found {file_count} existing files with {len(existing_times)} unique creation times")
         return existing_times
     
-    def check_duplicate_exists(self, creation_time: str, existing_files: set) -> bool:
-        """Check if a file with the given creation time already exists"""
+    def check_duplicate_exists(self, creation_time: str, prompt_text: str, existing_log_entries: Dict = None) -> str:
+        """
+        Algorithm-compliant duplicate detection (Step 6a)
+        Check if datetime + prompt pair already exists in log
+        
+        Returns:
+        - "exit_scan_return" if duplicate found and SKIP mode enabled (initiate skipping)
+        - True if duplicate found and FINISH mode enabled (stop downloading)
+        - False if not a duplicate (continue downloading)
+        """
         if not self.config.duplicate_check_enabled or not creation_time:
             return False
             
-        # Convert format if needed: "27 Aug 2025 02:20:06" -> "2025-08-27-02-20-06" 
-        try:
-            from datetime import datetime
-            # Parse: "27 Aug 2025 02:20:06"
-            dt = datetime.strptime(creation_time.strip(), "%d %b %Y %H:%M:%S")
-            formatted_time = dt.strftime("%Y-%m-%d-%H-%M-%S")
+        # Use log entries for datetime + prompt pair matching (Algorithm Step 6a)
+        if existing_log_entries is None:
+            existing_log_entries = getattr(self, 'existing_log_entries', {})
+        
+        # Compare datetime + first 100 characters of prompt as specified
+        prompt_key = prompt_text[:100] if prompt_text else ""
+        
+        for log_datetime, log_entry in existing_log_entries.items():
+            # CRITICAL FIX: Skip incomplete log entries (from previous failed runs)
+            # Placeholder ID #999999999 indicates incomplete/failed downloads
+            file_id = log_entry.get('file_id', '')
+            if file_id == '#999999999':
+                logger.info(f"⏭️ FILTERING: Skipping incomplete log entry: {log_datetime} (file_id: {file_id})")
+                continue
             
-            if formatted_time in existing_files:
-                logger.warning(f"🚫 Duplicate detected! Creation time {creation_time} -> {formatted_time} already exists")
-                return True
+            # Match both datetime AND prompt for robustness (Algorithm Step 6a)
+            log_prompt = log_entry.get('prompt', '')[:100]
+            
+            if (log_datetime == creation_time and log_prompt == prompt_key):
+                logger.warning(f"🚫 Algorithm Duplicate detected! Time: {creation_time}, Prompt: {prompt_key[:50]}...")
                 
-        except ValueError:
-            try:
-                # Parse: "2025-08-27-02-20-06" format
-                dt = datetime.strptime(creation_time.strip(), "%Y-%m-%d-%H-%M-%S")
-                if creation_time in existing_files:
-                    logger.warning(f"🚫 Duplicate detected! Creation time {creation_time} already exists")
+                # Step 6a: Initiate skipping if in SKIP mode
+                if self.config.duplicate_mode == DuplicateMode.SKIP:
+                    logger.info("🚀 SKIP Mode: Initiating exit-scan-return workflow")
+                    return "exit_scan_return"
+                else:
+                    logger.info("🛑 FINISH Mode: Stopping on duplicate")
                     return True
-            except ValueError:
-                logger.warning(f"⚠️ Could not parse creation time format: {creation_time}")
-                
+                    
         return False
     
     async def wait_for_download_completion(self, page, expected_filename: str = None, timeout: int = 10000) -> bool:
@@ -2396,83 +2459,74 @@ class GenerationDownloadManager:
             return {}
 
     async def check_comprehensive_duplicate(self, page, thumbnail_id: str, existing_files: set = None) -> bool:
-        """Enhanced duplicate detection using multiple comparison methods"""
+        """Simple duplicate detection using datetime + prompt pair (Algorithm Step 6a)"""
         try:
-            # Method 1: Extract creation metadata for comparison
+            logger.info(f"🔍 COMPREHENSIVE CHECK: Extracting full metadata from gallery for {thumbnail_id}")
+            
+            # Extract FULL metadata from gallery (complete prompt + date)
             metadata = await self.extract_metadata_from_page(page)
             if not metadata:
-                logger.debug(f"No metadata extracted for duplicate check: {thumbnail_id}")
+                logger.warning(f"⚠️ COMPREHENSIVE CHECK: Failed to extract metadata for {thumbnail_id}")
                 return False
             
             generation_date = metadata.get('generation_date', '')
             prompt = metadata.get('prompt', '')
             
-            # Method 2: Load and compare with existing log entries (DATE + PROMPT match)
-            if generation_date and prompt:
-                existing_entries = self._load_existing_log_entries()
-                
-                # Check for exact date match
-                if generation_date in existing_entries:
-                    existing_entry = existing_entries[generation_date]
-                    
-                    # Compare prompts (truncated since logs may be truncated with "...")
-                    existing_prompt = existing_entry['prompt']
-                    current_prompt_start = prompt[:100] if len(prompt) > 100 else prompt
-                    existing_prompt_start = existing_prompt.replace('...', '').strip()
-                    
-                    # Check if prompts match (allowing for truncation)
-                    if (existing_prompt_start in current_prompt_start or 
-                        current_prompt_start in existing_prompt_start):
-                        logger.info(f"🛑 DUPLICATE DETECTED: Date='{generation_date}', Prompt match found")
-                        logger.info(f"   Existing: {existing_prompt_start[:100]}...")
-                        logger.info(f"   Current:  {current_prompt_start[:100]}...")
-                        
-                        # Handle duplicate based on mode
-                        if self.config.duplicate_mode == DuplicateMode.FINISH and self.config.stop_on_duplicate:
-                            logger.info("🎯 AUTOMATION COMPLETE: Reached previously downloaded content")
-                            logger.info("✅ All new generations have been processed successfully")
-                        elif self.config.duplicate_mode == DuplicateMode.SKIP:
-                            logger.info("⏭️  SKIPPING: Duplicate detected, continuing search for new generations")
-                            return "skip"  # Special return value for skip mode
-                        
-                        return True
+            logger.info(f"🔍 COMPREHENSIVE CHECK: Extracted date='{generation_date}', prompt_length={len(prompt) if prompt else 0}")
             
-            # Method 3: Compare with existing files (if provided)
-            if existing_files and generation_date:
-                # Try different date format comparisons
-                date_formats_to_check = [
-                    generation_date,
-                    self._normalize_date_format(generation_date)
-                ]
-                
-                for date_format in date_formats_to_check:
-                    if date_format in existing_files:
-                        logger.info(f"🔍 Duplicate detected by date comparison: {date_format}")
-                        return True
+            if not generation_date or not prompt:
+                logger.warning(f"⚠️ COMPREHENSIVE CHECK: Missing date or prompt for {thumbnail_id}")
+                return False
             
-            # Method 4: Compare with processed thumbnails in current session
-            if thumbnail_id in self.processed_thumbnails:
-                logger.info(f"🔍 Duplicate detected in current session: {thumbnail_id}")
-                return True
-            
-            # Method 5: Content-based duplicate detection
-            if hasattr(self, 'content_signatures'):
-                content_signature = f"{generation_date}#{prompt[:50] if prompt else 'no_prompt'}"
-                if content_signature in self.content_signatures:
-                    logger.info(f"🔍 Duplicate detected by content signature: {content_signature}")
-                    return True
-                else:
-                    self.content_signatures.add(content_signature)
+            # Load existing log entries for comparison (Algorithm Step 6a)
+            if hasattr(self, 'existing_log_entries') and self.existing_log_entries:
+                existing_entries = self.existing_log_entries
             else:
-                # Initialize content signatures tracking
-                self.content_signatures = set()
-                content_signature = f"{generation_date}#{prompt[:50] if prompt else 'no_prompt'}"
-                self.content_signatures.add(content_signature)
+                existing_entries = self._load_existing_log_entries()
+            
+            # Simple datetime + prompt (100 chars) duplicate detection
+            if generation_date in existing_entries:
+                existing_entry = existing_entries[generation_date]
+                
+                # CRITICAL FIX: Skip incomplete log entries (from previous failed runs)
+                # Placeholder ID #999999999 indicates incomplete/failed downloads
+                file_id = existing_entry.get('file_id', '')
+                if file_id == '#999999999':
+                    logger.info(f"⏭️ FILTERING: Skipping incomplete log entry in comprehensive check: {generation_date} (file_id: {file_id})")
+                    return False  # Not a duplicate - allow download
+                
+                existing_prompt = existing_entry.get('prompt', '')
+                
+                # Compare first 100 characters of prompts
+                current_prompt_100 = prompt[:100]
+                existing_prompt_100 = existing_prompt[:100]
+                
+                if current_prompt_100 == existing_prompt_100:
+                    logger.info(f"🛑 DUPLICATE DETECTED: Date='{generation_date}', Prompt match (100 chars)")
+                    
+                    # Handle duplicate based on mode
+                    if self.config.duplicate_mode == DuplicateMode.FINISH:
+                        logger.info("🎯 FINISH MODE: Stopping at duplicate")
+                        return True
+                    elif self.config.duplicate_mode == DuplicateMode.SKIP:
+                        # CRITICAL FIX: Check if boundary was just downloaded to prevent infinite loop
+                        if hasattr(self, 'boundary_just_downloaded') and self.boundary_just_downloaded:
+                            logger.info("🔄 CONSECUTIVE DUPLICATE after boundary download detected")
+                            logger.info("⏭️ SKIPPING: Using fast-forward mode instead of exit-scan-return to handle consecutive duplicates")
+                            
+                            # Reset boundary flag after first consecutive duplicate
+                            self.boundary_just_downloaded = False
+                            
+                            # Return "skip" to continue in fast-forward mode instead of triggering exit-scan-return
+                            return "skip"
+                        else:
+                            logger.info("⏭️ SKIP MODE: Found duplicate, entering exit-scan workflow")
+                            return "exit_scan_return"  # Trigger exit-scan-return strategy
             
             return False  # No duplicate detected
             
         except Exception as e:
-            logger.debug(f"Error in comprehensive duplicate check: {e}")
+            logger.debug(f"Error in duplicate check: {e}")
             return False
     
     def _normalize_date_format(self, date_string: str) -> str:
@@ -2539,14 +2593,23 @@ class GenerationDownloadManager:
     async def extract_metadata_from_page(self, page) -> Optional[Dict[str, str]]:
         """UPDATED: Extract generation metadata using multi-landmark validation (same as landmark strategy)"""
         try:
-            logger.debug("Fallback extraction using multi-landmark validation")
+            logger.info("🔄 GALLERY EXTRACTION: Starting full metadata extraction from gallery view")
             
             # Use the same multi-landmark approach as the main extraction method
-            return await self.extract_metadata_with_landmark_strategy(page, -1)
+            result = await self.extract_metadata_with_landmark_strategy(page, -1)
+            
+            if result and result.get('generation_date') and result.get('prompt'):
+                logger.info(f"✅ GALLERY EXTRACTION: Success - date='{result['generation_date']}', prompt_length={len(result['prompt'])}")
+                return result
+            else:
+                logger.warning(f"❌ GALLERY EXTRACTION: Failed - result={result}")
+                return None
             
         except Exception as e:
-            logger.error(f"Error in fallback multi-landmark extraction: {e}")
-            return {'generation_date': 'Unknown Date', 'prompt': 'Unknown Prompt'}
+            logger.error(f"❌ GALLERY EXTRACTION: Exception in extraction: {e}")
+            import traceback
+            logger.error(f"❌ GALLERY EXTRACTION: Traceback: {traceback.format_exc()}")
+            return None
     
     async def find_and_click_download_button(self, page) -> bool:
         """Find and click the download button using multiple strategies"""
@@ -2710,6 +2773,9 @@ class GenerationDownloadManager:
             metadata = {}
             extraction_timestamp = datetime.now().isoformat()
             
+            # Initialize variables to prevent scope issues
+            metadata_candidates = []
+            
             # LANDMARK STRATEGY: Wait for landmarks to be available
             landmark_wait_attempts = 0
             max_landmark_wait = 3
@@ -2755,7 +2821,7 @@ class GenerationDownloadManager:
             validated_container = None
             
             try:
-                logger.info("🔍 Starting 'Inspiration Mode' + 'Off' search for metadata container identification")
+                logger.info("🔍 Starting enhanced 'Inspiration Mode' search for metadata container identification")
                 
                 # Cache for validated selectors during this session
                 if not hasattr(self, '_cached_selectors'):
@@ -2777,77 +2843,113 @@ class GenerationDownloadManager:
                     inspiration_spans = await page.query_selector_all("span:has-text('Inspiration Mode')")
                     logger.info(f"📦 Found {len(inspiration_spans)} spans containing 'Inspiration Mode'")
                     
-                    metadata_candidates = []
+                    # ENHANCEMENT: If only one Inspiration Mode container, use it directly
+                    visible_inspiration_spans = []
+                    for span in inspiration_spans:
+                        if await span.is_visible():
+                            visible_inspiration_spans.append(span)
                     
-                    for i, inspiration_span in enumerate(inspiration_spans):
+                    logger.info(f"📦 Found {len(visible_inspiration_spans)} visible 'Inspiration Mode' spans")
+                    
+                    if len(visible_inspiration_spans) == 1:
+                        logger.info("🎯 OPTIMIZATION: Only one visible 'Inspiration Mode' container found - using it directly without Off/On check")
+                        single_inspiration_span = visible_inspiration_spans[0]
+                        
                         try:
-                            if not await inspiration_span.is_visible():
-                                logger.debug(f"Inspiration Mode span {i} not visible, skipping")
-                                continue
-                            
-                            # Get inspiration span details
-                            inspiration_text = await inspiration_span.text_content()
-                            inspiration_class = await inspiration_span.get_attribute('class') or 'no-class'
-                            
-                            logger.debug(f"🎯 Processing Inspiration Mode span {i}: class='{inspiration_class}' text='{inspiration_text.strip()}'")
-                            
-                            # Step 2: Look for "Off" in the next sibling span
-                            parent = await inspiration_span.evaluate_handle("el => el.parentElement")
-                            if not parent:
-                                logger.debug(f"   No parent element for span {i}")
-                                continue
-                            
-                            parent_spans = await parent.query_selector_all("span")
-                            logger.debug(f"   Parent has {len(parent_spans)} spans")
-                            
-                            # Find the inspiration span index in parent
-                            inspiration_index = -1
-                            for j, span in enumerate(parent_spans):
-                                span_text = await span.text_content()
-                                if "Inspiration Mode" in span_text:
-                                    inspiration_index = j
-                                    break
-                            
-                            # Check if next span contains "Off"
-                            if inspiration_index >= 0 and inspiration_index + 1 < len(parent_spans):
-                                next_span = parent_spans[inspiration_index + 1]
-                                next_span_text = await next_span.text_content()
-                                next_span_class = await next_span.get_attribute('class') or 'no-class'
+                            parent = await single_inspiration_span.evaluate_handle("el => el.parentElement")
+                            if parent:
+                                # Search for metadata container from this single Inspiration Mode span
+                                metadata_container = await self._search_creation_time_backwards(parent, 0)
                                 
-                                logger.debug(f"   Next span: class='{next_span_class}' text='{next_span_text.strip()}'")
-                                
-                                if "Off" in next_span_text:
-                                    logger.info(f"   ✅ Found 'Inspiration Mode' + 'Off' pair in span {i}!")
+                                if metadata_container:
+                                    container_info = await self._analyze_metadata_container(metadata_container)
                                     
-                                    # Step 3: Search backwards for "Creation Time" + date
-                                    metadata_container = await self._search_creation_time_backwards(parent, i)
-                                    
-                                    if metadata_container:
-                                        # Analyze this metadata container
-                                        container_info = await self._analyze_metadata_container(metadata_container)
+                                    if container_info['creation_date']:
+                                        validated_container = metadata_container
+                                        metadata['generation_date'] = container_info['creation_date']
+                                        date_extracted = True
                                         
-                                        if container_info['creation_date']:
-                                            metadata_candidates.append({
-                                                'container': metadata_container,
-                                                'info': container_info,
-                                                'index': i,
-                                                'inspiration_class': inspiration_class,
-                                                'off_class': next_span_class
-                                            })
-                                            
-                                            logger.info(f"   🏆 Found valid metadata container: {container_info['text_length']} chars, date: {container_info['creation_date']}")
-                                        else:
-                                            logger.debug(f"   ❌ Container found but no valid creation date")
+                                        logger.info(f"✅ SINGLE INSPIRATION MODE: Successfully extracted date: {container_info['creation_date']}")
                                     else:
-                                        logger.debug(f"   ❌ No metadata container found for this Inspiration Mode + Off pair")
+                                        logger.debug("Single inspiration mode container found but no valid creation date")
                                 else:
-                                    logger.debug(f"   ❌ Next span does not contain 'Off': '{next_span_text.strip()}'")
-                            else:
-                                logger.debug(f"   ❌ No next sibling span found or inspiration span not found in parent")
-                            
+                                    logger.debug("Single inspiration mode span found but no metadata container")
                         except Exception as e:
-                            logger.debug(f"Error processing inspiration span {i}: {e}")
-                            continue
+                            logger.debug(f"Error processing single inspiration mode span: {e}")
+                    
+                    # If single container approach didn't work, use enhanced multi-container approach
+                    if not validated_container:
+                        logger.info("🔍 Multiple or no containers found, using enhanced Inspiration Mode + (Off OR On) search")
+                        metadata_candidates = []
+                        
+                        for i, inspiration_span in enumerate(visible_inspiration_spans):
+                            try:
+                                # Get inspiration span details
+                                inspiration_text = await inspiration_span.text_content()
+                                inspiration_class = await inspiration_span.get_attribute('class') or 'no-class'
+                                
+                                logger.debug(f"🎯 Processing Inspiration Mode span {i}: class='{inspiration_class}' text='{inspiration_text.strip()}'")
+                                
+                                # Step 2: Look for "Off" OR "On" in the next sibling span (ENHANCED)
+                                parent = await inspiration_span.evaluate_handle("el => el.parentElement")
+                                if not parent:
+                                    logger.debug(f"   No parent element for span {i}")
+                                    continue
+                                
+                                parent_spans = await parent.query_selector_all("span")
+                                logger.debug(f"   Parent has {len(parent_spans)} spans")
+                                
+                                # Find the inspiration span index in parent
+                                inspiration_index = -1
+                                for j, span in enumerate(parent_spans):
+                                    span_text = await span.text_content()
+                                    if "Inspiration Mode" in span_text:
+                                        inspiration_index = j
+                                        break
+                                
+                                # Check if next span contains "Off" OR "On" (ENHANCED)
+                                if inspiration_index >= 0 and inspiration_index + 1 < len(parent_spans):
+                                    next_span = parent_spans[inspiration_index + 1]
+                                    next_span_text = await next_span.text_content()
+                                    next_span_class = await next_span.get_attribute('class') or 'no-class'
+                                    
+                                    logger.debug(f"   Next span: class='{next_span_class}' text='{next_span_text.strip()}'")
+                                    
+                                    # CRITICAL FIX: Accept both "Off" and "On" for Inspiration Mode
+                                    if "Off" in next_span_text or "On" in next_span_text:
+                                        mode_value = "Off" if "Off" in next_span_text else "On"
+                                        logger.info(f"   ✅ Found 'Inspiration Mode' + '{mode_value}' pair in span {i}!")
+                                        
+                                        # Step 3: Search backwards for "Creation Time" + date
+                                        metadata_container = await self._search_creation_time_backwards(parent, i)
+                                        
+                                        if metadata_container:
+                                            # Analyze this metadata container
+                                            container_info = await self._analyze_metadata_container(metadata_container)
+                                            
+                                            if container_info['creation_date']:
+                                                metadata_candidates.append({
+                                                    'container': metadata_container,
+                                                    'info': container_info,
+                                                    'index': i,
+                                                    'inspiration_class': inspiration_class,
+                                                    'mode_class': next_span_class,
+                                                    'mode_value': mode_value
+                                                })
+                                                
+                                                logger.info(f"   🏆 Found valid metadata container: {container_info['text_length']} chars, date: {container_info['creation_date']}, mode: {mode_value}")
+                                            else:
+                                                logger.debug(f"   ❌ Container found but no valid creation date")
+                                        else:
+                                            logger.debug(f"   ❌ No metadata container found for this Inspiration Mode + {mode_value} pair")
+                                    else:
+                                        logger.debug(f"   ❌ Next span contains neither 'Off' nor 'On': '{next_span_text.strip()}'")
+                                else:
+                                    logger.debug(f"   ❌ No next sibling span found or inspiration span not found in parent")
+                                
+                            except Exception as e:
+                                logger.debug(f"Error processing inspiration span {i}: {e}")
+                                continue
                     
                     # Select the best metadata candidate
                     if metadata_candidates:
@@ -2874,14 +2976,17 @@ class GenerationDownloadManager:
                         #     logger.debug(f"Error caching selector: {e}")
                         logger.info("📌 Not caching selector - each thumbnail needs fresh metadata search")
                     else:
-                        logger.warning("❌ No valid metadata containers found using Inspiration Mode + Off search")
+                        logger.warning("❌ No valid metadata containers found using enhanced Inspiration Mode search")
                 
                 # Now extract creation time from the validated container
                 if validated_container:
                     logger.info(f"🕒 Extracting Creation Time from validated Inspiration Mode container")
                     
-                    # Extract date using the cached information if available
-                    if 'metadata_candidates' in locals() and metadata_candidates and metadata_candidates[0]['info']['creation_date']:
+                    # Check if we already have the date from single container optimization
+                    if date_extracted and metadata.get('generation_date'):
+                        logger.info(f"🎉 SUCCESS! Already extracted date from single container optimization: '{metadata['generation_date']}'")
+                    # Extract date using the cached information if available from multi-container approach
+                    elif 'metadata_candidates' in locals() and metadata_candidates and metadata_candidates[0]['info']['creation_date']:
                         creation_date = metadata_candidates[0]['info']['creation_date']
                         metadata['generation_date'] = creation_date
                         date_extracted = True
@@ -2939,7 +3044,7 @@ class GenerationDownloadManager:
                         else:
                             logger.warning("Found validated container but failed to extract date from it")
                 else:
-                    logger.warning("No validated metadata container found using Inspiration Mode + Off search")
+                    logger.warning("No validated metadata container found using enhanced Inspiration Mode search")
                     
             except Exception as e:
                 logger.error(f"Error in multi-landmark metadata extraction: {e}")
@@ -3034,6 +3139,7 @@ class GenerationDownloadManager:
                 logger.debug("Prompt extraction failed, using default")
             
             logger.info(f"Prompt-first extraction completed for thumbnail {thumbnail_index}: date={date_extracted}, prompt={prompt_extracted}")
+            logger.info(f"🔍 DEBUG: Returning metadata: {metadata}")
             return metadata
             
         except Exception as e:
@@ -3733,6 +3839,13 @@ class GenerationDownloadManager:
     
     async def download_single_generation_robust(self, page, thumbnail_info: Dict[str, Any], existing_files: set = None) -> bool:
         """Download a single generation using robust thumbnail tracking with Enhanced SKIP mode support"""
+        # CRITICAL DEBUG: Log function entry to catch if it's called at all
+        logger.info(f"🚨 ENTRY: download_single_generation_robust called with {thumbnail_info.get('unique_id', 'unknown')}")
+        
+        # Initialize boundary download flag and metadata
+        is_boundary_download = False
+        boundary_metadata_dict = None
+        
         try:
             thumbnail_element = thumbnail_info['element']
             thumbnail_id = thumbnail_info['unique_id']
@@ -3745,10 +3858,14 @@ class GenerationDownloadManager:
                 action = await self.fast_forward_to_checkpoint(page, thumbnail_id)
                 if action == "skip":
                     logger.info(f"⏩ FAST-FORWARD: Skipping thumbnail {thumbnail_id}")
-                    return True  # Skip this thumbnail
+                    return "skip_continue"  # Skip this thumbnail
                 elif action == "skip_checkpoint":
                     logger.info(f"📍 CHECKPOINT: Skipping {thumbnail_id} (checkpoint found, downloading starts next)")
-                    return True  # Skip this checkpoint thumbnail
+                    return "skip_continue"  # Skip this checkpoint thumbnail
+                elif action == "check_after_click":
+                    # We need to click first, then check metadata
+                    logger.info(f"⏩ Fast-forward mode: Will check metadata after clicking {thumbnail_id}")
+                    # Continue with the click and check after
                 # If action == "download", continue with normal download process
             
             # DEBUG: Log thumbnail click attempt
@@ -3770,26 +3887,151 @@ class GenerationDownloadManager:
             # Wait for content to load
             await page.wait_for_timeout(2000)
             
+            # ENHANCED SKIP MODE: Check if we're still in old content after clicking
+            if hasattr(self, 'fast_forward_mode') and self.fast_forward_mode:
+                # We're in fast-forward mode, check if this is still old content
+                metadata = await self._extract_metadata_after_click(page, thumbnail_id)
+                if metadata:
+                    # Check if this is still a duplicate (old content)
+                    is_still_old = await self._is_still_duplicate(metadata)
+                    if is_still_old:
+                        logger.info(f"⏩ Still in old content, skipping {thumbnail_id}")
+                        return "skip_continue"  # Skip this old content
+                    else:
+                        # We've reached new content!
+                        logger.info(f"🆕 Reached NEW content at {thumbnail_id}!")
+                        logger.info(f"   📅 Time: {metadata.get('generation_date')}")
+                        logger.info(f"   🚀 Switching back to download mode")
+                        self.fast_forward_mode = False
+                        self.checkpoint_found = True
+                        # Continue with download
+                else:
+                    logger.warning(f"Could not extract metadata for {thumbnail_id}, skipping")
+                    return True
+            
             # ENHANCED: Extract metadata with duplicate checking
+            logger.info(f"🔄 ROBUST: About to extract metadata for {thumbnail_id}")
             metadata_dict = await self.extract_metadata_with_landmark_strategy(page, thumbnail_position)
+            logger.info(f"🔄 ROBUST: Landmark strategy returned: {metadata_dict}")
+            
             if not metadata_dict or not metadata_dict.get('generation_date') or metadata_dict.get('generation_date') == 'Unknown':
                 logger.warning(f"Landmark strategy failed for thumbnail {thumbnail_id}, trying legacy extraction")
                 metadata_dict = await self.extract_metadata_from_page(page)
+                logger.info(f"🔄 ROBUST: Legacy extraction returned: {metadata_dict}")
                 
             if not metadata_dict:
                 logger.warning(f"All metadata extraction failed for thumbnail {thumbnail_id}, using defaults")
                 metadata_dict = {'generation_date': 'Unknown', 'prompt': 'Unknown'}
             
+            # CRITICAL FIX: Verify boundary metadata matches extracted metadata
+            if is_boundary_download and boundary_metadata_dict:
+                logger.info(f"🔍 BOUNDARY VERIFICATION: Comparing boundary metadata with gallery metadata")
+                logger.info(f"   📅 Boundary datetime: '{boundary_metadata_dict['generation_date']}'")
+                logger.info(f"   📅 Gallery datetime: '{metadata_dict.get('generation_date', 'Unknown')}'")
+                logger.info(f"   📝 Boundary prompt (50 chars): '{boundary_metadata_dict['prompt'][:50]}...'")
+                logger.info(f"   📝 Gallery prompt (50 chars): '{metadata_dict.get('prompt', 'Unknown')[:50]}...'")
+                
+                # Verify datetime matches
+                if metadata_dict.get('generation_date') == boundary_metadata_dict['generation_date']:
+                    logger.info(f"✅ BOUNDARY VERIFICATION: Datetime matches! Gallery is showing the correct boundary generation")
+                    # Use the full prompt from gallery extraction (it's more complete)
+                    if metadata_dict.get('prompt') and len(metadata_dict['prompt']) > len(boundary_metadata_dict.get('prompt', '')):
+                        logger.info(f"   📝 Using full prompt from gallery: {len(metadata_dict['prompt'])} chars (was {len(boundary_metadata_dict.get('prompt', ''))} chars)")
+                        # Gallery metadata is correct and has full prompt, use it
+                    else:
+                        # Gallery datetime matches but prompt might be incomplete, merge them
+                        metadata_dict['prompt'] = boundary_metadata_dict.get('prompt', metadata_dict.get('prompt', ''))
+                else:
+                    logger.warning(f"⚠️ BOUNDARY VERIFICATION: Datetime mismatch!")
+                    logger.warning(f"   Expected: '{boundary_metadata_dict['generation_date']}'")
+                    logger.warning(f"   Found: '{metadata_dict.get('generation_date', 'Unknown')}'")
+                    logger.warning(f"   🔧 Using boundary metadata to ensure correct download")
+                    # Gallery is showing wrong generation, use boundary metadata
+                    metadata_dict = boundary_metadata_dict.copy()
+                
+                logger.info(f"📊 BOUNDARY FINAL METADATA: date='{metadata_dict['generation_date']}', prompt_length={len(metadata_dict.get('prompt', ''))}")
+            
+            # DEBUG: Add checkpoint to verify execution reaches this point
+            logger.info(f"🏁 CHECKPOINT: About to start duplicate checking for {thumbnail_id}")
+            logger.info(f"🏁 metadata_dict = {metadata_dict}")
+            
             # ENHANCED: Comprehensive duplicate detection (log-based, file-based, and session-based)
+            # FAILSAFE: Force enable duplicate checking if disabled (critical for boundary downloads)
+            if not getattr(self.config, 'duplicate_check_enabled', True):
+                logger.warning("🚨 FAILSAFE: duplicate_check_enabled was False, forcing to True for boundary downloads")
+                self.config.duplicate_check_enabled = True
+                
+            logger.info(f"🔍 DUPLICATE CHECK CONDITION: enabled={getattr(self.config, 'duplicate_check_enabled', 'MISSING')}, metadata_dict={bool(metadata_dict)}, has_date={bool(metadata_dict and metadata_dict.get('generation_date')) if metadata_dict else False}")
             if self.config.duplicate_check_enabled and metadata_dict and metadata_dict.get('generation_date'):
                 creation_time = metadata_dict.get('generation_date')
+                logger.info(f"🔍 DUPLICATE CHECK: Starting for date={creation_time}, thumbnail={thumbnail_id}")
                 
                 # Method 1: Check comprehensive duplicates (log entries + prompt matching)
+                logger.info(f"🔄 CALLING COMPREHENSIVE DUPLICATE CHECK for {thumbnail_id}")
                 is_comprehensive_duplicate = await self.check_comprehensive_duplicate(page, thumbnail_id, existing_files)
-                if is_comprehensive_duplicate == "skip":
+                logger.info(f"🔄 COMPREHENSIVE DUPLICATE CHECK RESULT: {is_comprehensive_duplicate}")
+                if is_comprehensive_duplicate == "exit_scan_return":
+                    # Execute exit-scan-return strategy (Algorithm Steps 11-15)
+                    logger.info("🚪 SKIP MODE: Triggering exit-scan-return strategy")
+                    
+                    # Store checkpoint data
+                    self.checkpoint_data = {
+                        'generation_date': metadata_dict.get('generation_date'),
+                        'prompt': metadata_dict.get('prompt', '')
+                    }
+                    
+                    # Execute the exit-scan-return workflow
+                    scan_result = await self.exit_gallery_and_scan_generations(page)
+                    
+                    if scan_result and scan_result.get('found'):
+                        logger.info("✅ Exit-scan-return successful, positioned at boundary generation")
+                        
+                        boundary_container_index = scan_result.get('container_index', 8)
+                        boundary_datetime = scan_result.get('creation_time', 'Unknown')
+                        boundary_prompt = scan_result.get('prompt', 'Unknown')[:50]
+                        
+                        logger.info(f"🎯 BOUNDARY DETAILS:")
+                        logger.info(f"   📅 Datetime: '{boundary_datetime}' ⭐")
+                        logger.info(f"   📝 Prompt: {boundary_prompt}...")
+                        logger.info(f"   🎯 Container: #{boundary_container_index}")
+                        logger.info(f"🎯 SKIP MODE: Gallery opened at boundary - this generation will be downloaded")
+                        
+                        # CRITICAL FIX: The boundary generation should be downloaded normally
+                        # According to documentation: "Ready to download new content from next thumbnail"
+                        # The boundary IS the first new content to download
+                        logger.info("📥 BOUNDARY FOUND: Continuing with download of this generation")
+                        
+                        # CRITICAL FIX: Set flag to prevent re-triggering exit-scan-return on consecutive duplicates
+                        # After downloading this boundary, system should continue in fast-forward mode 
+                        # to skip past any consecutive duplicates before triggering exit-scan-return again
+                        self.boundary_just_downloaded = True
+                        logger.info("🔄 BOUNDARY DOWNLOAD FLAG: Set to prevent exit-scan-return re-triggering on consecutive duplicates")
+                        
+                        # CRITICAL FIX: Don't return False - continue with download workflow
+                        # The boundary generation is NEW content that should be downloaded
+                        # Set flag to skip further duplicate checks for this boundary
+                        logger.info("🚀 BOUNDARY: Proceeding to download the boundary generation")
+                        
+                        # CRITICAL: Skip to download section for boundary generation
+                        # We already know this is new content, no need for more duplicate checks
+                        is_boundary_download = True
+                        
+                        # CRITICAL FIX: Store boundary metadata to use instead of re-extracting
+                        # The gallery might show a different generation after opening
+                        boundary_metadata_dict = {
+                            'generation_date': boundary_datetime,
+                            'prompt': scan_result.get('prompt', 'Unknown')  # Use full prompt from scan
+                        }
+                        logger.info(f"🎯 BOUNDARY: Stored boundary metadata - date='{boundary_datetime}', prompt='{boundary_metadata_dict['prompt'][:50]}...'")
+                    else:
+                        logger.warning("❌ Exit-scan-return failed, stopping")
+                        self.should_stop = True
+                        return False
+                        
+                elif is_comprehensive_duplicate == "skip":
                     # Skip mode: continue to next generation
                     logger.warning(f"⏭️  Skipping comprehensive duplicate: {thumbnail_id}")
-                    return True
+                    return "skip_continue"
                 elif is_comprehensive_duplicate:
                     if self.config.stop_on_duplicate and self.config.duplicate_mode == DuplicateMode.FINISH:
                         logger.info(f"🛑 STOPPING: Comprehensive duplicate detected for {thumbnail_id}")
@@ -3798,24 +4040,35 @@ class GenerationDownloadManager:
                         return False
                     else:
                         logger.warning(f"⏭️  Skipping comprehensive duplicate: {thumbnail_id}")
-                        return True
+                        return "skip_continue"
                 
                 # Method 2: Check file-based duplicates (from disk) - fallback
-                if existing_files and self.check_duplicate_exists(creation_time, existing_files):
-                    if self.config.stop_on_duplicate and self.config.duplicate_mode == DuplicateMode.FINISH:
-                        logger.info(f"🛑 STOPPING: File-based duplicate detected ({creation_time})")
-                        logger.info("🔄 All newer files have already been downloaded")
-                        self.should_stop = True
-                        return False
-                    else:
-                        logger.warning(f"⏭️  Skipping file duplicate with creation time: {creation_time}")
-                        return True
+                # CRITICAL FIX: Skip this check if we're processing a boundary download
+                if is_boundary_download:
+                    logger.info("🚀 BOUNDARY: Skipping duplicate check for boundary generation - already confirmed as new")
+                    duplicate_result = False  # Force no duplicate for boundary
+                else:
+                    prompt_text = metadata_dict.get('prompt', '')
+                    duplicate_result = self.check_duplicate_exists(creation_time, prompt_text)
+                
+                if duplicate_result == "exit_scan_return":
+                    # Algorithm Step 6a: Initiate skipping process
+                    logger.info("🚀 Initiating SKIP mode exit-scan-return workflow")
+                    return await self.exit_gallery_and_scan_generations(page)
+                elif duplicate_result and self.config.stop_on_duplicate:
+                    logger.info(f"🛑 STOPPING: Algorithm-compliant duplicate detected ({creation_time})")
+                    logger.info("🔄 All newer files have already been downloaded")
+                    self.should_stop = True
+                    return False
+                elif duplicate_result:
+                    logger.warning(f"⏭️  Skipping duplicate with creation time: {creation_time}")
+                    return "skip_continue"
                 
                 # Method 3: Check session-based duplicates (already processed in this run) - fallback
                 session_duplicate_id = f"{creation_time}|{thumbnail_id}"
                 if session_duplicate_id in self.processed_thumbnails:
                     logger.warning(f"⏭️  Skipping session duplicate: {session_duplicate_id}")
-                    return True
+                    return "skip_continue"
             
             # Continue with download process using existing logic...
             file_id = self.logger.get_next_file_id()
@@ -3870,10 +4123,13 @@ class GenerationDownloadManager:
                     downloaded_file = await self.file_manager.wait_for_download(timeout=10)
                 
                 if downloaded_file and downloaded_file.exists():
+                    # CRITICAL FIX: Use boundary metadata if available, otherwise use gallery metadata
+                    active_metadata = boundary_metadata_dict if is_boundary_download and boundary_metadata_dict else metadata_dict
+                    
                     # Generate proper filename and move file
                     final_filename = self.file_namer.generate_filename(
                         file_path=downloaded_file,
-                        creation_date=metadata_dict.get('generation_date'),
+                        creation_date=active_metadata.get('generation_date'),
                         sequence_number=file_id
                     )
                     final_path = download_path / final_filename
@@ -3881,11 +4137,17 @@ class GenerationDownloadManager:
                     downloaded_file.rename(final_path)
                     logger.info(f"📁 File renamed to: {final_filename}")
                     
+                    # Log verification for boundary downloads
+                    if is_boundary_download and boundary_metadata_dict:
+                        logger.info(f"📝 BOUNDARY FILE NAMING: Using stored boundary metadata")
+                        logger.info(f"   Date used: {active_metadata.get('generation_date')}")
+                        logger.info(f"   Prompt used: {active_metadata.get('prompt', '')[:100]}...")
+                    
                     # Create GenerationMetadata object for logging
                     metadata = GenerationMetadata(
                         file_id=str(file_id),
-                        generation_date=metadata_dict.get('generation_date', ''),
-                        prompt=metadata_dict.get('prompt', ''),
+                        generation_date=active_metadata.get('generation_date', ''),
+                        prompt=active_metadata.get('prompt', ''),
                         download_timestamp=datetime.now().isoformat(),
                         file_path=str(final_path),
                         original_filename=downloaded_file.name,
@@ -3908,7 +4170,11 @@ class GenerationDownloadManager:
                 page.remove_listener("download", handle_download)
             
         except Exception as e:
-            logger.error(f"Error in robust download for thumbnail {thumbnail_info.get('unique_id', 'unknown')}: {e}")
+            logger.error(f"🚨 EXCEPTION: Error in robust download for thumbnail {thumbnail_info.get('unique_id', 'unknown')}: {e}")
+            logger.error(f"🚨 EXCEPTION: Type: {type(e).__name__}")
+            logger.error(f"🚨 EXCEPTION: Details: {str(e)}")
+            import traceback
+            logger.error(f"🚨 EXCEPTION: Traceback: {traceback.format_exc()}")
             return False
     
     async def download_single_generation(self, page, thumbnail_index: int, existing_files: set = None) -> bool:
@@ -3921,10 +4187,10 @@ class GenerationDownloadManager:
                 action = await self.fast_forward_to_checkpoint(page, f"thumbnail_{thumbnail_index}")
                 if action == "skip":
                     logger.info(f"⏩ FAST-FORWARD: Skipping thumbnail {thumbnail_index}")
-                    return True  # Skip this thumbnail
+                    return "skip_continue"  # Skip this thumbnail
                 elif action == "skip_checkpoint":
                     logger.info(f"📍 CHECKPOINT: Skipping {thumbnail_index} (checkpoint found, downloading starts next)")
-                    return True  # Skip this checkpoint thumbnail
+                    return "skip_continue"  # Skip this checkpoint thumbnail
                 # If action == "download", continue with normal download process
             
             # DEBUG: Log thumbnail click attempt
@@ -4081,14 +4347,18 @@ class GenerationDownloadManager:
             
             # LANDMARK STRATEGY: Extract metadata using enhanced landmark-based approach
             metadata_dict = await self.extract_metadata_with_landmark_strategy(page, thumbnail_index)
+            logger.info(f"🔍 DEBUG: Received metadata_dict from landmark strategy: {metadata_dict}")
             if not metadata_dict or not metadata_dict.get('generation_date') or metadata_dict.get('generation_date') == 'Unknown':
                 logger.warning(f"Landmark strategy failed for thumbnail {thumbnail_index}, trying legacy extraction")
                 # Fallback to original method
                 metadata_dict = await self.extract_metadata_from_page(page)
+                logger.info(f"🔍 DEBUG: Received metadata_dict from legacy extraction: {metadata_dict}")
                 
             if not metadata_dict:
                 logger.warning(f"All metadata extraction failed for thumbnail {thumbnail_index}, using defaults")
                 metadata_dict = {'generation_date': 'Unknown', 'prompt': 'Unknown'}
+            
+            logger.info(f"🔍 DEBUG: Final metadata_dict before duplicate check: {metadata_dict}")
             
             # DEBUG: Log extracted metadata with enhanced details and landmark info
             if self.debug_logger:
@@ -4109,18 +4379,26 @@ class GenerationDownloadManager:
                     "extraction_confidence": "high" if extraction_success else "low"
                 })
             
-            # FAST OPTIMIZATION: Check for duplicate creation time before downloading
+            # FAST OPTIMIZATION: Check for algorithm-compliant duplicate before downloading  
             if self.config.duplicate_check_enabled and metadata_dict and metadata_dict.get('generation_date'):
                 creation_time = metadata_dict.get('generation_date')
-                if self.check_duplicate_exists(creation_time, existing_files):
-                    if self.config.stop_on_duplicate and self.config.duplicate_mode == DuplicateMode.FINISH:
-                        logger.info(f"🛑 STOPPING: Duplicate creation time detected ({creation_time})")
-                        logger.info("🔄 All newer files have already been downloaded")
-                        self.should_stop = True
-                        return False  # Stop the entire automation
-                    else:
-                        logger.warning(f"⏭️  Skipping duplicate file with creation time: {creation_time}")
-                        return True  # Skip this file but continue
+                prompt_text = metadata_dict.get('prompt', '')
+                logger.info(f"🔍 DUPLICATE CHECK: Checking {creation_time} against existing log entries")
+                duplicate_result = self.check_duplicate_exists(creation_time, prompt_text)
+                logger.info(f"🔍 DUPLICATE CHECK RESULT: {duplicate_result}")
+                
+                if duplicate_result == "exit_scan_return":
+                    # Algorithm Step 6a: Initiate skipping process
+                    logger.info("🚀 Initiating SKIP mode exit-scan-return workflow")
+                    return await self.exit_gallery_and_scan_generations(page)
+                elif duplicate_result and self.config.stop_on_duplicate:
+                    logger.info(f"🛑 STOPPING: Algorithm-compliant duplicate detected ({creation_time})")
+                    logger.info("🔄 All newer files have already been downloaded")
+                    self.should_stop = True
+                    return False  # Stop the entire automation
+                elif duplicate_result:
+                    logger.warning(f"⏭️  Skipping algorithm-compliant duplicate: {creation_time}")
+                    return "skip_continue"  # Skip this file but continue
             
             # Get next file ID
             file_id = self.logger.get_next_file_id()
@@ -4343,104 +4621,79 @@ class GenerationDownloadManager:
             return False
     
     async def check_generation_status(self, page, selector: str) -> Dict[str, Any]:
-        """Check the status of a generation container to determine if it's completed, queued, or failed"""
+        """Simple status check using text-based detection (Algorithm compliant)"""
         try:
             element = await page.query_selector(selector)
             if not element:
                 return {'status': 'not_found', 'reason': 'Element not found'}
             
-            # Get the text content to analyze
+            # Get text content for simple checking
             element_text = await element.text_content()
-            element_html = await element.inner_html()
+            if not element_text:
+                return {'status': 'unknown', 'reason': 'No text content'}
             
-            logger.debug(f"Checking generation status for {selector}")
-            logger.debug(f"Element text: {element_text[:200] if element_text else 'None'}...")
+            # Simple text-based queue/failed/rendering detection (Algorithm Step 3)
+            if "Queuing" in element_text:
+                return {'status': 'queued', 'reason': 'Contains "Queuing"'}
             
-            # Check for queuing status (highest priority)
-            queuing_indicators = [
-                "Queuing…",
-                "Queuing...", 
-                "In queue",
-                "Waiting in queue",
-                "Processing...",
-                "Generating..."
-            ]
+            if "Something went wrong" in element_text:
+                return {'status': 'failed', 'reason': 'Contains "Something went wrong"'}
             
-            for indicator in queuing_indicators:
-                if indicator in element_text:
-                    logger.info(f"🔄 Generation {selector} is queued/processing - contains: '{indicator}'")
-                    return {'status': 'queued', 'reason': indicator}
+            if "Video is rendering" in element_text:
+                return {'status': 'rendering', 'reason': 'Contains "Video is rendering"'}
             
-            # Check for failed generation patterns
-            failed_generation_patterns = [
-                "Failed to generate", 
-                "Generation failed",
-                "Error occurred", 
-                "Try again later",
-                "Generation error",
-                "Something went wrong"
-            ]
-            
-            for pattern in failed_generation_patterns:
-                if pattern in element_text:
-                    logger.warning(f"❌ Generation {selector} failed - contains: '{pattern}'")
-                    return {'status': 'failed', 'reason': pattern}
-            
-            # Check if it's a valid completed generation
-            # Look for thumbnail image or video content indicators
-            has_thumbnail = await element.query_selector('img, video, .thumbnail') is not None
-            has_content_indicators = any(indicator in element_text for indicator in [
-                'Image to video',
-                'Creation Time', 
-                'Download',
-                'Generate',
-                'seconds'  # Duration indicator
-            ])
-            
-            if has_thumbnail or has_content_indicators:
-                logger.info(f"✅ Generation {selector} appears completed")
-                return {'status': 'completed', 'reason': 'Has thumbnail or content indicators'}
-            else:
-                logger.debug(f"❓ Generation {selector} status unclear - no clear indicators")
-                return {'status': 'unclear', 'reason': 'No clear completion indicators'}
+            # If not queued/failed, assume completed
+            return {'status': 'completed', 'reason': 'No queue/error indicators found'}
                 
         except Exception as e:
             logger.error(f"Error checking generation status for {selector}: {e}")
             return {'status': 'error', 'reason': str(e)}
 
     async def find_completed_generations_on_page(self, page) -> List[str]:
-        """Find all completed generations on the initial /generate page, skipping queued ones"""
+        """Find all completed generations using simple sequential container checking (Algorithm Step 2-3)"""
         try:
             logger.info("🔍 Scanning initial /generate page for completed generations...")
             
             completed_selectors = []
             
-            # Check all potential generation containers (usually __1 through __10)
-            for i in range(1, 11):  # Check first 10 containers
+            # Get starting index from config, default to 8
+            start_index = 8
+            if self.config.completed_task_selector:
+                match = re.search(r'__(\d+)', self.config.completed_task_selector)
+                if match:
+                    start_index = int(match.group(1))
+            
+            # Simple sequential checking from starting index (Algorithm Step 2)
+            logger.info(f"Starting sequential scan from container index {start_index}")
+            
+            for i in range(start_index, start_index + 10):  # Check 10 containers from start
                 selector = f"div[id$='__{i}']"
-                status_info = await self.check_generation_status(page, selector)
                 
-                logger.debug(f"Container __{i}: Status = {status_info['status']} ({status_info['reason']})")
-                
-                if status_info['status'] == 'completed':
+                try:
+                    element = await page.query_selector(selector)
+                    if not element:
+                        continue
+                    
+                    # Get text content for simple status check (Algorithm Step 3)
+                    text_content = await element.text_content()
+                    if not text_content:
+                        continue
+                    
+                    # Simple text-based queue/failed/rendering detection
+                    if "Queuing" in text_content or "Something went wrong" in text_content or "Video is rendering" in text_content:
+                        status = "Queued" if "Queuing" in text_content else ("Failed" if "Something went wrong" in text_content else "Rendering")
+                        logger.info(f"⏳ Skipping container __{i} ({status}): {text_content[:50]}...")
+                        continue
+                    
+                    # If not queued/failed, consider it completed
                     completed_selectors.append(selector)
                     logger.info(f"✅ Found completed generation: __{i}")
-                elif status_info['status'] == 'queued':
-                    logger.info(f"⏳ Skipping queued generation: __{i}")
-                elif status_info['status'] == 'failed':
-                    logger.warning(f"❌ Skipping failed generation: __{i}")
-                else:
-                    logger.debug(f"❓ Unknown status for __{i}: {status_info}")
+                    
+                except Exception as e:
+                    logger.debug(f"Error checking container __{i}: {e}")
+                    continue
             
-            logger.info(f"📊 Found {len(completed_selectors)} completed generations out of 10 checked")
-            
-            if len(completed_selectors) == 0:
-                logger.warning("⚠️ No completed generations found on initial page!")
-                # Fallback: try the configured selector anyway
-                if self.config.completed_task_selector:
-                    logger.info(f"🔄 Fallback: trying configured selector {self.config.completed_task_selector}")
-                    completed_selectors = [self.config.completed_task_selector]
-            
+            logger.info(f"📊 Found {len(completed_selectors)} completed generations")
             return completed_selectors
             
         except Exception as e:
@@ -4690,7 +4943,7 @@ class GenerationDownloadManager:
             
             # ENHANCED: Robust gallery navigation with duplicate prevention
             consecutive_failures = 0
-            max_consecutive_failures = 5
+            max_consecutive_failures = 100  # Support very large galleries with sparse content
             no_progress_cycles = 0
             max_no_progress_cycles = 3
             
@@ -4757,16 +5010,63 @@ class GenerationDownloadManager:
                             'processed': False
                         }
                         
+                        # SAFEGUARD: Check if we're stuck on the same generation
+                        if not hasattr(self, 'last_processed_metadata'):
+                            self.last_processed_metadata = None
+                            self.same_generation_count = 0
+                        
                         # Download the current active thumbnail
+                        logger.info(f"🚨 MAIN LOOP: About to call download_single_generation_robust for {thumbnail_info.get('unique_id', 'unknown')}")
+                        logger.info(f"🚨 MAIN LOOP: thumbnail_info = {thumbnail_info}")
                         success = await self.download_single_generation_robust(page, thumbnail_info, existing_files)
+                        logger.info(f"🚨 MAIN LOOP: download_single_generation_robust returned: {success}")
                         
                         # Extract thumbnail_id for tracking purposes
                         thumbnail_id = thumbnail_info['unique_id']
                         
-                        if success:
+                        # SAFEGUARD: Check if we're processing the same generation repeatedly
+                        # CRITICAL FIX: Skip safeguard metadata extraction for boundary downloads
+                        # This prevents overriding the verified boundary metadata
+                        if hasattr(self, 'boundary_just_downloaded') and self.boundary_just_downloaded:
+                            logger.info("🚀 BOUNDARY: Skipping safeguard metadata extraction to preserve boundary metadata")
+                            # Use a unique key for boundary downloads to avoid false loop detection
+                            boundary_key = f"boundary_{thumbnail_id}_{time.time()}"
+                            self.last_processed_metadata = boundary_key
+                            self.same_generation_count = 1
+                        else:
+                            try:
+                                current_metadata = await self.extract_metadata_from_page(page)
+                                if current_metadata:
+                                    current_key = f"{current_metadata.get('generation_date')}|{current_metadata.get('prompt', '')[:50]}"
+                                    if self.last_processed_metadata == current_key:
+                                        self.same_generation_count += 1
+                                        if self.same_generation_count >= 3:
+                                            logger.error(f"🚨 INFINITE LOOP DETECTED: Same generation processed {self.same_generation_count} times")
+                                            logger.error(f"   Time: {current_metadata.get('generation_date')}")
+                                            logger.error(f"   Prompt: {current_metadata.get('prompt', '')[:100]}...")
+                                            logger.info("🛑 Breaking out of infinite loop, ending automation")
+                                            break
+                                    else:
+                                        self.last_processed_metadata = current_key
+                                        self.same_generation_count = 1
+                            except Exception as metadata_check_error:
+                                logger.debug(f"Metadata check error: {metadata_check_error}")
+                        
+                        if success is True:
                             results['downloads_completed'] += 1
                             logger.info(f"✅ Successfully downloaded thumbnail #{thumbnail_count}")
                             consecutive_failures = 0  # Reset failure counter
+                            self.same_generation_count = 0  # Reset infinite loop counter on success
+                            
+                            # CRITICAL FIX: Keep boundary flag until next thumbnail is processed
+                            # This allows the next duplicate check to know it's a consecutive duplicate
+                            if hasattr(self, 'boundary_just_downloaded') and self.boundary_just_downloaded:
+                                logger.info("✅ Boundary generation download completed successfully")
+                                logger.info("🔄 Boundary flag maintained for consecutive duplicate handling on next thumbnail")
+                        elif success == "skip_continue":
+                            logger.info(f"⏭️ Skipped duplicate thumbnail #{thumbnail_count} (continuing)")
+                            consecutive_failures = 0  # Reset failure counter since skip is expected
+                            self.same_generation_count = 0  # Reset infinite loop counter
                         else:
                             consecutive_failures += 1
                             logger.warning(f"⚠️ Failed to download thumbnail #{thumbnail_count} (consecutive failures: {consecutive_failures})")
@@ -5247,108 +5547,132 @@ class GenerationDownloadManager:
             return False
 
     def initialize_enhanced_skip_mode(self) -> bool:
-        """Initialize enhanced SKIP mode with checkpoint detection"""
+        """Simple SKIP mode initialization (Algorithm compliant)"""
         if self.config.duplicate_mode != DuplicateMode.SKIP:
             return False
             
-        # Get the last log entry as checkpoint
-        self.checkpoint_data = self.logger.get_last_log_entry()
-        if not self.checkpoint_data:
-            logger.info("⚡ Enhanced SKIP mode: No checkpoint found, starting normal download process")
-            return False
-            
-        self.fast_forward_mode = True
-        self.checkpoint_found = False
+        # Load existing log entries for duplicate detection
+        self.existing_log_entries = self._load_existing_log_entries()
         
-        logger.info("🚀 Enhanced SKIP mode activated:")
-        logger.info(f"   🎯 Checkpoint: {self.checkpoint_data.get('generation_date')}")
-        logger.info(f"   🔍 Will fast-forward through gallery to find this checkpoint")
-        logger.info(f"   ⏩ Once found, will resume downloading from next item")
+        logger.info(f"🚀 SKIP mode: Found {len(self.existing_log_entries)} existing downloads")
+        
+        # Simple state initialization  
+        self.skip_mode_active = True
+        
+        logger.info("✅ Exit-scan-return strategy ENABLED in SKIP mode (Algorithm Steps 11-15)")
         
         return True
         
-    async def fast_forward_to_checkpoint(self, page, thumbnail_id: str) -> str:
-        """Fast-forward through thumbnails to find checkpoint, return action to take"""
-        if not self.fast_forward_mode or self.checkpoint_found:
-            return "download"  # Normal download mode
-            
-        try:
-            logger.info(f"⏩ Fast-forward mode: Checking thumbnail {thumbnail_id}")
-            
-            # Extract metadata quickly without full processing
-            metadata = await self._extract_metadata_fast(page, thumbnail_id)
-            if not metadata:
-                logger.warning(f"   ⚠️ Could not extract metadata for {thumbnail_id}, continuing fast-forward")
-                return "skip"
-                
-            # Compare with checkpoint
-            if self._is_checkpoint_match(metadata, self.checkpoint_data):
-                logger.info(f"✅ CHECKPOINT FOUND: {thumbnail_id}")
-                logger.info(f"   📅 Creation Time: {metadata.get('generation_date')}")
-                logger.info(f"   🔗 Matches checkpoint - switching to download mode for next items")
-                
-                self.checkpoint_found = True
-                self.fast_forward_mode = False  # Stop fast-forward, start downloading
-                
-                return "skip_checkpoint"  # Skip this one (already downloaded) but start downloading next
-                
-            logger.info(f"   ⏩ Not checkpoint, continuing fast-forward")
-            return "skip"
-            
-        except Exception as e:
-            logger.error(f"Error in fast-forward mode: {e}")
-            # Fall back to normal skip behavior
-            return "skip"
+    async def fast_forward_to_checkpoint(self, page, thumbnail_id: str, thumbnail_element=None) -> str:
+        """Simple action determination - Algorithm compliant"""
+        # Always download and check for duplicates (Algorithm Step 5-6)
+        # The check_duplicate_exists method will handle exit-scan-return if needed
+        return "download"
+    
+    async def _is_still_duplicate(self, metadata: Dict[str, str]) -> bool:
+        """Simple duplicate check - delegates to algorithm-compliant method"""
+        generation_date = metadata.get('generation_date', '')
+        prompt = metadata.get('prompt', '') or metadata.get('prompt_start', '')
+        
+        # Use the algorithm-compliant duplicate detection method
+        result = self.check_duplicate_exists(generation_date, prompt)
+        
+        # Return boolean (convert from string/boolean result)
+        return result not in [False, None]
+    
+    async def check_if_checkpoint_after_click(self, page, thumbnail_id: str) -> str:
+        """Check if the clicked thumbnail is still old content (deprecated - use _is_still_duplicate)"""
+        # This method is now deprecated in favor of the inline check
+        # Keep for backward compatibility
+        metadata = await self._extract_metadata_after_click(page, thumbnail_id)
+        if metadata:
+            is_old = await self._is_still_duplicate(metadata)
+            return "skip" if is_old else "download"
+        return "skip"
     
     async def _extract_metadata_fast(self, page, thumbnail_id: str) -> Optional[Dict[str, str]]:
         """Quickly extract metadata for checkpoint comparison without full processing"""
+        # This method is now deprecated, use _extract_metadata_after_click instead
+        return await self._extract_metadata_after_click(page, thumbnail_id)
+    
+    async def _extract_metadata_after_click(self, page, thumbnail_id: str) -> Optional[Dict[str, str]]:
+        """Extract metadata after clicking on thumbnail (when it's visible)"""
         try:
+            # Wait a bit for the metadata panel to appear
+            await page.wait_for_timeout(1500)  # Increased wait time
+            
             # Extract just the creation time and a portion of the prompt for comparison
             creation_time = None
             prompt_start = None
             
-            # Try to get creation time from DOM
+            # Try to get creation time from DOM - these selectors work when thumbnail is selected
             creation_time_selectors = [
+                # Most specific selectors first
+                ".sc-bYXhga.jGymgu .sc-jxKUFb.bZTHAM:last-child",  # Full path to time span
+                "xpath=//span[text()='Creation Time']/following-sibling::span",  # Exact text match
                 f"xpath=//span[contains(text(), '{self.config.creation_time_text}')]/following-sibling::span",
-                ".sc-eJlwcH.gjlyBM span.sc-cSMkSB.hUjUPD:nth-child(2)",
-                "span:has-text('Creation Time') + span"
+                ".sc-jxKUFb.bZTHAM:last-child",  # The second span with creation time
+                "span:has-text('Creation Time') + span",
+                ".sc-bYXhga.jGymgu span:last-child",  # Container with time info
+                # More general selectors
+                "xpath=//div[contains(@class, 'jGymgu')]//span[last()]",
+                "xpath=//span[contains(@class, 'bZTHAM')][last()]" 
             ]
             
+            logger.debug(f"Attempting to extract creation time for {thumbnail_id}")
             for selector in creation_time_selectors:
                 try:
                     element = page.locator(selector).first
-                    if await element.is_visible(timeout=1000):
+                    if await element.is_visible(timeout=500):
                         creation_time = await element.text_content()
-                        break
-                except:
+                        if creation_time and ':' in creation_time:  # Basic validation for time format
+                            logger.debug(f"Found creation time with selector {selector}: {creation_time}")
+                            break
+                except Exception as e:
+                    logger.debug(f"Selector {selector} failed: {e}")
                     continue
                     
             # Try to get prompt start for comparison
             prompt_selectors = [
+                # Most specific first
+                ".sc-dDrhAi.dnESm span:first-child",  # Main prompt container first span
+                "xpath=//div[contains(@class, 'dnESm')]//span[1]",
+                ".sc-dDrhAi.dnESm span",  # Main prompt container
                 ".sc-jJRqov.cxtNJi span[aria-describedby]",
-                "div.sc-dDrhAi.dnESm div",
-                "[class*='prompt'] span, [class*='description'] span"
+                "div.sc-dDrhAi.dnESm",
+                # More general
+                "[class*='prompt'] span, [class*='description'] span",
+                "xpath=//span[@aria-describedby]"
             ]
             
+            logger.debug(f"Attempting to extract prompt for {thumbnail_id}")
             for selector in prompt_selectors:
                 try:
                     element = page.locator(selector).first
-                    if await element.is_visible(timeout=1000):
+                    if await element.is_visible(timeout=500):
                         full_prompt = await element.text_content()
-                        prompt_start = full_prompt[:200] if full_prompt else None  # First 200 chars
-                        break
-                except:
+                        if full_prompt and len(full_prompt) > 20:  # Basic validation
+                            prompt_start = full_prompt[:200] if full_prompt else None  # First 200 chars
+                            logger.debug(f"Found prompt with selector {selector}: {prompt_start[:50]}...")
+                            break
+                except Exception as e:
+                    logger.debug(f"Selector {selector} failed: {e}")
                     continue
             
             if creation_time:
+                logger.debug(f"Successfully extracted metadata: time={creation_time}, prompt={prompt_start[:50] if prompt_start else 'None'}")
                 return {
                     'generation_date': creation_time.strip(),
                     'prompt_start': prompt_start or "Unknown prompt",
                     'thumbnail_id': thumbnail_id
                 }
+            else:
+                logger.warning(f"Could not find creation time for {thumbnail_id} - metadata panel may not be visible")
                 
         except Exception as e:
-            logger.error(f"Error extracting fast metadata: {e}")
+            logger.error(f"Error extracting metadata after click: {e}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
             
         return None
     
@@ -5388,6 +5712,1264 @@ class GenerationDownloadManager:
             
         except Exception as e:
             logger.error(f"Error comparing checkpoint: {e}")
+            return False
+    
+    async def exit_gallery_and_scan_generations(self, page) -> Optional[Dict[str, Any]]:
+        """Algorithm-compliant exit → scan → find boundary workflow (Steps 11-15)"""
+        try:
+            logger.info("🚪 Step 11: Exit gallery...")
+            
+            # Step 11: Exit gallery - try multiple selector strategies
+            exit_selectors = [
+                'span.close-icon',  # Simplest selector for close icon
+                'span.sc-fAkCkL.fjGQsQ',  # Class-based selector from task example
+                'span[role="img"].close-icon',  # With role attribute
+                'svg use[xlink\\:href*="guanbi"]',  # Any close icon SVG
+                'span.close-icon svg',  # Close icon with SVG child
+            ]
+            
+            exit_clicked = False
+            for selector in exit_selectors:
+                try:
+                    exit_element = await page.wait_for_selector(selector, timeout=2000)
+                    if exit_element:
+                        await exit_element.click()
+                        await asyncio.sleep(1)
+                        logger.info(f"✅ Step 11: Exited gallery using selector: {selector}")
+                        exit_clicked = True
+                        break
+                except Exception:
+                    continue
+            
+            if not exit_clicked:
+                logger.warning("Exit icon not found with any selector, using back navigation")
+                await page.go_back()
+                await asyncio.sleep(1)
+                logger.info("✅ Step 11: Exited gallery using back navigation")
+            
+            # Step 12: Now at main /generation page with containers
+            logger.info("🔍 Step 12: Returned to main page with generation containers")
+            
+            # Wait for page to fully load and containers to become visible
+            logger.info("⏳ Waiting for main page to fully load before boundary scan...")
+            try:
+                # Wait for network idle to ensure page is fully loaded
+                await page.wait_for_load_state("networkidle", timeout=8000)
+                logger.debug("✅ Network idle detected - page should be fully loaded")
+            except Exception as e:
+                logger.debug(f"Network idle timeout (normal): {e}")
+            
+            # Additional wait for dynamic content loading
+            await page.wait_for_timeout(3000)  # 3 second wait for dynamic content
+            logger.info("✅ Page loading wait completed, starting boundary scan")
+            
+            # Step 13-14: Sequential comparison with log entries  
+            return await self._find_download_boundary_sequential(page)
+            
+        except Exception as e:
+            logger.error(f"Error in exit-scan workflow: {e}")
+            return None
+    
+    async def _find_download_boundary_sequential(self, page) -> Optional[Dict[str, Any]]:
+        """Efficient incremental boundary detection - scan as we scroll, not all at once"""
+        try:
+            logger.info("🔍 Step 13: Starting incremental boundary scan with scan-as-you-scroll approach")
+            
+            # CRITICAL FIX: Always reload log entries for boundary detection
+            # Previous caching caused infinite loops as new downloads weren't reflected
+            
+            # Add a small delay to ensure file system has written the latest download
+            import time
+            time.sleep(0.5)  # Half second delay for file system sync
+            
+            self.existing_log_entries = self._load_existing_log_entries()
+            logger.info(f"📚 Reloaded {len(self.existing_log_entries)} log entries for boundary detection (fresh read after 0.5s delay)")
+            
+            # Show the most recent log entries for verification
+            if self.existing_log_entries:
+                sorted_entries = sorted(self.existing_log_entries.items(), reverse=True)  # Most recent first
+                logger.info("📋 Most recent log entries (for boundary detection):")
+                for i, (log_time, log_entry) in enumerate(sorted_entries[:5]):  # Show top 5
+                    log_prompt = log_entry.get('prompt', '')[:50]
+                    logger.info(f"   #{i+1}: '{log_time}' - {log_prompt}...")
+                if len(sorted_entries) > 5:
+                    logger.info(f"   ... and {len(sorted_entries) - 5} more entries")
+                    
+                # Also show if there are any entries with "03 Sep 2025" for debugging
+                sep_3_entries = [entry for entry in sorted_entries if entry[0].startswith('03 Sep 2025')]
+                if sep_3_entries:
+                    logger.info(f"📅 Found {len(sep_3_entries)} entries from '03 Sep 2025' in log file:")
+                    for i, (log_time, log_entry) in enumerate(sep_3_entries[:3]):
+                        log_prompt = log_entry.get('prompt', '')[:30]
+                        logger.info(f"   Sep3-#{i+1}: '{log_time}' - {log_prompt}...")
+            else:
+                logger.info("📋 No existing log entries found - all generations will be downloaded")
+            
+            # Track scanned container IDs to prevent duplicate scanning
+            scanned_container_ids = set()
+            total_containers_scanned = 0
+            duplicates_found = 0
+            scroll_attempts = 0
+            max_scroll_attempts = 2000  # Support very large galleries with 3000+ generations
+            consecutive_no_new = 0
+            max_consecutive_no_new = 50  # Allow more attempts to find new containers in large galleries
+            
+            # Use same multi-selector strategy as initial navigation instead of single selector
+            # Extract starting number from config or use default
+            start_num = 8
+            if self.config.completed_task_selector:
+                import re
+                match = re.search(r'__(\d+)', self.config.completed_task_selector)
+                if match:
+                    start_num = int(match.group(1))
+            
+            # Generate multiple selectors like initial navigation does (same approach)
+            # EXPANDED: Check a wider range to find containers after scrolling
+            container_selectors = []
+            for i in range(0, 50):  # Expanded range to find all possible containers
+                container_selectors.append(f"div[id$='__{i}']")
+            
+            logger.info(f"🔍 Using multi-selector approach like initial navigation: {len(container_selectors)} selectors")
+            logger.debug(f"🔍 Container selectors: {container_selectors[:3]}...{container_selectors[-1]}")
+            
+            while scroll_attempts < max_scroll_attempts and consecutive_no_new < max_consecutive_no_new:
+                # STEP 1: Get currently visible containers using all selectors
+                logger.info(f"🔍 Scan iteration {scroll_attempts + 1}: Getting visible containers")
+                
+                # ENHANCED: Wait for DOM to fully update after scroll
+                if scroll_attempts > 0:
+                    logger.debug("   ⏳ Waiting for DOM updates after scroll...")
+                    await page.wait_for_timeout(2000)  # 2 seconds for DOM updates
+                    
+                    # Additional wait for network activity to settle
+                    try:
+                        await page.wait_for_load_state("networkidle", timeout=3000)
+                        logger.debug("   ✅ Network idle detected")
+                    except:
+                        logger.debug("   ⏰ Network idle timeout (normal)")
+                
+                # Collect containers from all selectors (same as initial navigation)
+                all_containers = []
+                container_selector_stats = {}  # Track which selectors find containers
+                
+                for selector in container_selectors:
+                    try:
+                        containers = await page.query_selector_all(selector)
+                        if containers:
+                            all_containers.extend(containers)
+                            container_selector_stats[selector] = len(containers)
+                        logger.debug(f"   Selector {selector}: found {len(containers)} containers")
+                    except Exception as e:
+                        logger.debug(f"   Selector {selector} failed: {e}")
+                
+                # ENHANCED: Also try content-based container detection for scrolled content
+                try:
+                    # Look for containers with creation time pattern (more reliable than ID selectors)
+                    content_containers = await page.query_selector_all("div:has-text('Creation Time'), div:has-text('Sep 2025'), div:has-text('Aug 2025')")
+                    for container in content_containers:
+                        if container not in all_containers:
+                            all_containers.append(container)
+                            logger.debug(f"   Content-based detection: found additional container")
+                except Exception as e:
+                    logger.debug(f"   Content-based detection failed: {e}")
+                
+                logger.info(f"   Total containers found across all selectors: {len(all_containers)}")
+                if container_selector_stats:
+                    active_selectors = [(k, v) for k, v in container_selector_stats.items() if v > 0]
+                    logger.debug(f"   Active selectors: {active_selectors[:3]}..." if len(active_selectors) > 3 else f"   Active selectors: {active_selectors}")
+                
+                # Filter out already scanned containers
+                new_containers = []
+                for container in all_containers:
+                    try:
+                        # Get container ID or unique identifier
+                        container_id = await container.get_attribute('id')
+                        
+                        # Extract the datetime as a unique identifier instead of using dynamic ID
+                        text_content = await container.text_content() or ""
+                        
+                        # Look for datetime pattern as unique key
+                        import re
+                        datetime_match = re.search(r'(\d{1,2}\s+\w{3}\s+\d{4}\s+\d{2}:\d{2}:\d{2})', text_content)
+                        if datetime_match:
+                            # Use datetime as the unique identifier (it's unique per generation)
+                            unique_key = datetime_match.group(1)
+                        else:
+                            # Fallback to container ID or text hash
+                            unique_key = container_id if container_id else str(hash(text_content[:200]))
+                        
+                        if unique_key not in scanned_container_ids:
+                            new_containers.append((container, unique_key))
+                            scanned_container_ids.add(unique_key)
+                            if len(new_containers) <= 3:
+                                logger.debug(f"   New container: key='{unique_key}', id='{container_id}'")
+                        else:
+                            if scroll_attempts == 0 and len(scanned_container_ids) <= 15:
+                                logger.debug(f"   Already scanned: key='{unique_key}'")
+                    except Exception as e:
+                        logger.debug(f"Error getting container ID: {e}")
+                        continue
+                
+                if not new_containers:
+                    consecutive_no_new += 1
+                    logger.info(f"   No new containers found (consecutive: {consecutive_no_new}/{max_consecutive_no_new})")
+                    
+                    if consecutive_no_new >= max_consecutive_no_new:
+                        logger.info("✅ Reached end of generation list - no new containers after multiple scrolls")
+                        break
+                else:
+                    consecutive_no_new = 0
+                    logger.info(f"📊 Found {len(new_containers)} new containers to scan (total scanned: {total_containers_scanned})")
+                
+                # STEP 2: Scan only the NEW containers for boundary
+                for container, container_id in new_containers:
+                    total_containers_scanned += 1
+                    
+                    try:
+                        # ENHANCED: Retry logic for container processing
+                        container_metadata = None
+                        extraction_attempts = 0
+                        max_extraction_attempts = 3
+                        
+                        while extraction_attempts < max_extraction_attempts and not container_metadata:
+                            extraction_attempts += 1
+                            
+                            # Check if this container has content (not queued/failed)
+                            text_content = await container.text_content() or ""
+                            
+                            # More comprehensive status detection
+                            skip_statuses = ["Queuing", "Something went wrong", "Video is rendering", 
+                                           "Processing", "Failed", "Error", "Loading..."]
+                            
+                            skip_container = False
+                            for status_text in skip_statuses:
+                                if status_text in text_content:
+                                    logger.debug(f"⏭️ Container {total_containers_scanned}: {status_text}, skipping")
+                                    skip_container = True
+                                    break
+                            
+                            if skip_container:
+                                break
+                            
+                            # Extract metadata from container using enhanced method
+                            container_metadata = await extract_container_metadata_enhanced(container, text_content)
+                            
+                            if not container_metadata and extraction_attempts < max_extraction_attempts:
+                                logger.debug(f"   ⏰ Metadata extraction failed (attempt {extraction_attempts}/{max_extraction_attempts}), retrying after wait...")
+                                await page.wait_for_timeout(1000)  # Wait 1 second before retry
+                        
+                        if not container_metadata:
+                            logger.debug(f"   ❌ Container {total_containers_scanned}: Failed to extract metadata after {max_extraction_attempts} attempts")
+                            continue
+                        
+                        container_time = container_metadata.get('creation_time', '')
+                        container_prompt = container_metadata.get('prompt', '')[:100]
+                        
+                        if not container_time or not container_prompt:
+                            logger.debug(f"⚠️ Container {total_containers_scanned}: Missing metadata, skipping")
+                            continue
+                        
+                        # ENHANCED: Log each container we're checking with more detail
+                        if total_containers_scanned <= 5 or total_containers_scanned % 10 == 0:
+                            logger.info(f"🔍 Scanning container #{total_containers_scanned}: datetime='{container_time}', prompt='{container_prompt[:30]}...'")
+                            
+                        # ULTRA-DEBUG: For the specific case we're tracking, log everything
+                        if "03 Sep 2025 16:" in container_time:
+                            logger.info(f"🎯 TARGET RANGE DETECTED: Container #{total_containers_scanned}")
+                            logger.info(f"   📅 Full datetime: '{container_time}'")
+                            logger.info(f"   📝 Full prompt: {container_prompt[:100]}...") 
+                            logger.info(f"   🔍 Will check against {len(self.existing_log_entries)} log entries")
+                        
+                        # ENHANCED Step 14: Compare with log entries with better logging
+                        has_matching_log_entry = False
+                        logger.debug(f"🔍 Container #{total_containers_scanned}: Checking datetime '{container_time}' against {len(self.existing_log_entries)} log entries")
+                        
+                        # ENHANCED: Quick check with detailed logging for target case
+                        exact_match_found = container_time in self.existing_log_entries
+                        if exact_match_found:
+                            logger.debug(f"   📝 Container datetime '{container_time}' found in log entries")
+                        elif "03 Sep 2025 16:" in container_time:
+                            logger.info(f"🎯 POTENTIAL BOUNDARY: '{container_time}' NOT found in log entries (exact match check)")
+                            
+                            # Show nearby log entries for context
+                            similar_entries = []
+                            for log_time in self.existing_log_entries.keys():
+                                if log_time.startswith("03 Sep 2025 16:") or log_time.startswith("03 Sep 2025 17:"):
+                                    similar_entries.append(log_time)
+                            
+                            similar_entries.sort()
+                            logger.info(f"   📅 Nearby log entries from same timeframe:")
+                            for similar_time in similar_entries[:5]:
+                                logger.info(f"      - {similar_time}")
+                            if len(similar_entries) > 5:
+                                logger.info(f"      ... and {len(similar_entries) - 5} more")
+                        
+                        # ENHANCED: More detailed comparison logic with better logging
+                        comparison_count = 0
+                        for log_time, log_entry in self.existing_log_entries.items():
+                            comparison_count += 1
+                            log_prompt = log_entry.get('prompt', '')[:100]
+                            
+                            # ENHANCED DEBUG: Show comparisons for target timeframe or first few
+                            show_comparison = (
+                                total_containers_scanned <= 3 or  # First few containers
+                                "03 Sep 2025 16:" in container_time or  # Target timeframe
+                                "03 Sep 2025 16:" in log_time  # Log entries in target timeframe
+                            )
+                            
+                            if show_comparison and comparison_count <= 10:  # Limit to avoid spam
+                                logger.debug(f"   🔍 Comparing container '{container_time}' vs log '{log_time}' - Match: {log_time == container_time}")
+                                if log_time == container_time:
+                                    logger.debug(f"   🔍 Prompt comparison: '{container_prompt[:30]}...' vs '{log_prompt[:30]}...' - Match: {log_prompt == container_prompt}")
+                            
+                            # CRITICAL: Use datetime as primary key for boundary detection
+                            # Container prompts from /generate page are often truncated vs gallery prompts
+                            # Since datetime is unique per generation, we can rely on it primarily
+                            if log_time == container_time:
+                                # DateTime match is sufficient - prompts may differ between views
+                                has_matching_log_entry = True
+                                duplicates_found += 1
+                                
+                                if "03 Sep 2025 16:" in container_time:
+                                    logger.info(f"   ✅ DUPLICATE CONFIRMED: Container datetime '{container_time}' matches log entry")
+                                else:
+                                    logger.debug(f"   ✅ DUPLICATE MATCH: Container datetime '{container_time}' matches log entry")
+                                
+                                # Optional prompt validation (for debugging)
+                                prompt_match = (
+                                    log_prompt == container_prompt or  # Exact match
+                                    log_prompt.startswith(container_prompt[:50]) or  # Log starts with container
+                                    container_prompt.startswith(log_prompt[:50])  # Container starts with log
+                                )
+                                
+                                if not prompt_match and len(container_prompt) > 20 and len(log_prompt) > 20:
+                                    if "03 Sep 2025 16:" in container_time:
+                                        logger.info(f"   📝 Note: Prompt differs but datetime match is sufficient")
+                                        logger.info(f"      Container: '{container_prompt[:50]}...'")
+                                        logger.info(f"      Log:       '{log_prompt[:50]}...'")
+                                    else:
+                                        logger.debug(f"   📝 Note: Prompt differs but datetime match is sufficient")
+                                
+                                break
+                        
+                        if not has_matching_log_entry:
+                            # ENHANCED: Found the boundary - this container has no corresponding log entry
+                            logger.info(f"🎯 BOUNDARY FOUND at container #{total_containers_scanned}")
+                            logger.info(f"   📊 Containers scanned: {total_containers_scanned}")
+                            logger.info(f"   🔍 Duplicates found before boundary: {duplicates_found}")
+                            logger.info(f"   📅 BOUNDARY DATETIME: '{container_time}' ⭐")
+                            logger.info(f"   📝 Boundary prompt: {container_prompt[:75]}...")
+                            logger.info(f"   🔄 Found after {scroll_attempts + 1} scroll iterations")
+                            
+                            # ENHANCED: Additional validation and context for boundary
+                            logger.info(f"   🔍 VALIDATION: Checked against {len(self.existing_log_entries)} log entries")
+                            logger.info(f"   📅 Container datetime '{container_time}' confirmed NOT in log file")
+                            
+                            # Special logging for our target case
+                            if "03 Sep 2025 16:15:18" in container_time:
+                                logger.info(f"   🎉 SUCCESS: Found the specific missing generation from user report!")
+                                logger.info(f"   🎯 This matches the reported missing datetime: '03 Sep 2025 16:15:18'")
+                            logger.info(f"   ✨ This generation is NOT in the log file - ready for download!")
+                            
+                            # ENHANCED: Click this container to open gallery and download the boundary generation
+                            logger.info(f"   🖱️ Attempting to click boundary container...")
+                            click_success = await self._click_boundary_container_enhanced(container, total_containers_scanned, container_time, page)
+                            
+                            if click_success:
+                                logger.info("✅ Gallery opened at boundary, ready to download boundary generation")
+                                return {
+                                    'found': True,
+                                    'container_index': total_containers_scanned,
+                                    'creation_time': container_time,
+                                    'prompt': container_prompt,
+                                    'containers_scanned': total_containers_scanned,
+                                    'duplicates_found': duplicates_found,
+                                    'scroll_iterations': scroll_attempts + 1
+                                }
+                            else:
+                                logger.warning("❌ Could not click boundary container")
+                                return None
+                        else:
+                            if total_containers_scanned <= 5 or total_containers_scanned % 50 == 0:
+                                logger.debug(f"✓ Container {total_containers_scanned}: Duplicate found, continuing scan")
+                    
+                    except Exception as e:
+                        logger.debug(f"Error checking container {total_containers_scanned}: {e}")
+                        continue
+                
+                # STEP 3: If no boundary found in current batch, scroll to reveal more
+                # CRITICAL FIX: Always scroll when no boundary found, regardless of new containers
+                # The issue was that scrolling only happened when new containers were found
+                # But we need to scroll to LOAD more containers when none are new
+                if consecutive_no_new < max_consecutive_no_new:
+                    logger.info(f"🎯 No boundary found in current batch, using VERIFIED scroll methods...")
+                    
+                    # Initialize boundary scroll manager if not already done
+                    self.initialize_boundary_scroll_manager(page)
+                    
+                    # Use verified scrolling methods with guaranteed >2000px distance
+                    try:
+                        # Get initial state before scrolling
+                        initial_state = await self.boundary_scroll_manager.get_scroll_position()
+                        logger.info(f"   📊 Before scroll: {initial_state['windowScrollY']}px, {initial_state['containerCount']} containers")
+                        
+                        # Perform verified scroll with automatic fallback
+                        scroll_result = await self.boundary_scroll_manager.perform_scroll_with_fallback(2500)
+                        
+                        if scroll_result.success:
+                            logger.info(f"   ✅ VERIFIED SCROLL SUCCESS: {scroll_result.method_name}")
+                            logger.info(f"   📊 Distance: {scroll_result.scroll_distance}px in {scroll_result.execution_time:.3f}s")
+                            logger.info(f"   📊 New containers detected: {scroll_result.new_containers_detected}")
+                            
+                            # Get final state
+                            final_state = await self.boundary_scroll_manager.get_scroll_position()
+                            logger.info(f"   📊 After scroll: {final_state['windowScrollY']}px, {final_state['containerCount']} containers")
+                            
+                            # Wait for new content to fully load
+                            await page.wait_for_timeout(2000)
+                            
+                        else:
+                            logger.warning(f"   ⚠️ VERIFIED SCROLL FAILED: {scroll_result.error_message}")
+                            # Check if we're at the end of the gallery
+                            at_end = await self.boundary_scroll_manager.check_end_of_gallery()
+                            if at_end:
+                                logger.info("   📍 End of gallery detected - stopping search")
+                                break
+                                
+                    except Exception as e:
+                        logger.error(f"   ❌ Error during verified scroll: {e}")
+                        # Fallback to old behavior if verified methods fail
+                        logger.info("   🔄 Falling back to alternative strategies...")
+                        
+                        # Keep old fallback logic as backup
+                        viewport_height = await page.evaluate("window.innerHeight")
+                        current_scroll = await page.evaluate("window.pageYOffset")
+                        document_height = await page.evaluate("document.body.scrollHeight")
+                        
+                        # Fallback scroll strategies (only used if verified methods fail)
+                        scroll_strategies = [
+                            {"method": "mousewheel", "steps": 10, "amount": 100},
+                            {"method": "keyboard", "steps": 5, "amount": None},
+                            {"method": "gradual", "steps": 3, "amount": 500},
+                            {"method": "jump", "steps": 1, "amount": viewport_height * 2},
+                            {"method": "bottom", "steps": 1, "amount": document_height}
+                        ]
+                        
+                        for strategy in scroll_strategies:
+                            logger.debug(f"   🔄 Trying scroll strategy: {strategy['method']}")
+                            
+                            if strategy["method"] == "mousewheel":
+                                # Mouse wheel scrolling - simulates real user interaction
+                                logger.debug(f"     🖱️ Using mouse wheel scrolling ({strategy['steps']} steps)")
+                                for step in range(strategy["steps"]):
+                                    # Use Playwright's wheel method for realistic scrolling
+                                    await page.mouse.wheel(0, strategy["amount"])
+                                    await page.wait_for_timeout(200)  # Small delay between wheel events
+                                    logger.debug(f"     Wheel step {step+1}: scrolled down {strategy['amount']}px")
+                            elif strategy["method"] == "keyboard":
+                                # Keyboard scrolling - Page Down and Down Arrow keys
+                                logger.debug(f"     ⌨️ Using keyboard scrolling ({strategy['steps']} Page Down presses)")
+                                
+                                # Ensure page is focused for keyboard events
+                                try:
+                                    await page.focus('body')
+                                    logger.debug("     ✅ Page focused for keyboard input")
+                                except:
+                                    # Fallback: click on the page to ensure focus
+                                    await page.click('body')
+                                    logger.debug("     ✅ Page clicked to ensure focus")
+                                
+                                for step in range(strategy["steps"]):
+                                    # First try Page Down key
+                                    await page.keyboard.press("PageDown")
+                                    await page.wait_for_timeout(300)
+                                    logger.debug(f"     PageDown step {step+1}")
+                                    
+                                # Additional Down Arrow key presses for fine scrolling
+                                logger.debug("     ⌨️ Adding Down Arrow key presses for fine control")
+                                for i in range(10):  # 10 down arrow presses
+                                    await page.keyboard.press("ArrowDown")
+                                    await page.wait_for_timeout(50)
+                            elif strategy["method"] == "gradual":
+                                # Gradual scrolling - some sites need this
+                                for step in range(strategy["steps"]):
+                                    step_scroll = current_scroll + (strategy["amount"] * (step + 1))
+                                    await page.evaluate(f"window.scrollTo(0, {step_scroll})")
+                                    await page.wait_for_timeout(500)  # Small wait between steps
+                                    logger.debug(f"     Step {step+1}: scrolled to {step_scroll}")
+                            elif strategy["method"] == "jump":
+                                # Large jump scrolling
+                                new_position = current_scroll + strategy["amount"]
+                                await page.evaluate(f"window.scrollTo(0, {new_position})")
+                                logger.debug(f"     Jump scroll: {current_scroll} → {new_position}")
+                            elif strategy["method"] == "bottom":
+                                # Scroll to current document bottom
+                                await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                                logger.debug(f"     Bottom scroll: to {document_height}")
+                            
+                            # Wait for each strategy
+                            await page.wait_for_timeout(1000)
+                        
+                        # Strategy 2: Comprehensive event triggering for infinite scroll
+                        try:
+                            await page.evaluate("""
+                                // Comprehensive scroll event triggering
+                                const events = ['scroll', 'wheel', 'resize', 'touchstart', 'touchmove', 'touchend'];
+                                events.forEach(eventType => {
+                                    window.dispatchEvent(new Event(eventType, { bubbles: true }));
+                                    document.dispatchEvent(new Event(eventType, { bubbles: true }));
+                                });
+                                
+                                // Trigger on scroll containers too
+                                const scrollContainers = document.querySelectorAll('[id*="scroll"], [class*="scroll"], [class*="container"]');
+                                scrollContainers.forEach(container => {
+                                    events.forEach(eventType => {
+                                        container.dispatchEvent(new Event(eventType, { bubbles: true }));
+                                    });
+                                });
+                                
+                                // Force reflow/repaint
+                                document.body.offsetHeight;
+                            """)
+                            logger.debug("   ✅ Triggered comprehensive scroll events")
+                        except Exception as e:
+                            logger.debug(f"   Event triggering failed: {e}")
+                        
+                        # Strategy 3: Wait for network activity with extended patience
+                        loading_wait_attempts = 0
+                        max_loading_attempts = 3
+                        
+                        while loading_wait_attempts < max_loading_attempts:
+                            loading_wait_attempts += 1
+                            logger.debug(f"   ⏳ Loading wait attempt {loading_wait_attempts}/{max_loading_attempts}")
+                            
+                            try:
+                                # Wait for network activity to indicate new content loading
+                                await page.wait_for_load_state("networkidle", timeout=3000)
+                                logger.debug("   ✅ Network idle detected - content may have loaded")
+                                break
+                            except:
+                                logger.debug("   ⏳ Network idle timeout - trying longer wait")
+                                await page.wait_for_timeout(2000)
+                        
+                        # Strategy 4: Force DOM refresh and check for changes
+                        try:
+                            await page.evaluate("""
+                                // Force DOM refresh techniques
+                                window.scrollBy(0, 1);  // Tiny scroll to trigger events
+                                window.scrollBy(0, -1); // Scroll back
+                                
+                                // Try to trigger intersection observer callbacks
+                                if (window.IntersectionObserver) {
+                                    // Create dummy observer to trigger callbacks
+                                    const observer = new IntersectionObserver(() => {});
+                                    const elements = document.querySelectorAll('div');
+                                    elements.forEach(el => observer.observe(el));
+                                    setTimeout(() => observer.disconnect(), 100);
+                                }
+                            """)
+                            logger.debug("   ✅ Applied DOM refresh techniques")
+                        except Exception as e:
+                            logger.debug(f"   DOM refresh failed: {e}")
+                        
+                        # Strategy 5: Extended wait with scroll position monitoring
+                        initial_scroll = await page.evaluate("window.pageYOffset")
+                        extended_wait_time = 3000  # 3 seconds
+                        
+                        logger.debug(f"   ⏳ Extended wait ({extended_wait_time}ms) for lazy loading...")
+                        await page.wait_for_timeout(extended_wait_time)
+                        
+                        final_scroll = await page.evaluate("window.pageYOffset")
+                        final_document_height = await page.evaluate("document.body.scrollHeight")
+                        
+                        logger.debug(f"   📊 Final state: scroll={final_scroll}, doc_height={final_document_height}")
+                        logger.debug(f"   📊 Changes: scroll_moved={final_scroll != initial_scroll}, height_changed={final_document_height != document_height}")
+                        
+                        # Log comprehensive scroll summary
+                        if final_document_height > document_height:
+                            logger.info(f"   🎉 SUCCESS: Document height increased from {document_height} to {final_document_height}")
+                            logger.info(f"   📋 Applied scroll methods: mousewheel → keyboard → gradual → jump → bottom + events + network wait")
+                        else:
+                            logger.warning(f"   ⚠️ Document height unchanged: {document_height} (may be at end of content)")
+                            logger.warning(f"   📋 All scroll methods tried: mousewheel, keyboard (PageDown+ArrowDown), gradual, jump, bottom")
+                            
+                            # ALTERNATIVE LOADING STRATEGIES: Try alternative methods when standard scrolling fails
+                            logger.info("🔍 ALTERNATIVE STRATEGIES: Standard scrolling failed, trying alternative content loading methods...")
+                            
+                            alternative_success = False
+                            
+                            # Strategy 1: Find and scroll custom scroll containers
+                            logger.info("   🎯 Strategy 1: Looking for custom scroll containers...")
+                            try:
+                                # Look for common scroll container patterns
+                                scroll_container_selectors = [
+                                    "[class*='scroll']", "[id*='scroll']", 
+                                    "[class*='container']", "[class*='list']", 
+                                    "[class*='content']", "[class*='infinite']",
+                                    "div[style*='overflow']", "div[style*='scroll']"
+                                ]
+                                
+                                for selector in scroll_container_selectors:
+                                    containers = await page.query_selector_all(selector)
+                                    for container in containers:
+                                        try:
+                                            # Check if element is scrollable
+                                            scroll_height = await container.evaluate("el => el.scrollHeight")
+                                            client_height = await container.evaluate("el => el.clientHeight")
+                                            current_scroll = await container.evaluate("el => el.scrollTop")
+                                            
+                                            if scroll_height > client_height:  # Element is scrollable
+                                                logger.info(f"      🎯 Found scrollable container: {selector} (height: {scroll_height}, visible: {client_height})")
+                                                
+                                                # Try scrolling this specific container
+                                                await container.evaluate("el => el.scrollTop = el.scrollHeight")
+                                                await page.wait_for_timeout(2000)
+                                                
+                                                # Check if new content appeared
+                                                new_scroll_height = await container.evaluate("el => el.scrollHeight")
+                                                if new_scroll_height > scroll_height:
+                                                    logger.info(f"      ✅ SUCCESS: Container scroll increased height from {scroll_height} to {new_scroll_height}")
+                                                    alternative_success = True
+                                                    break
+                                        except Exception as container_e:
+                                            continue  # Try next container
+                                    
+                                    if alternative_success:
+                                        break
+                                        
+                            except Exception as e:
+                                logger.debug(f"      ❌ Container scroll strategy failed: {e}")
+                            
+                            # Strategy 2: Look for Load More buttons
+                            if not alternative_success:
+                                logger.info("   🎯 Strategy 2: Looking for Load More buttons...")
+                                try:
+                                    load_more_selectors = [
+                                        "button:has-text('Load More')", "button:has-text('Show More')",
+                                        "button:has-text('Load Previous')", "button:has-text('Show Older')",
+                                        "[class*='load']:visible", "[class*='more']:visible", 
+                                        "[id*='load']:visible", "[id*='more']:visible",
+                                        "button[class*='pagination']", "a[class*='next']"
+                                    ]
+                                    
+                                    for selector in load_more_selectors:
+                                        try:
+                                            button = await page.query_selector(selector)
+                                            if button:
+                                                is_visible = await button.is_visible()
+                                                if is_visible:
+                                                    logger.info(f"      🎯 Found Load More button: {selector}")
+                                                    await button.click()
+                                                    await page.wait_for_timeout(3000)  # Wait for content to load
+                                                    
+                                                    # Check if new content appeared
+                                                    new_doc_height = await page.evaluate("document.body.scrollHeight")
+                                                    if new_doc_height > document_height:
+                                                        logger.info(f"      ✅ SUCCESS: Load More button increased content")
+                                                        alternative_success = True
+                                                        break
+                                        except Exception as btn_e:
+                                            continue  # Try next selector
+                                            
+                                    if alternative_success:
+                                        logger.info("   ✅ Load More button strategy succeeded")
+                                        
+                                except Exception as e:
+                                    logger.debug(f"      ❌ Load More button strategy failed: {e}")
+                            
+                            # Strategy 3: Extended wait with network monitoring
+                            if not alternative_success:
+                                logger.info("   🎯 Strategy 3: Extended wait with network monitoring...")
+                                try:
+                                    # Sometimes content loads automatically with time
+                                    initial_containers = len(await page.query_selector_all("div"))
+                                    
+                                    logger.info("      ⏳ Waiting 10 seconds for automatic content loading...")
+                                    await page.wait_for_timeout(10000)
+                                    
+                                    final_containers = len(await page.query_selector_all("div"))
+                                    new_doc_height = await page.evaluate("document.body.scrollHeight")
+                                    
+                                    if final_containers > initial_containers or new_doc_height > document_height:
+                                        logger.info(f"      ✅ SUCCESS: Automatic loading increased content ({initial_containers} → {final_containers} containers)")
+                                        alternative_success = True
+                                        
+                                except Exception as e:
+                                    logger.debug(f"      ❌ Extended wait strategy failed: {e}")
+                            
+                            # Strategy 4: Element hover triggers
+                            if not alternative_success:
+                                logger.info("   🎯 Strategy 4: Trying element hover triggers...")
+                                try:
+                                    # Try hovering over elements that might trigger loading
+                                    trigger_selectors = [
+                                        "div:last-child", "article:last-child", 
+                                        "[class*='item']:last-child", "[class*='card']:last-child",
+                                        "footer", "div[class*='bottom']"
+                                    ]
+                                    
+                                    for selector in trigger_selectors:
+                                        try:
+                                            element = await page.query_selector(selector)
+                                            if element:
+                                                logger.info(f"      🎯 Hovering over trigger element: {selector}")
+                                                await element.hover()
+                                                await page.wait_for_timeout(2000)
+                                                
+                                                # Check for new content
+                                                new_doc_height = await page.evaluate("document.body.scrollHeight")
+                                                if new_doc_height > document_height:
+                                                    logger.info(f"      ✅ SUCCESS: Element hover triggered content loading")
+                                                    alternative_success = True
+                                                    break
+                                        except Exception as hover_e:
+                                            continue
+                                            
+                                except Exception as e:
+                                    logger.debug(f"      ❌ Element hover strategy failed: {e}")
+                            
+                            # Strategy 5: URL parameter manipulation
+                            if not alternative_success:
+                                logger.info("   🎯 Strategy 5: Trying URL parameter manipulation...")
+                                try:
+                                    current_url = page.url
+                                    
+                                    # Try adding pagination parameters (avoid duplicates)
+                                    param_variations = [
+                                        ("page", "2"), ("offset", "50"), ("limit", "100"), 
+                                        ("before", "2025-09-03"), ("older", "true")
+                                    ]
+                                    
+                                    for param_name, param_value in param_variations:
+                                        try:
+                                            # Check if parameter already exists
+                                            if param_name in current_url:
+                                                continue
+                                                
+                                            # Add parameter properly
+                                            separator = "&" if "?" in current_url else "?"
+                                            new_url = f"{current_url}{separator}{param_name}={param_value}"
+                                            logger.info(f"      🎯 Trying URL with parameters: {new_url}")
+                                            
+                                            await page.goto(new_url, wait_until="networkidle")
+                                            await page.wait_for_timeout(3000)
+                                            
+                                            # Check if new content loaded
+                                            containers_after = len(await page.query_selector_all("div"))
+                                            if containers_after > 50:  # We had 50 containers before
+                                                logger.info(f"      ✅ SUCCESS: URL parameters loaded more content")
+                                                alternative_success = True
+                                                break
+                                        except Exception as url_e:
+                                            # Return to original URL if this fails
+                                            await page.goto(current_url)
+                                            continue
+                                            
+                                except Exception as e:
+                                    logger.debug(f"      ❌ URL manipulation strategy failed: {e}")
+                            
+                            if alternative_success:
+                                logger.info("   🎉 ALTERNATIVE SUCCESS: At least one alternative loading method worked!")
+                            else:
+                                logger.warning("   ❌ All alternative loading strategies failed - may have reached end of content")
+                            
+                    except Exception as e:
+                        # Ultra-aggressive fallback scrolling
+                        logger.debug(f"   ⚠️ Advanced scroll failed, using ultra-aggressive fallback: {e}")
+                        
+                        try:
+                            # Try multiple fallback scroll methods
+                            await page.evaluate("window.scrollBy(0, 1500)")  # Large scroll
+                            await page.wait_for_timeout(1000)
+                            await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")  # Scroll to bottom
+                            await page.wait_for_timeout(2000)
+                            await page.evaluate("window.scrollBy(0, 500)")  # Small additional scroll
+                            await page.wait_for_timeout(1500)
+                            logger.debug("   ✅ Ultra-aggressive fallback completed")
+                        except Exception as fallback_e:
+                            logger.debug(f"   ❌ Even fallback scrolling failed: {fallback_e}")
+                            await page.wait_for_timeout(3000)  # Just wait if all else fails
+                
+                scroll_attempts += 1
+                
+                # Progress update every 10 scrolls
+                if scroll_attempts % 10 == 0:
+                    logger.info(f"🔄 Progress: {scroll_attempts} scroll iterations, {total_containers_scanned} containers scanned, {duplicates_found} duplicates")
+            
+            logger.warning(f"❌ No boundary found after {scroll_attempts} scroll iterations")
+            logger.warning(f"   📊 Total containers scanned: {total_containers_scanned}")
+            logger.warning(f"   📊 Total duplicates found: {duplicates_found}")
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error in boundary detection: {e}")
+            return None
+    
+    # Note: _scroll_entire_generation_page_for_boundary_detection removed
+    # Now using incremental scan-as-you-scroll approach in _find_download_boundary_sequential
+    
+    async def _click_boundary_container(self, container, container_index: int) -> bool:
+        """Click boundary container using the same method as initial navigation"""
+        try:
+            # Get page reference correctly from ElementHandle (async)
+            frame = await container.owner_frame()
+            page = frame.page
+            
+            # Get current URL before clicking
+            current_url = page.url
+            logger.info(f"🔍 Current URL before boundary click: {current_url}")
+            
+            # Get container ID to create direct selector (same approach as initial navigation)
+            container_id = await container.get_attribute('id')
+            if not container_id:
+                logger.error("❌ Could not get container ID for boundary click")
+                return False
+            
+            logger.info(f"🔍 Attempting boundary click using container ID: {container_id}")
+            
+            # Step 15: Click container using same method as initial navigation
+            # Use direct page.click() with container ID selector - this is what works for initial navigation
+            try:
+                container_selector = f"div[id='{container_id}']"
+                logger.info(f"🔍 Clicking boundary container using selector: {container_selector}")
+                
+                await page.click(container_selector, timeout=5000)
+                await page.wait_for_timeout(2000)  # Wait for navigation
+                
+                # Verify gallery opened
+                if await self._verify_gallery_opened(page):
+                    logger.info(f"✅ Step 15: Successfully opened gallery from boundary container #{container_index}")
+                    logger.info(f"✅ Used same method as initial navigation - direct page.click()")
+                    return True
+                else:
+                    logger.warning(f"❌ Gallery didn't open after clicking container #{container_index}")
+                    
+            except Exception as e:
+                logger.error(f"Failed to click boundary container with ID selector: {e}")
+                
+                # Fallback: try the generic selector approach (same as initial navigation)
+                try:
+                    # Extract the number from container ID (e.g., "__13" from "50cb0dc8c77c4a3e91c959c431aa3b53__13")
+                    import re
+                    match = re.search(r'__(\d+)$', container_id)
+                    if match:
+                        container_number = match.group(1)
+                        fallback_selector = f"div[id$='__{container_number}']"
+                        logger.info(f"🔄 Trying fallback selector: {fallback_selector}")
+                        
+                        await page.click(fallback_selector, timeout=5000)
+                        await page.wait_for_timeout(2000)
+                        
+                        if await self._verify_gallery_opened(page):
+                            logger.info(f"✅ Step 15: Successfully opened gallery using fallback selector")
+                            return True
+                
+                except Exception as fallback_error:
+                    logger.error(f"Fallback click also failed: {fallback_error}")
+            
+            logger.error(f"❌ Failed to click boundary container #{container_index} using page.click() method")
+            return False
+            
+        except Exception as e:
+            logger.error(f"Error getting page reference or clicking boundary container: {e}")
+            return False
+
+    async def _verify_gallery_opened(self, page) -> bool:
+        """Verify that the gallery view actually opened after clicking boundary container"""
+        try:
+            # Check URL change - gallery should have different URL pattern
+            current_url = page.url
+            logger.debug(f"🔍 Checking if gallery opened, current URL: {current_url}")
+            
+            # Gallery indicators - look for elements that only exist in gallery view
+            gallery_indicators = [
+                '.thumsItem',  # Thumbnail items in gallery
+                '.thumbnail-item',
+                '.thumsCou',
+                'span.close-icon',  # Close button (exists in gallery)
+                'span.sc-fAkCkL.fjGQsQ',  # Close button with class
+            ]
+            
+            for indicator in gallery_indicators:
+                try:
+                    element = await page.wait_for_selector(indicator, timeout=3000)
+                    if element and await element.is_visible():
+                        logger.info(f"✅ Gallery confirmed open - found indicator: {indicator}")
+                        return True
+                except Exception:
+                    continue
+            
+            logger.warning("❌ Gallery verification failed - no gallery indicators found")
+            return False
+            
+        except Exception as e:
+            logger.error(f"Error verifying gallery opened: {e}")
+            return False
+    
+    async def _click_boundary_container_enhanced(self, container, container_index: int, container_time: str, page) -> bool:
+        """Enhanced boundary container click with better error handling and retry logic"""
+        try:
+            logger.info(f"🖱️ ENHANCED boundary click for container #{container_index} (datetime: {container_time})")
+            
+            # Strategy 1: Direct container click (most reliable)
+            try:
+                logger.debug("   🎯 Strategy 1: Direct container click")
+                await container.click(timeout=5000)
+                await page.wait_for_timeout(2000)  # Wait for navigation
+                
+                if await self._verify_gallery_opened(page):
+                    logger.info("   ✅ Strategy 1 success: Direct click opened gallery")
+                    return True
+                    
+            except Exception as e:
+                logger.debug(f"   ❌ Strategy 1 failed: {e}")
+            
+            # Strategy 2: Page selector click using container ID
+            try:
+                logger.debug("   🎯 Strategy 2: Page selector click")
+                container_id = await container.get_attribute('id')
+                if container_id:
+                    container_selector = f"div[id='{container_id}']"
+                    logger.debug(f"   🔍 Using selector: {container_selector}")
+                    
+                    await page.click(container_selector, timeout=5000)
+                    await page.wait_for_timeout(2000)
+                    
+                    if await self._verify_gallery_opened(page):
+                        logger.info("   ✅ Strategy 2 success: Selector click opened gallery")
+                        return True
+                        
+            except Exception as e:
+                logger.debug(f"   ❌ Strategy 2 failed: {e}")
+            
+            # Strategy 3: Fallback selector using container number
+            try:
+                logger.debug("   🎯 Strategy 3: Fallback selector")
+                container_id = await container.get_attribute('id')
+                if container_id:
+                    match = re.search(r'__(\d+)$', container_id)
+                    if match:
+                        container_number = match.group(1)
+                        fallback_selector = f"div[id$='__{container_number}']"
+                        logger.debug(f"   🔍 Using fallback selector: {fallback_selector}")
+                        
+                        await page.click(fallback_selector, timeout=5000)
+                        await page.wait_for_timeout(2000)
+                        
+                        if await self._verify_gallery_opened(page):
+                            logger.info("   ✅ Strategy 3 success: Fallback click opened gallery")
+                            return True
+                            
+            except Exception as e:
+                logger.debug(f"   ❌ Strategy 3 failed: {e}")
+            
+            # Strategy 4: Force click with JavaScript
+            try:
+                logger.debug("   🎯 Strategy 4: JavaScript force click")
+                await container.evaluate("element => element.click()")
+                await page.wait_for_timeout(3000)  # Longer wait for JS click
+                
+                if await self._verify_gallery_opened(page):
+                    logger.info("   ✅ Strategy 4 success: JavaScript click opened gallery")
+                    return True
+                    
+            except Exception as e:
+                logger.debug(f"   ❌ Strategy 4 failed: {e}")
+            
+            # Strategy 5: Find and click by content (for the specific target case)
+            if "03 Sep 2025 16:" in container_time:
+                try:
+                    logger.info("   🎯 Strategy 5: Special handling for target datetime")
+                    
+                    # Look for any element containing our specific datetime
+                    target_elements = await page.query_selector_all(f"div:has-text('{container_time}')")
+                    for target_element in target_elements[:3]:  # Try first 3 matches
+                        try:
+                            logger.debug(f"   📅 Trying element with target datetime...")
+                            await target_element.click(timeout=3000)
+                            await page.wait_for_timeout(2000)
+                            
+                            if await self._verify_gallery_opened(page):
+                                logger.info("   ✅ Strategy 5 success: Found target by datetime!")
+                                return True
+                                
+                        except Exception as element_error:
+                            logger.debug(f"   Element click failed: {element_error}")
+                            continue
+                            
+                except Exception as e:
+                    logger.debug(f"   ❌ Strategy 5 failed: {e}")
+            
+            logger.error(f"   ❌ All click strategies failed for container #{container_index}")
+            logger.error(f"   📅 Target datetime: {container_time}")
+            logger.error(f"   🎯 This may be a page structure or timing issue")
+            
+            return False
+            
+        except Exception as e:
+            logger.error(f"Enhanced boundary click error: {e}")
+            return False
+            
+    async def _extract_container_metadata(self, container, text_content: str) -> Optional[Dict[str, str]]:
+        """Extract creation time and prompt from container text"""
+        try:
+            # Look for creation time pattern: "31 Aug 2025 13:32:04" or "01 Sep 2025 00:47:18"
+            time_pattern = r'Creation Time\s*(\d{1,2}\s+\w{3}\s+\d{4}\s+\d{2}:\d{2}:\d{2})'
+            time_match = re.search(time_pattern, text_content)
+            if not time_match:
+                # Try alternative pattern without "Creation Time" prefix
+                time_pattern = r'(\d{1,2}\s+\w{3}\s+\d{4}\s+\d{2}:\d{2}:\d{2})'
+                time_match = re.search(time_pattern, text_content)
+            
+            creation_time = time_match.group(1) if time_match else ""
+            
+            # Extract prompt text from text_content
+            prompt_text = ""
+            
+            if creation_time:
+                # Extract prompt text after creation time
+                lines = text_content.split('\n')
+                for i, line in enumerate(lines):
+                    if creation_time in line and i + 1 < len(lines):
+                        # Get the next line as prompt
+                        potential_prompt = lines[i + 1].strip()
+                        if potential_prompt and len(potential_prompt) > 10:
+                            prompt_text = potential_prompt
+                            break
+                
+                # Fallback: if we didn't find prompt after creation time, look for any substantial text
+                if not prompt_text:
+                    for line in lines:
+                        line = line.strip()
+                        if (line and len(line) > 20 and 
+                            'Creation Time' not in line and 
+                            not re.match(r'\d{1,2}\s+\w{3}\s+\d{4}', line)):
+                            prompt_text = line
+                            break
+            
+            # Strategy: Try DOM element extraction for real containers (not mocks)
+            if not prompt_text and hasattr(container, 'query_selector_all'):
+                try:
+                    # Look for truncated prompt divs (most reliable)
+                    prompt_divs = await container.query_selector_all('div.sc-dDrhAi.dnESm')
+                    if prompt_divs:
+                        for div in prompt_divs:
+                            div_text = await div.text_content() or ""
+                            if len(div_text) > 20:
+                                # Remove trailing "..." if present
+                                prompt_text = div_text.replace('...', '').strip()
+                                break
+                    
+                    # Fallback to span elements if no div found
+                    if not prompt_text:
+                        prompt_elements = await container.query_selector_all('span[aria-describedby], .ant-tooltip-open')
+                        for element in prompt_elements:
+                            element_text = await element.text_content() or ""
+                            # Skip if it looks like a creation time or other metadata
+                            if not re.match(r'\d{1,2}\s+\w{3}\s+\d{4}', element_text) and len(element_text) > 20:
+                                prompt_text = element_text.strip()
+                                break
+                except Exception:
+                    pass  # DOM extraction failed, use text-based approach
+            
+            if creation_time and prompt_text:
+                logger.debug(f"Extracted container metadata - Time: {creation_time}, Prompt: {prompt_text[:50]}...")
+                return {
+                    'creation_time': creation_time,
+                    'prompt': prompt_text
+                }
+            elif creation_time:
+                logger.debug(f"Extracted creation time only: {creation_time}")
+                return {
+                    'creation_time': creation_time,
+                    'prompt': ''
+                }
+            
+            return None
+            
+        except Exception as e:
+            logger.debug(f"Error extracting container metadata: {e}")
+            return None
+    
+    async def _scan_generation_containers_sequential(self, page, target_time: str, target_prompt: str) -> Optional[Dict[str, Any]]:
+        """Simple sequential metadata comparison for finding download boundaries (Algorithm Steps 13-14)"""
+        try:
+            logger.info("🔍 Step 13: Sequential scan for boundary match...")
+            
+            # Get starting index from config
+            start_index = 8
+            if self.config.completed_task_selector:
+                match = re.search(r'__(\d+)', self.config.completed_task_selector)
+                if match:
+                    start_index = int(match.group(1))
+            
+            # Step 13: Sequential container checking
+            for i in range(start_index, start_index + 20):  # Check 20 containers
+                selector = f"div[id$='__{i}']"
+                
+                try:
+                    element = await page.query_selector(selector)
+                    if not element:
+                        continue
+                    
+                    # Simple text-based filtering (skip queued/failed/rendering)
+                    text_content = await element.text_content()
+                    if "Queuing" in text_content or "Something went wrong" in text_content or "Video is rendering" in text_content:
+                        continue
+                    
+                    # Step 14: Extract and compare metadata
+                    # Look for creation time in text
+                    if target_time in text_content:
+                        # Look for prompt match in text (first 100 chars)
+                        if target_prompt[:50] in text_content:  # Use 50 chars for text matching
+                            logger.info(f"✅ Step 14: Found boundary at container __{i}")
+                            
+                            # Step 15: Click boundary container and resume
+                            await element.click()
+                            await asyncio.sleep(1)
+                            logger.info("✅ Step 15: Clicked boundary container, resuming downloads")
+                            
+                            return {
+                                'found': True,
+                                'container_index': i,
+                                'creation_time': target_time,
+                                'prompt': target_prompt
+                            }
+                
+                except Exception as e:
+                    logger.debug(f"Error checking container __{i}: {e}")
+                    continue
+            
+            logger.warning("❌ Boundary not found in sequential scan")
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error in sequential container scan: {e}")
+            return None
+    
+    async def _scan_generation_containers(self, page, target_time: str, target_prompt: str) -> Optional[Dict[str, Any]]:
+        """Scan generation containers on main page for matching metadata"""
+        try:
+            # Scroll to load more generations if needed
+            max_scroll_attempts = 100  # Increase attempts to scan generation containers
+            found_match = False
+            matching_container = None
+            
+            for scroll_attempt in range(max_scroll_attempts):
+                logger.info(f"   🔍 Scanning generation containers (scroll {scroll_attempt + 1}/{max_scroll_attempts})")
+                
+                # Find all generation containers (excluding queued/failed)
+                container_selector = 'div.sc-cZMHBd.kHPlfG.create-detail-body'
+                containers = await page.locator(container_selector).all()
+                
+                logger.info(f"      Found {len(containers)} generation containers")
+                
+                for i, container in enumerate(containers):
+                    try:
+                        # Check if this is a queued, failed, or rendering generation
+                        container_text = await container.text_content()
+                        if 'Queuing' in container_text or 'Something went wrong' in container_text or 'Video is rendering' in container_text:
+                            continue
+                        
+                        # Extract creation time
+                        time_element = container.locator('span.sc-jxKUFb.bZTHAM').nth(1)
+                        if await time_element.is_visible(timeout=500):
+                            creation_time = await time_element.text_content()
+                            creation_time = creation_time.strip() if creation_time else ""
+                        else:
+                            continue
+                        
+                        # Extract truncated prompt
+                        prompt_element = container.locator('div.sc-dDrhAi.dnESm span').first
+                        if await prompt_element.is_visible(timeout=500):
+                            truncated_prompt = await prompt_element.text_content()
+                            truncated_prompt = truncated_prompt.strip() if truncated_prompt else ""
+                        else:
+                            continue
+                        
+                        # Compare with checkpoint
+                        time_normalized = self.logger._normalize_date_format(creation_time)
+                        checkpoint_normalized = self.logger._normalize_date_format(target_time)
+                        
+                        if time_normalized == checkpoint_normalized:
+                            # Check prompt match (first 50 chars for reliability)
+                            if truncated_prompt[:50] == target_prompt[:50]:
+                                logger.info(f"      ✅ FOUND CHECKPOINT at container {i + 1}")
+                                logger.info(f"         Time: {creation_time}")
+                                logger.info(f"         Prompt: {truncated_prompt[:50]}...")
+                                matching_container = container
+                                found_match = True
+                                break
+                        
+                    except Exception as e:
+                        logger.debug(f"Error checking container {i}: {e}")
+                        continue
+                
+                if found_match:
+                    break
+                
+                # Scroll down to load more generations
+                if scroll_attempt < max_scroll_attempts - 1:
+                    await page.evaluate("window.scrollBy(0, 800)")
+                    await asyncio.sleep(1.0)
+            
+            if matching_container:
+                # Click on the matching container to return to gallery
+                await matching_container.click()
+                await asyncio.sleep(1.5)
+                logger.info("   🎯 Clicked on checkpoint generation, returning to gallery")
+                
+                return {
+                    'found': True,
+                    'container': matching_container,
+                    'creation_time': target_time,
+                    'prompt': target_prompt
+                }
+            else:
+                logger.warning("   ⚠️ Could not find checkpoint generation on page")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Error scanning generation containers: {e}")
+            return None
+    
+    async def navigate_to_next_thumbnail_after_checkpoint(self, page) -> bool:
+        """Navigate to the next thumbnail after returning from checkpoint"""
+        try:
+            logger.info("   ➡️ Navigating to next thumbnail after checkpoint...")
+            
+            # Use the landmark navigation method to go to next thumbnail
+            nav_selectors = [
+                '.thumsCou.isFront.isLast',
+                '.thumsCou:not(.active)',
+                '[class*="thums"]:not(.active)',
+                '.thumbnail-item:not(.active)'
+            ]
+            
+            for selector in nav_selectors:
+                try:
+                    next_thumb = page.locator(selector).first
+                    if await next_thumb.is_visible(timeout=1000):
+                        await next_thumb.click()
+                        await asyncio.sleep(1.0)
+                        logger.info(f"   ✅ Navigated to next thumbnail using: {selector}")
+                        
+                        # Verify we're on a new thumbnail
+                        await asyncio.sleep(0.5)
+                        
+                        # Mark that we've passed the checkpoint
+                        self.checkpoint_found = True
+                        self.fast_forward_mode = False
+                        
+                        return True
+                except:
+                    continue
+            
+            logger.warning("   ⚠️ Could not navigate to next thumbnail")
+            return False
+            
+        except Exception as e:
+            logger.error(f"Error navigating to next thumbnail: {e}")
             return False
 
     def get_status(self) -> Dict[str, Any]:

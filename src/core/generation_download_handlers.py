@@ -93,7 +93,7 @@ class GenerationDownloadHandlers:
                 # Duplicate handling configuration (ENHANCED SKIP MODE)
                 duplicate_mode=duplicate_mode,
                 stop_on_duplicate=config_data.get('stop_on_duplicate', duplicate_mode == DuplicateMode.FINISH),
-                duplicate_check_enabled=config_data.get('duplicate_check_enabled', True),
+                duplicate_check_enabled=True,  # CRITICAL FIX: Always enable duplicate checking
                 creation_time_comparison=config_data.get('creation_time_comparison', True)
             )
             
@@ -102,6 +102,7 @@ class GenerationDownloadHandlers:
             self._generation_downloads_active = True
             
             logger.info("Generation download manager initialized")
+            logger.info(f"🔧 CRITICAL FIX APPLIED: duplicate_check_enabled = {config.duplicate_check_enabled}")
             logger.info(f"Max downloads: {config.max_downloads}")
             logger.info(f"Downloads folder: {config.downloads_folder}")
             logger.info(f"Logs folder: {config.logs_folder}")

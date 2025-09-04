@@ -72,9 +72,9 @@
         "prompt_ellipsis_pattern": "...",
         
         "_comment_selectors": "Page element selectors",
-        "completed_task_selector": "div[id$='__19']",
-        "thumbnail_selector": ".thumsItem, .thumbnail-item",
-        "thumbnail_container_selector": ".thumsInner",
+        "completed_task_selector": "div[id$='__0']",
+        "thumbnail_selector": ".thumsItem, .thumbnail-item, .thumsCou, [class*='thumb'], img[src*='wan']",
+        "thumbnail_container_selector": ".thumsInner, .thumsList, [class*='thums']",
         "button_panel_selector": ".sc-eYHxxX.fmURBt",
         "download_icon_href": "#icon-icon_tongyong_20px_xiazai",
         "download_button_index": 2,

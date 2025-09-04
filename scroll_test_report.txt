@@ -1,0 +1,88 @@
+
+================================================================================
+SCROLL METHOD TEST RESULTS SUMMARY
+================================================================================
+Test completed at: 2025-09-04T09:09:00.232458
+URL tested: https://wan.video/generate
+Total methods tested: 8
+
+PERFORMANCE RANKING:
+--------------------------------------------------------------------------------
+
+Rank #1: container.scrollTop
+  ✓ Success: True
+  ✓ User Confirmed: True
+  ✓ Scroll Distance: 1016px
+  ✓ Execution Time: 0.515s
+  ✓ Requires Mouse: False
+  ✓ Requires Keyboard: False
+
+Rank #2: Element.scrollIntoView()
+  ✓ Success: True
+  ✓ User Confirmed: True
+  ✓ Scroll Distance: 1060px
+  ✓ Execution Time: 0.515s
+  ✓ Requires Mouse: False
+  ✓ Requires Keyboard: False
+
+Rank #3: Mouse Wheel
+  ✓ Success: False
+  ✓ User Confirmed: True
+  ✓ Scroll Distance: 0px
+  ✓ Execution Time: 0.543s
+  ✓ Requires Mouse: True
+  ✓ Requires Keyboard: False
+
+Rank #4: documentElement.scrollTop
+  ✓ Success: False
+  ✓ User Confirmed: False
+  ✓ Scroll Distance: 0px
+  ✓ Execution Time: 0.513s
+  ✓ Requires Mouse: False
+  ✓ Requires Keyboard: False
+
+Rank #5: Custom Scroll Event
+  ✓ Success: False
+  ✓ User Confirmed: False
+  ✓ Scroll Distance: 0px
+  ✓ Execution Time: 0.514s
+  ✓ Requires Mouse: False
+  ✓ Requires Keyboard: False
+
+Rank #6: window.scrollBy()
+  ✓ Success: False
+  ✓ User Confirmed: False
+  ✓ Scroll Distance: 0px
+  ✓ Execution Time: 0.515s
+  ✓ Requires Mouse: False
+  ✓ Requires Keyboard: False
+
+Rank #7: window.scrollTo(smooth)
+  ✓ Success: False
+  ✓ User Confirmed: False
+  ✓ Scroll Distance: 0px
+  ✓ Execution Time: 1.515s
+  ✓ Requires Mouse: False
+  ✓ Requires Keyboard: False
+
+Rank #8: Keyboard (PageDown)
+  ✓ Success: False
+  ✓ User Confirmed: False
+  ✓ Scroll Distance: 0px
+  ✓ Execution Time: 0.516s
+  ✓ Requires Mouse: False
+  ✓ Requires Keyboard: True
+
+================================================================================
+RECOMMENDATIONS:
+--------------------------------------------------------------------------------
+✓ BEST METHOD: container.scrollTop
+  - Reliable and confirmed by user
+  - Scroll distance: 1016px
+  - Fast execution: 0.515s
+
+✓ BEST NON-INTERFERING METHOD: container.scrollTop
+  - Doesn't require mouse or keyboard
+  - Can run in background
+
+================================================================================
