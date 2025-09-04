@@ -211,6 +211,9 @@ class GenerationDownloadConfig:
     fast_navigation_mode: bool = True            # Optimize navigation speed
     use_exit_scan_strategy: bool = True          # Use exit-scan-return strategy for Enhanced SKIP mode
     
+    # START FROM SPECIFIC GENERATION SETTINGS
+    start_from: Optional[str] = None             # Start from specific datetime (format: "DD MMM YYYY HH:MM:SS")
+    
     # Legacy selectors (kept for backward compatibility)
     
     @classmethod
@@ -4952,6 +4955,19 @@ class GenerationDownloadManager:
             # Initialize session tracking
             self.processing_start_time = datetime.now()
             
+            # START_FROM: Navigate to specified datetime if provided
+            if self.config.start_from:
+                logger.info(f"🎯 START_FROM MODE: Searching for generation with datetime '{self.config.start_from}'")
+                start_from_result = await self._find_start_from_generation(page, self.config.start_from)
+                
+                if start_from_result['found']:
+                    logger.info(f"✅ START_FROM: Found target generation, ready to begin downloads from next generation")
+                    # The boundary search has positioned us at the target generation
+                    # The automation will start downloading from the next generation
+                else:
+                    logger.warning(f"⚠️ START_FROM: Could not find generation with datetime '{self.config.start_from}'")
+                    logger.warning("   Will start from the beginning of the gallery instead")
+            
             # NEW: Simplified landmark-based navigation loop
             # Start counting from the specified starting thumbnail
             thumbnail_count = self.config.start_from_thumbnail - 1  # Will be incremented to correct number in loop
@@ -6998,3 +7014,158 @@ class GenerationDownloadManager:
                 'last_scroll_thumbnail_count': self.last_scroll_thumbnail_count
             }
         }
+    
+    def _validate_datetime_format(self, datetime_str: str) -> bool:
+        """Validate that the datetime string matches the expected format"""
+        try:
+            # Expected format: "DD MMM YYYY HH:MM:SS" (e.g., "03 Sep 2025 16:15:18")
+            pattern = r'^\d{1,2}\s+\w{3}\s+\d{4}\s+\d{2}:\d{2}:\d{2}$'
+            return bool(re.match(pattern, datetime_str.strip()))
+        except:
+            return False
+    
+    async def _find_start_from_generation(self, page, target_datetime: str) -> Dict[str, Any]:
+        """Find the generation with the specified datetime to start downloading from the next one"""
+        
+        logger.info(f"🎯 START_FROM: Searching for generation with datetime '{target_datetime}'")
+        
+        # Validate datetime format first
+        if not self._validate_datetime_format(target_datetime):
+            logger.error(f"❌ START_FROM: Invalid datetime format '{target_datetime}'")
+            logger.error("   Expected format: 'DD MMM YYYY HH:MM:SS' (e.g., '03 Sep 2025 16:15:18')")
+            return {
+                'found': False, 
+                'error': f'Invalid datetime format. Expected: DD MMM YYYY HH:MM:SS'
+            }
+        
+        try:
+            # Use enhanced boundary detection logic but search for specific datetime
+            logger.info("   🔍 Using enhanced container detection for start_from search...")
+            
+            # Get all generation containers on the page
+            containers = await page.query_selector_all("div[class*='thumsCou']")
+            initial_container_count = len(containers)
+            logger.info(f"   📊 Initial containers found: {initial_container_count}")
+            
+            if not containers:
+                logger.warning("   ⚠️ No containers found on initial page")
+                return {'found': False, 'error': 'No containers found'}
+            
+            scroll_attempts = 0
+            max_scroll_attempts = 100  # Allow extensive scrolling to find the target
+            containers_scanned = 0
+            
+            while scroll_attempts <= max_scroll_attempts:
+                # Scan current containers for the target datetime
+                logger.debug(f"   🔍 Scanning containers (scroll attempt {scroll_attempts}/{max_scroll_attempts})...")
+                
+                # Re-get containers after potential scrolling
+                containers = await page.query_selector_all("div[class*='thumsCou']")
+                current_container_count = len(containers)
+                
+                logger.debug(f"   📊 Containers available: {current_container_count}")
+                
+                # Check each container for the target datetime
+                for i, container in enumerate(containers):
+                    containers_scanned += 1
+                    
+                    try:
+                        # Extract metadata from container using enhanced extraction
+                        text_content = await container.text_content()
+                        if not text_content:
+                            continue
+                        
+                        logger.debug(f"   📝 Container {containers_scanned} text: {text_content[:100]}...")
+                        
+                        # Use enhanced metadata extraction
+                        metadata = await extract_container_metadata_enhanced(container, text_content)
+                        
+                        if not metadata or not metadata.get('creation_time'):
+                            continue
+                        
+                        container_time = metadata['creation_time']
+                        container_prompt = metadata.get('prompt', '')
+                        
+                        logger.debug(f"   ⏰ Container {containers_scanned}: {container_time}")
+                        
+                        # Check if this is our target datetime
+                        if container_time == target_datetime:
+                            logger.info(f"   🎯 TARGET FOUND: Container {containers_scanned} matches '{target_datetime}'")
+                            logger.info(f"      📝 Prompt: {container_prompt[:100]}...")
+                            
+                            # Click this container to navigate to the generation
+                            logger.info(f"   🖱️ Clicking target container to position gallery...")
+                            
+                            try:
+                                await container.click(timeout=5000)
+                                await page.wait_for_timeout(2000)  # Wait for gallery to open/navigate
+                                
+                                logger.info("✅ START_FROM: Successfully positioned at target generation")
+                                return {
+                                    'found': True,
+                                    'container_index': containers_scanned,
+                                    'creation_time': container_time,
+                                    'prompt': container_prompt
+                                }
+                                
+                            except Exception as click_error:
+                                logger.warning(f"   ⚠️ Failed to click target container: {click_error}")
+                                # Still return success since we found it
+                                return {
+                                    'found': True,
+                                    'container_index': containers_scanned,
+                                    'creation_time': container_time,
+                                    'prompt': container_prompt
+                                }
+                        
+                    except Exception as e:
+                        logger.debug(f"   ❌ Error processing container {containers_scanned}: {e}")
+                        continue
+                
+                # If target not found in current containers, try scrolling for more
+                if scroll_attempts < max_scroll_attempts:
+                    logger.debug(f"   📜 Target not found in current containers, scrolling for more...")
+                    
+                    # Wait for DOM updates after previous scroll (if any)
+                    if scroll_attempts > 0:
+                        logger.debug("   ⏳ Waiting for DOM updates after scroll...")
+                        await page.wait_for_timeout(2000)  # 2 seconds for DOM updates
+                        try:
+                            await page.wait_for_load_state('networkidle', timeout=3000)
+                        except:
+                            pass  # Continue if networkidle timeout
+                    
+                    # Perform scroll
+                    try:
+                        await page.evaluate(f"window.scrollBy(0, {self.config.scroll_amount})")
+                        await page.wait_for_timeout(1500)  # Wait for new content to load
+                        scroll_attempts += 1
+                        
+                        # Check if new containers appeared
+                        new_containers = await page.query_selector_all("div[class*='thumsCou']")
+                        if len(new_containers) > current_container_count:
+                            logger.debug(f"   ✅ Scroll successful: {len(new_containers) - current_container_count} new containers")
+                        else:
+                            logger.debug(f"   ⚠️ Scroll attempt {scroll_attempts}: No new containers found")
+                            
+                    except Exception as scroll_error:
+                        logger.debug(f"   ❌ Scroll error: {scroll_error}")
+                        scroll_attempts += 1
+                        continue
+                else:
+                    logger.warning(f"   🔚 Reached maximum scroll attempts ({max_scroll_attempts}) without finding target")
+                    break
+            
+            logger.warning(f"   🔍 START_FROM: Target datetime '{target_datetime}' not found after scanning {containers_scanned} containers")
+            return {
+                'found': False,
+                'containers_scanned': containers_scanned,
+                'error': f'Target datetime not found after {containers_scanned} containers'
+            }
+            
+        except Exception as e:
+            logger.error(f"   ❌ START_FROM search error: {e}")
+            return {
+                'found': False,
+                'error': str(e)
+            }

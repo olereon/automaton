@@ -1265,6 +1265,7 @@ class AutomationGUI:
         
         elif action_type == ActionType.START_GENERATION_DOWNLOADS:
             # Handle start generation downloads action
+            start_from_value = field_vars.get('start_from', tk.StringVar()).get().strip()
             config_data = {
                 'max_downloads': int(field_vars.get('max_downloads', tk.StringVar()).get() or 50),
                 'downloads_folder': field_vars.get('downloads_folder', tk.StringVar()).get(),
@@ -1279,6 +1280,9 @@ class AutomationGUI:
                 'generation_date_selector': '.sc-eWXuyo.gwshYN',
                 'prompt_selector': 'span[aria-describedby]'
             }
+            # Only add start_from if it's not empty
+            if start_from_value:
+                config_data['start_from'] = start_from_value
             action_data['value'] = config_data
         
         elif action_type in [ActionType.STOP_GENERATION_DOWNLOADS, ActionType.CHECK_GENERATION_STATUS]:
@@ -1671,16 +1675,25 @@ class AutomationGUI:
             field_vars['completed_task_selector'] = tk.StringVar()
             ttk.Entry(parent, textvariable=field_vars['completed_task_selector'], width=entry_width).pack(anchor=tk.W, pady=(0, 10))
             
+            # Start from datetime (optional)
+            ttk.Label(parent, text="Start From Datetime (Optional):").pack(anchor=tk.W, pady=(0, 5))
+            ttk.Label(parent, text="Format: DD MMM YYYY HH:MM:SS (e.g., '03 Sep 2025 16:15:18')", 
+                     font=('Arial', 8)).pack(anchor=tk.W, pady=(0, 5))
+            field_vars['start_from'] = tk.StringVar()
+            ttk.Entry(parent, textvariable=field_vars['start_from'], width=entry_width).pack(anchor=tk.W, pady=(0, 10))
+            
             # Set current values if editing
             if action_data and action_data.get('value'):
                 config_data = action_data['value']
                 field_vars['max_downloads'].set(str(config_data.get('max_downloads', 50)))
                 field_vars['downloads_folder'].set(config_data.get('downloads_folder', '/home/olereon/workspace/github.com/olereon/automaton/downloads/vids'))
                 field_vars['completed_task_selector'].set(config_data.get('completed_task_selector', "div[id$='__8']"))
+                field_vars['start_from'].set(config_data.get('start_from', ''))
             else:
                 field_vars['max_downloads'].set('50')
                 field_vars['downloads_folder'].set('/home/olereon/workspace/github.com/olereon/automaton/downloads/vids')
                 field_vars['completed_task_selector'].set("div[id$='__8']")
+                field_vars['start_from'].set('')
         
         elif action_type in [ActionType.STOP_GENERATION_DOWNLOADS, ActionType.CHECK_GENERATION_STATUS]:
             # These actions don't need additional fields

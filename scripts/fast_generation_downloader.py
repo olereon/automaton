@@ -29,9 +29,10 @@ except ImportError:
 class FastGenerationDownloader:
     """Optimized generation downloader with duplicate detection and fast processing"""
     
-    def __init__(self, config_path: str, duplicate_mode: str = "finish"):
+    def __init__(self, config_path: str, duplicate_mode: str = "finish", start_from: str = None):
         self.config_path = Path(config_path)
         self.duplicate_mode = duplicate_mode.lower()
+        self.start_from = start_from
         self.downloads_folder = None
         self.existing_files = set()
         
@@ -40,6 +41,10 @@ class FastGenerationDownloader:
             print("   📌 Will skip duplicates and continue searching for new generations")
         else:
             print("   📌 Will stop when reaching previously downloaded content")
+            
+        if self.start_from:
+            print(f"🎯 Start From: {self.start_from}")
+            print("   📌 Will search for this generation and start downloading from the next one")
         
     def scan_existing_files(self):
         """Scan downloads folder for existing files and extract creation times"""
@@ -96,6 +101,11 @@ class FastGenerationDownloader:
                 # CRITICAL: Always ensure duplicate checking is enabled
                 action_data['value']['duplicate_check_enabled'] = True
                 print("   ✅ Set duplicate_check_enabled = True (CRITICAL FIX)")
+                
+                # Add start_from parameter if specified
+                if self.start_from:
+                    action_data['value']['start_from'] = self.start_from
+                    print(f"   🎯 Set start_from = '{self.start_from}'")
                 
                 if self.duplicate_mode == "skip":
                     # Set SKIP mode parameters
@@ -258,6 +268,12 @@ Examples:
   
   # Run with FINISH mode (stop on duplicates) - explicit
   python fast_generation_downloader.py --mode finish
+  
+  # Start from specific generation
+  python fast_generation_downloader.py --start-from "03 Sep 2025 16:15:18"
+  
+  # Combine start-from with SKIP mode
+  python fast_generation_downloader.py --mode skip --start-from "03 Sep 2025 16:15:18"
         """
     )
     
@@ -281,6 +297,12 @@ Examples:
         help='Only scan existing files and exit (useful for debugging)'
     )
     
+    parser.add_argument(
+        '--start-from', '-f',
+        type=str,
+        help='Start downloads from specific datetime (format: "DD MMM YYYY HH:MM:SS", e.g., "03 Sep 2025 16:15:18")'
+    )
+    
     return parser.parse_args()
 
 
@@ -298,10 +320,14 @@ async def main():
         print("📌 SKIP mode: Will continue searching past duplicate generations")
     else:
         print("📌 FINISH mode: Will stop when reaching previously downloaded content")
+        
+    if args.start_from:
+        print(f"🎯 Start from: {args.start_from}")
+        print("📌 Will search for this generation and start downloading from the next one")
     
     print("=" * 60)
     
-    downloader = FastGenerationDownloader(args.config, args.mode)
+    downloader = FastGenerationDownloader(args.config, args.mode, args.start_from)
     
     # If scan-only mode, just scan and exit
     if args.scan_only:
