@@ -94,7 +94,10 @@ class GenerationDownloadHandlers:
                 duplicate_mode=duplicate_mode,
                 stop_on_duplicate=config_data.get('stop_on_duplicate', duplicate_mode == DuplicateMode.FINISH),
                 duplicate_check_enabled=True,  # CRITICAL FIX: Always enable duplicate checking
-                creation_time_comparison=config_data.get('creation_time_comparison', True)
+                creation_time_comparison=config_data.get('creation_time_comparison', True),
+                
+                # START_FROM PARAMETER (CRITICAL FIX: was missing!)
+                start_from=config_data.get('start_from')  # None by default, set if provided
             )
             
             # Initialize the generation download manager

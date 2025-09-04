@@ -115,7 +115,7 @@ class TestStartFromFunctionality:
         result = await manager._find_start_from_generation(mock_page, "03 Sep 2025 16:15:18")
         
         assert result['found'] == False
-        assert 'No containers found' in result['error']
+        assert 'No generation containers found on /generate page' in result['error']
     
     @pytest.mark.asyncio
     async def test_find_start_from_generation_target_found(self, download_manager_with_start_from):

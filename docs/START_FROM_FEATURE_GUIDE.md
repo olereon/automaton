@@ -11,13 +11,25 @@ The `start_from` feature allows you to begin generation downloads from a specifi
 
 ## How It Works
 
-The `start_from` feature works on the main **/generate page** (not the thumbnails gallery) by scanning generation containers to find the specified creation datetime. When found:
+The `start_from` feature works on the main **/generate page** (not the thumbnails gallery) by scanning generation containers to find the specified creation datetime. **It NEVER navigates to the thumbnails gallery**.
 
+### When Target Found:
 1. **Generation Container Search**: Scans containers on /generate page using same selectors as boundary detection (`div[id$='__0']`, `div[id$='__1']`, etc.)
 2. **Target Location**: Finds the generation container with the specified datetime
 3. **Gallery Opening**: Clicks the target generation container to open it in the gallery
 4. **Download Start**: Downloads begin from this position in the gallery
-5. **Same as Boundary Detection**: Uses identical container scanning approach as proven boundary search
+
+### When Target NOT Found:
+1. **Generation Container Mode**: Automatically switches to processing generation containers directly on /generate page
+2. **No Thumbnail Navigation**: **NEVER** falls back to thumbnail gallery navigation
+3. **Direct Processing**: Works with available generation containers on /generate page
+4. **Same Approach**: Uses identical container scanning as proven boundary detection
+
+### Key Benefits:
+- **Consistent Interface**: Always works with /generate page containers
+- **No Gallery Switch**: Avoids thumbnail navigation complexity
+- **Proven Methods**: Uses same reliable scrolling and detection as boundary search
+- **Graceful Fallback**: Smooth transition when target not found
 
 ## Usage
 
@@ -237,6 +249,37 @@ python3.11 scripts/fast_generation_downloader.py --mode finish --start-from "03 
 - Watch logs for search progress and success/failure
 - Use debug logging to see container scanning details
 - Check for warning messages about fallback behavior
+
+## Important Fix: September 2025
+
+### Issue Resolved: Thumbnail Navigation
+**Problem**: Previously, when `start_from` target was not found, the automation would fall back to thumbnail gallery navigation, causing confusion and failures.
+
+**Solution**: As of September 2025, `start_from` feature **ALWAYS** stays on the /generate page and **NEVER** navigates to thumbnails gallery, regardless of whether the target is found or not.
+
+### Expected Behavior (Fixed):
+- ✅ **Target Found**: Opens the target generation in gallery, starts downloads from there
+- ✅ **Target Not Found**: Switches to "Generation Container Mode" and processes available containers on /generate page directly
+- ✅ **No Thumbnail Navigation**: Never attempts to navigate to the thumbnails gallery
+- ✅ **Consistent Interface**: Always works with generation containers on /generate page
+- ✅ **Proven Methods**: Uses the same reliable scrolling methods as boundary detection
+
+### Log Messages to Expect:
+```
+🎯 START_FROM MODE: Searching for generation with datetime '03 Sep 2025 16:15:18'
+   🔍 Using boundary detection container scanning on /generate page...
+   
+# If target found:
+✅ START_FROM: Found target generation, ready to begin downloads from next generation
+
+# If target not found:
+⚠️ START_FROM: Could not find generation with datetime '03 Sep 2025 16:15:18'
+🎯 START_FROM: Since start_from was specified, staying on /generate page (no thumbnail navigation)
+🚀 START_FROM: Using generation containers on /generate page as primary interface
+🎯 GENERATION CONTAINER MODE: Working directly with generation containers on /generate page
+```
+
+This fix ensures that `start_from` behaves predictably and consistently, using the same proven container detection methods as the boundary search feature.
 
 ## Examples
 

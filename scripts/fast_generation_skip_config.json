@@ -57,7 +57,7 @@
         
         "_comment_fast_scroll": "Fast infinite scroll configuration",
         "scroll_batch_size": 10,
-        "scroll_amount": 800,
+        "scroll_amount": 2500,
         "scroll_wait_time": 1000,
         "max_scroll_attempts": 10,
         

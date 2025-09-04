@@ -53,7 +53,7 @@ class TestStartFromScrollingFix:
         # Verify boundary_scroll_manager was initialized
         assert download_manager.boundary_scroll_manager is not None
         assert result['found'] == False  # Expected since no containers
-        assert 'No containers found' in result['error']
+        assert 'No generation containers found on /generate page' in result['error']
     
     @pytest.mark.asyncio
     async def test_start_from_uses_boundary_scroll_manager_for_scrolling(self, download_manager):
@@ -64,12 +64,14 @@ class TestStartFromScrollingFix:
         mock_container = AsyncMock()
         mock_container.text_content.return_value = "Creation Time 04 Sep 2025 10:20:30\\nSome other prompt..."
         
-        # Return containers on first call, then empty to trigger scrolling
-        mock_page.query_selector_all.side_effect = [
-            [mock_container],  # Initial containers
-            [mock_container],  # After first scroll attempt (no new containers)
-            []  # Force end of search
-        ]
+        # Return containers for specific selector, then empty to trigger scrolling
+        def mock_query_selector_all(selector):
+            if selector == "div[id$='__0']":
+                return [mock_container]  # Return container for first selector only
+            else:
+                return []  # No containers for other selectors
+        
+        mock_page.query_selector_all.side_effect = mock_query_selector_all
         
         # Mock BoundaryScrollManager
         mock_boundary_scroll_manager = AsyncMock()

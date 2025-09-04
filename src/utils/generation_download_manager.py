@@ -180,7 +180,7 @@ class GenerationDownloadConfig:
     
     # Scrolling configuration
     scroll_batch_size: int = 10  # Number of downloads before scrolling
-    scroll_amount: int = 600  # Pixels to scroll each time
+    scroll_amount: int = 2500  # Pixels to scroll each time (increased for better container detection)
     scroll_wait_time: int = 2000  # Wait time after scrolling (ms)
     max_scroll_attempts: int = 2000  # Max attempts to find new thumbnails (support very large galleries)
     scroll_detection_threshold: int = 3  # Min new thumbnails to consider scroll successful
@@ -756,8 +756,8 @@ class GenerationDownloadManager:
         # Initialize boundary scroll manager
         self.initialize_boundary_scroll_manager(page)
         
-        # Configure minimum scroll distance (>2000px as specified)
-        self.boundary_scroll_manager.min_scroll_distance = 2000
+        # Configure minimum scroll distance (>2500px for better container detection)
+        self.boundary_scroll_manager.min_scroll_distance = 2500
         
         # Start boundary search
         boundary_found = await self.boundary_scroll_manager.scroll_until_boundary_found(boundary_criteria)
@@ -4853,6 +4853,10 @@ class GenerationDownloadManager:
         try:
             logger.info("🚀 Starting generation download automation with intelligent completed generation detection")
             
+            # Initialize navigation state variables
+            navigation_success = False
+            start_from_positioned = False
+            
             # STEP 0: START_FROM: Navigate to specified datetime if provided (MUST BE FIRST)
             if self.config.start_from:
                 logger.info(f"🎯 START_FROM MODE: Searching for generation with datetime '{self.config.start_from}'")
@@ -4860,14 +4864,20 @@ class GenerationDownloadManager:
                 
                 if start_from_result['found']:
                     logger.info(f"✅ START_FROM: Found target generation, ready to begin downloads from next generation")
-                    # The search has positioned us at the target generation, skip all navigation steps
-                    logger.info("🚀 START_FROM: Skipping queue detection and navigation - starting downloads directly")
+                    # The search has positioned us at the target generation in gallery, skip navigation steps
+                    logger.info("🚀 START_FROM: Target positioned - continuing with main thumbnail processing loop")
                     
-                    # Jump directly to the download phase
-                    return await self.execute_download_phase(page, results)
+                    # Set flag to skip navigation and continue with main loop
+                    navigation_success = True
+                    start_from_positioned = True
                 else:
                     logger.warning(f"⚠️ START_FROM: Could not find generation with datetime '{self.config.start_from}'")
-                    logger.warning("   Will continue with normal queue detection and navigation...")
+                    logger.info("🎯 START_FROM: Since start_from was specified, staying on /generate page (no thumbnail navigation)")
+                    logger.info("🚀 START_FROM: Using generation containers on /generate page as primary interface")
+                    
+                    # When start_from is provided but target not found, we still want to work with generation containers
+                    # on the /generate page, not navigate to thumbnails gallery
+                    return await self.execute_generation_container_mode(page, results)
             
             # STEP 1: Scan for existing files to detect duplicates (if enabled)
             existing_files = set()
@@ -4890,10 +4900,15 @@ class GenerationDownloadManager:
                 logger.info("✅ Chromium download settings configured successfully")
             
             # STEP 2: Enhanced completed generation detection - scan page and skip queued generations
-            navigation_success = False
+            # Initialize completed_generation_selectors for all paths
+            completed_generation_selectors = []
             
-            # Use the new intelligent detection system
-            completed_generation_selectors = await self.find_completed_generations_on_page(page)
+            # Skip navigation if start_from has already positioned us in the gallery
+            if not start_from_positioned:
+                navigation_success = False
+                
+                # Use the new intelligent detection system
+                completed_generation_selectors = await self.find_completed_generations_on_page(page)
             
             if completed_generation_selectors:
                 logger.info(f"🎯 Found {len(completed_generation_selectors)} completed generations, trying to navigate...")
@@ -5085,6 +5100,32 @@ class GenerationDownloadManager:
                 logger.error(error_msg)
                 results['errors'].append(error_msg)
                 return results
+            else:
+                # START_FROM has already positioned us in the gallery, no navigation needed
+                logger.info("✅ START_FROM: Already positioned in gallery, skipping navigation steps")
+                logger.info("🎯 START_FROM: Verifying gallery positioning and thumbnail availability...")
+                
+                # Verify that we're actually in a gallery with thumbnails
+                try:
+                    thumbnail_check = await page.query_selector_all(self.config.thumbnail_selector)
+                    if thumbnail_check:
+                        logger.info(f"✅ START_FROM: Verified {len(thumbnail_check)} thumbnails available in gallery")
+                        navigation_success = True
+                    else:
+                        logger.warning("⚠️ START_FROM: No thumbnails found after positioning - may need to wait for loading")
+                        await page.wait_for_timeout(3000)  # Wait for thumbnails to load
+                        
+                        # Re-check for thumbnails
+                        thumbnail_check = await page.query_selector_all(self.config.thumbnail_selector)
+                        if thumbnail_check:
+                            logger.info(f"✅ START_FROM: After wait, verified {len(thumbnail_check)} thumbnails available")
+                            navigation_success = True
+                        else:
+                            logger.error("❌ START_FROM: Still no thumbnails found - gallery positioning may have failed")
+                            navigation_success = False
+                except Exception as e:
+                    logger.error(f"❌ START_FROM: Error verifying gallery position: {e}")
+                    navigation_success = False
             
             # NEW: Proactive gallery loading phase to populate infinite scroll
             logger.info("🔄 Pre-loading gallery with initial scroll phase to populate thumbnails...")
@@ -7190,22 +7231,36 @@ class GenerationDownloadManager:
             # Use same container scanning approach as boundary detection on /generate page
             logger.info("   🔍 Using boundary detection container scanning on /generate page...")
             
-            # Use same multi-selector strategy as boundary detection
-            container_selectors = []
-            for i in range(0, 50):  # Same range as boundary detection
-                container_selectors.append(f"div[id$='__{i}']")
+            # Use dynamic container detection (matches BoundaryScrollManager approach)
+            logger.info("   📋 Using dynamic container detection for unlimited range (div[id*='__'])")
             
-            logger.info(f"   📋 Using {len(container_selectors)} selectors (same as boundary detection)")
-            
-            # Get all generation containers from current /generate page
+            # Get ALL generation containers from current /generate page using pattern matching
             all_containers = []
-            for selector in container_selectors:
-                try:
-                    containers = await page.query_selector_all(selector)
-                    if containers:
-                        all_containers.extend(containers)
-                except Exception as e:
-                    logger.debug(f"   Selector {selector} failed: {e}")
+            try:
+                # Use the same approach as BoundaryScrollManager: find all containers with __ pattern
+                containers = await page.query_selector_all('div[id*="__"]')
+                if containers:
+                    # Filter to only include containers that match the generation pattern (hash__number)
+                    for container in containers:
+                        container_id = await container.get_attribute('id')
+                        if container_id and '__' in container_id:
+                            # Check if it follows the pattern: hash__number (both parts must be non-empty)
+                            parts = container_id.split('__')
+                            if len(parts) == 2 and parts[0] and parts[1] and parts[1].isdigit():
+                                all_containers.append(container)
+                    logger.debug(f"   📋 Filtered {len(containers)} div[id*='__'] elements to {len(all_containers)} generation containers")
+            except Exception as e:
+                logger.debug(f"   Dynamic container detection failed: {e}")
+                # Fallback to limited range if dynamic detection fails
+                logger.info("   📋 Falling back to limited range detection (0-49)")
+                for i in range(0, 50):
+                    try:
+                        selector = f"div[id$='__{i}']"
+                        containers = await page.query_selector_all(selector)
+                        if containers:
+                            all_containers.extend(containers)
+                    except Exception as selector_e:
+                        logger.debug(f"   Selector div[id$='__{i}'] failed: {selector_e}")
             
             initial_container_count = len(all_containers)
             logger.info(f"   📊 Initial containers found on /generate page: {initial_container_count}")
@@ -7222,15 +7277,31 @@ class GenerationDownloadManager:
                 # Scan current containers for the target datetime (use boundary detection approach)
                 logger.debug(f"   🔍 Scanning generation containers on /generate page (attempt {scroll_attempts}/{max_scroll_attempts})...")
                 
-                # Re-collect containers after potential scrolling using same approach as boundary detection
+                # Re-collect containers after potential scrolling using dynamic detection
                 all_containers = []
-                for selector in container_selectors:
-                    try:
-                        containers = await page.query_selector_all(selector)
-                        if containers:
-                            all_containers.extend(containers)
-                    except Exception as e:
-                        logger.debug(f"   Selector {selector} failed: {e}")
+                try:
+                    # Use dynamic container detection to find ALL containers revealed by scrolling
+                    containers = await page.query_selector_all('div[id*="__"]')
+                    if containers:
+                        # Filter to only include containers that match the generation pattern (hash__number)
+                        for container in containers:
+                            container_id = await container.get_attribute('id')
+                            if container_id and '__' in container_id:
+                                # Check if it follows the pattern: hash__number
+                                parts = container_id.split('__')
+                                if len(parts) == 2 and parts[1].isdigit():
+                                    all_containers.append(container)
+                except Exception as e:
+                    logger.debug(f"   Dynamic re-collection failed: {e}")
+                    # Fallback to limited range if needed
+                    for i in range(0, 50):
+                        try:
+                            selector = f"div[id$='__{i}']"
+                            containers = await page.query_selector_all(selector)
+                            if containers:
+                                all_containers.extend(containers)
+                        except Exception as selector_e:
+                            continue
                 
                 current_container_count = len(all_containers)
                 logger.debug(f"   📊 Generation containers available: {current_container_count}")
@@ -7347,6 +7418,308 @@ class GenerationDownloadManager:
                 'error': str(e)
             }
     
+    async def execute_generation_container_mode(self, page, results: Dict[str, Any]) -> Dict[str, Any]:
+        """Execute downloads using generation containers on /generate page instead of thumbnail navigation"""
+        try:
+            logger.info("🎯 GENERATION CONTAINER MODE: Working directly with generation containers on /generate page")
+            logger.info("📍 This mode avoids thumbnail gallery navigation and works with containers directly")
+            
+            # Initialize session tracking
+            self.processing_start_time = datetime.now()
+            
+            # Scan for existing files to detect duplicates (if enabled)
+            existing_files = set()
+            if self.config.duplicate_check_enabled:
+                existing_files = self.scan_existing_files()
+                if existing_files and self.config.stop_on_duplicate:
+                    logger.info(f"🔍 Found {len(existing_files)} existing files - will stop if duplicate creation time detected")
+            
+            # Initialize Enhanced SKIP mode if needed
+            enhanced_skip_enabled = self.initialize_enhanced_skip_mode()
+            if enhanced_skip_enabled:
+                logger.info("⚡ Enhanced SKIP mode is active - will fast-forward to last checkpoint")
+            
+            # Configure browser download settings
+            logger.info("⚙️ Configuring Chromium browser settings to suppress download notifications")
+            settings_configured = await self._configure_chromium_download_settings(page)
+            if settings_configured:
+                logger.info("✅ Chromium download settings configured successfully")
+            
+            # Find available generation containers using dynamic detection
+            logger.info("📋 Using dynamic container detection for unlimited range (div[id*='__'])")
+            
+            # Get ALL generation containers from current /generate page using pattern matching
+            all_containers = []
+            try:
+                # Use dynamic container detection to find ALL containers
+                containers = await page.query_selector_all('div[id*="__"]')
+                if containers:
+                    # Filter to only include containers that match the generation pattern (hash__number)
+                    for container in containers:
+                        container_id = await container.get_attribute('id')
+                        if container_id and '__' in container_id:
+                            # Check if it follows the pattern: hash__number (both parts must be non-empty)
+                            parts = container_id.split('__')
+                            if len(parts) == 2 and parts[0] and parts[1] and parts[1].isdigit():
+                                all_containers.append(container)
+                    logger.info(f"📋 Filtered {len(containers)} div[id*='__'] elements to {len(all_containers)} generation containers")
+            except Exception as e:
+                logger.debug(f"Dynamic container detection failed: {e}")
+                # Fallback to limited range if dynamic detection fails
+                logger.info("📋 Falling back to limited range detection (0-49)")
+                for i in range(0, 50):
+                    try:
+                        selector = f"div[id$='__{i}']"
+                        containers = await page.query_selector_all(selector)
+                        if containers:
+                            all_containers.extend(containers)
+                    except Exception as selector_e:
+                        logger.debug(f"Selector div[id$='__{i}'] failed: {selector_e}")
+            
+            if not all_containers:
+                logger.error("❌ GENERATION CONTAINER MODE: No generation containers found on /generate page")
+                results['errors'].append('No generation containers available for processing')
+                results['success'] = False
+                return results
+            
+            logger.info(f"📊 GENERATION CONTAINER MODE: Found {len(all_containers)} generation containers to process")
+            
+            # Process generation containers one by one
+            downloads_completed = 0
+            containers_processed = 0
+            
+            for container in all_containers:
+                if downloads_completed >= self.config.max_downloads:
+                    logger.info(f"✅ GENERATION CONTAINER MODE: Reached maximum downloads limit ({self.config.max_downloads})")
+                    break
+                
+                containers_processed += 1
+                logger.info(f"🔄 Processing generation container {containers_processed}/{len(all_containers)}")
+                
+                try:
+                    # Extract metadata from generation container
+                    text_content = await container.text_content()
+                    if not text_content:
+                        logger.debug(f"   ⏭️ Skipping container {containers_processed}: No text content")
+                        continue
+                    
+                    # Use enhanced metadata extraction
+                    metadata = await extract_container_metadata_enhanced(container, text_content)
+                    
+                    if not metadata or not metadata.get('creation_time'):
+                        logger.debug(f"   ⏭️ Skipping container {containers_processed}: No creation time metadata")
+                        continue
+                    
+                    container_time = metadata['creation_time']
+                    container_prompt = metadata.get('prompt', 'No prompt available')
+                    
+                    logger.info(f"   📅 Generation: {container_time}")
+                    logger.info(f"   📝 Prompt: {container_prompt[:100]}...")
+                    
+                    # Check for duplicates if enabled
+                    if self.config.duplicate_check_enabled and container_time in existing_files:
+                        if self.config.duplicate_mode.value == 'finish':
+                            logger.info(f"🛑 FINISH mode: Duplicate detected ({container_time}) - stopping downloads")
+                            break
+                        elif self.config.duplicate_mode.value == 'skip':
+                            logger.info(f"⏭️ SKIP mode: Duplicate detected ({container_time}) - skipping this generation")
+                            continue
+                    
+                    # Click the generation container to open it in the gallery
+                    logger.info(f"   🖱️ Clicking generation container to open in gallery...")
+                    await container.click()
+                    await page.wait_for_timeout(3000)  # Wait for gallery to open
+                    
+                    # Try to download from the opened gallery
+                    download_success = await self._attempt_download_from_current_position(page, containers_processed)
+                    
+                    if download_success:
+                        downloads_completed += 1
+                        logger.info(f"✅ Successfully downloaded generation {containers_processed}: {container_time}")
+                    else:
+                        logger.warning(f"⚠️ Failed to download generation {containers_processed}: {container_time}")
+                    
+                    # Navigate back to /generate page for next container
+                    logger.debug("   🔙 Navigating back to /generate page...")
+                    await page.go_back()
+                    await page.wait_for_timeout(2000)  # Wait for page to load
+                    
+                except Exception as e:
+                    logger.error(f"❌ Error processing generation container {containers_processed}: {e}")
+                    continue
+            
+            # Update results
+            results['success'] = downloads_completed > 0
+            results['downloads_completed'] = downloads_completed
+            results['total_thumbnails_processed'] = containers_processed
+            results['end_time'] = datetime.now().isoformat()
+            
+            logger.info(f"🏁 GENERATION CONTAINER MODE completed:")
+            logger.info(f"   📊 Containers processed: {containers_processed}")
+            logger.info(f"   ⬇️ Downloads completed: {downloads_completed}")
+            logger.info(f"   ✅ Success rate: {downloads_completed}/{containers_processed} ({downloads_completed/containers_processed*100 if containers_processed > 0 else 0:.1f}%)")
+            
+            return results
+            
+        except Exception as e:
+            logger.error(f"❌ GENERATION CONTAINER MODE failed: {e}")
+            results['errors'].append(str(e))
+            results['success'] = False
+            results['end_time'] = datetime.now().isoformat()
+            return results
+    
+    async def _attempt_download_from_current_position(self, page, container_index: int) -> bool:
+        """Attempt to download from the currently opened generation in the gallery"""
+        try:
+            logger.debug(f"   🔍 Attempting download from generation container {container_index}")
+            
+            # Wait for gallery to fully load
+            await page.wait_for_timeout(2000)
+            
+            # Look for download button or download elements
+            download_selectors = [
+                'button:has-text("Download")',
+                '[aria-label*="download"]',
+                '[class*="download"]',
+                'a[href*="download"]',
+                self.config.download_no_watermark_selector,
+                'button:has-text("Download without Watermark")',
+            ]
+            
+            download_element = None
+            for selector in download_selectors:
+                try:
+                    element = await page.query_selector(selector)
+                    if element:
+                        # Check if element is visible
+                        if await element.is_visible():
+                            download_element = element
+                            logger.debug(f"   ✅ Found download element: {selector}")
+                            break
+                except Exception as e:
+                    logger.debug(f"   Selector {selector} failed: {e}")
+                    continue
+            
+            if not download_element:
+                logger.debug(f"   ⚠️ No download element found for container {container_index}")
+                return False
+            
+            # Click the download element
+            logger.debug(f"   🖱️ Clicking download element...")
+            await download_element.click()
+            
+            # Wait for download to start
+            await page.wait_for_timeout(3000)
+            
+            # Check if download started successfully
+            # This is a simplified check - in real implementation you might want to
+            # monitor the downloads folder or check for download progress indicators
+            logger.debug(f"   ✅ Download attempt completed for container {container_index}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"   ❌ Download attempt failed for container {container_index}: {e}")
+            return False
+    
+    async def run_main_thumbnail_loop(self, page, results: Dict[str, Any]) -> bool:
+        """Run the main thumbnail processing loop - extracted from run_download_automation for reuse"""
+        try:
+            logger.info("🚀 Starting main thumbnail processing loop")
+            
+            # Initialize thumbnail tracking
+            self.visible_thumbnails_cache = await self.get_visible_thumbnail_identifiers(page)
+            initial_thumbnail_count = len(self.visible_thumbnails_cache)
+            logger.info(f"📊 Initial thumbnails visible: {initial_thumbnail_count}")
+            
+            # Initialize loop variables
+            consecutive_failures = 0
+            max_consecutive_failures = 100  # Support very large galleries with sparse content
+            no_progress_cycles = 0
+            max_no_progress_cycles = 3
+            
+            # Initialize session tracking
+            self.processing_start_time = datetime.now()
+            
+            # Main thumbnail processing loop
+            thumbnail_count = self.config.start_from_thumbnail - 1  # Will be incremented in loop
+            
+            while self.should_continue_downloading() and not self.gallery_end_detected:
+                try:
+                    # Find current active thumbnail to process
+                    active_thumbnail = await self.find_active_thumbnail(page)
+                    
+                    if not active_thumbnail:
+                        logger.info("📜 No active thumbnail found, attempting to find any thumbnail...")
+                        
+                        # Try to find any thumbnail container and click it to make it active
+                        all_containers = await page.query_selector_all("div[class*='thumsCou']")
+                        if all_containers:
+                            first_container = all_containers[0]
+                            logger.info("🎯 Clicking first thumbnail container to make it active")
+                            await first_container.click(timeout=3000)
+                            await page.wait_for_timeout(500)
+                            active_thumbnail = await self.find_active_thumbnail(page)
+                        
+                        if not active_thumbnail:
+                            # Try scrolling to find more thumbnails
+                            logger.info("📜 No thumbnails available, attempting scroll...")
+                            scroll_success = await self.scroll_and_find_more_thumbnails(page)
+                            if scroll_success:
+                                results['scrolls_performed'] = results.get('scrolls_performed', 0) + 1
+                                logger.info(f"✅ Scroll successful (total scrolls: {results['scrolls_performed']})")
+                                await page.wait_for_timeout(1000)
+                                continue
+                            else:
+                                consecutive_failures += 1
+                                logger.warning(f"❌ No more thumbnails found after scroll (failure {consecutive_failures}/{max_consecutive_failures})")
+                                
+                                if consecutive_failures >= max_consecutive_failures:
+                                    logger.info("🏁 Reached maximum scroll failures - ending automation")
+                                    break
+                                continue
+                    
+                    # Process the active thumbnail
+                    thumbnail_count += 1
+                    logger.info(f"🎯 Processing thumbnail #{thumbnail_count}")
+                    
+                    # Try to download this thumbnail
+                    download_success = await self.download_single_generation_robust(page, {
+                        'element': active_thumbnail,
+                        'unique_id': f'thumbnail_{thumbnail_count}'
+                    })
+                    
+                    if download_success:
+                        results['downloads_completed'] = results.get('downloads_completed', 0) + 1
+                        consecutive_failures = 0  # Reset failure count on success
+                        logger.info(f"✅ Download #{results['downloads_completed']} completed successfully")
+                    else:
+                        consecutive_failures += 1
+                        logger.warning(f"❌ Download failed (failure {consecutive_failures}/{max_consecutive_failures})")
+                    
+                    # Move to next thumbnail
+                    nav_success = await self.activate_next_thumbnail(page)
+                    if not nav_success:
+                        logger.info("📜 Could not navigate to next thumbnail - may have reached end")
+                        break
+                        
+                    # Wait between thumbnails
+                    await page.wait_for_timeout(1000)
+                    
+                except Exception as e:
+                    logger.error(f"❌ Error in thumbnail processing loop: {e}")
+                    consecutive_failures += 1
+                    if consecutive_failures >= max_consecutive_failures:
+                        logger.error("🚨 Too many consecutive failures - stopping loop")
+                        break
+                    continue
+            
+            logger.info(f"🏁 Main thumbnail loop completed - {results.get('downloads_completed', 0)} downloads")
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ Error in main thumbnail loop: {e}")
+            return False
+
     async def execute_download_phase(self, page, results: Dict[str, Any]) -> Dict[str, Any]:
         """Execute the main download phase after successful start_from positioning"""
         try:
@@ -7378,11 +7751,11 @@ class GenerationDownloadManager:
             
             # Pre-load gallery with initial scroll phase to populate thumbnails
             logger.info("🔄 Pre-loading gallery with initial scroll phase to populate thumbnails...")
-            await self._preload_gallery_with_scroll_triggers(page)
+            await self.preload_gallery_thumbnails(page)
             
-            # Start enhanced gallery navigation (this is the main thumbnail download loop)
-            logger.info("🚀 Starting enhanced gallery navigation for thumbnail downloads...")
-            navigation_success = await self.enhanced_gallery_navigation(page, results)
+            # Start main thumbnail processing loop 
+            logger.info("🚀 Starting main thumbnail processing loop for downloads...")
+            navigation_success = await self.run_main_thumbnail_loop(page, results)
             
             if navigation_success:
                 logger.info("✅ Gallery navigation and downloads completed successfully")

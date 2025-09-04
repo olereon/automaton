@@ -47,15 +47,19 @@ class BoundaryScrollManager:
         self.scroll_attempts = 0
         self.detected_containers = set()  # Track container IDs to detect new ones
         self.max_scroll_attempts = 2000  # Support very large galleries with 3000+ generations
-        self.min_scroll_distance = 2000  # Minimum distance per scroll
+        self.min_scroll_distance = 2500  # Minimum distance per scroll (increased for better container detection)
         
     async def get_scroll_position(self) -> Dict:
         """Get current scroll position and container count with comprehensive container detection"""
         try:
             result = await self.page.evaluate("""
                 () => {
-                    // Get all possible generation containers with multiple selector strategies
+                    // Get all possible generation containers with dynamic selector generation
                     const containerSelectors = [
+                        // CRITICAL: Dynamic generation container selectors for any index (0 to 9999+)
+                        // Instead of listing 50 selectors, use a pattern-based approach
+                        'div[id*="__"]',           // All containers with double underscore pattern
+                        // Generic fallback selectors (kept for compatibility)
                         '[data-generation-id]',
                         '.generation-item',
                         '.generation-card',
@@ -125,9 +129,9 @@ class BoundaryScrollManager:
                         clientHeight: document.documentElement.clientHeight,
                         scrollableContainers: scrollableContainers,
                         containers: Array.from(allContainers).map((el, index) => ({
-                            id: el.getAttribute('data-generation-id') || 
+                            id: el.id ||                                           // Primary: actual element ID (for div[id$="__N"])
+                                el.getAttribute('data-generation-id') || 
                                 el.getAttribute('data-spm-anchor-id') || 
-                                el.id || 
                                 `container-${index}`,
                             rect: el.getBoundingClientRect(),
                             visible: el.getBoundingClientRect().top < window.innerHeight && el.getBoundingClientRect().bottom > 0,

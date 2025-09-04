@@ -45,7 +45,7 @@
         "creation_time_comparison": true,
         
         "scroll_batch_size": 15,
-        "scroll_amount": 800,
+        "scroll_amount": 2500,
         "scroll_wait_time": 1500,
         "max_scroll_attempts": 15,
         
