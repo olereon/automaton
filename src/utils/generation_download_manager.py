@@ -1682,7 +1682,14 @@ class GenerationDownloadManager:
             # Find scrollable container and scroll
             scrollable_container = await self._find_scrollable_container(page)
             if scrollable_container:
-                await scrollable_container.evaluate(f"el => el.scrollBy(0, {self.config.scroll_amount})")
+                if scrollable_container == "WINDOW_SCROLL":
+                    # Use window scrolling
+                    await page.evaluate(f"window.scrollBy(0, {self.config.scroll_amount})")
+                    logger.debug(f"🌐 Used window scrolling: {self.config.scroll_amount}px")
+                else:
+                    # Use container scrolling
+                    await scrollable_container.evaluate(f"el => el.scrollBy(0, {self.config.scroll_amount})")
+                    logger.debug(f"📦 Used container scrolling: {self.config.scroll_amount}px")
                 await page.wait_for_timeout(1000)  # Wait for new content to load
                 
                 # Check if new thumbnails appeared (excluding masks)
@@ -2114,20 +2121,38 @@ class GenerationDownloadManager:
             
             if scrollable_container:
                 try:
-                    # Get scroll position before
-                    scroll_before = await scrollable_container.evaluate("el => el.scrollTop")
-                    
-                    # Execute scroll
-                    await scrollable_container.evaluate(f"el => el.scrollBy(0, {self.config.scroll_amount})")
-                    scroll_executed = True
-                    
-                    # Verify scroll actually happened
-                    await page.wait_for_timeout(500)  # Brief wait for scroll to complete
-                    scroll_after = await scrollable_container.evaluate("el => el.scrollTop")
-                    
-                    if scroll_after <= scroll_before:
-                        logger.warning(f"⚠️ Container scroll position didn't change ({scroll_before} → {scroll_after})")
-                        scroll_executed = False
+                    if scrollable_container == "WINDOW_SCROLL":
+                        # Use window scrolling
+                        scroll_before = await page.evaluate("() => window.scrollY")
+                        await page.evaluate(f"window.scrollBy(0, {self.config.scroll_amount})")
+                        scroll_executed = True
+                        
+                        # Verify scroll actually happened
+                        await page.wait_for_timeout(500)  # Brief wait for scroll to complete
+                        scroll_after = await page.evaluate("() => window.scrollY")
+                        
+                        if scroll_after <= scroll_before:
+                            logger.warning(f"⚠️ Window scroll position didn't change ({scroll_before} → {scroll_after})")
+                            scroll_executed = False
+                        else:
+                            logger.debug(f"🌐 Window scroll successful: {scroll_before}px → {scroll_after}px")
+                    else:
+                        # Use container scrolling
+                        scroll_before = await scrollable_container.evaluate("el => el.scrollTop")
+                        
+                        # Execute scroll
+                        await scrollable_container.evaluate(f"el => el.scrollBy(0, {self.config.scroll_amount})")
+                        scroll_executed = True
+                        
+                        # Verify scroll actually happened
+                        await page.wait_for_timeout(500)  # Brief wait for scroll to complete
+                        scroll_after = await scrollable_container.evaluate("el => el.scrollTop")
+                        
+                        if scroll_after <= scroll_before:
+                            logger.warning(f"⚠️ Container scroll position didn't change ({scroll_before} → {scroll_after})")
+                            scroll_executed = False
+                        else:
+                            logger.debug(f"📦 Container scroll successful: {scroll_before}px → {scroll_after}px")
                         
                 except Exception as e:
                     logger.debug(f"Container scroll failed: {e}")
@@ -2190,63 +2215,173 @@ class GenerationDownloadManager:
             return False
     
     async def _find_scrollable_container(self, page) -> Optional[object]:
-        """Find the best scrollable container using enhanced detection"""
-        container_selectors = [
-            self.config.thumbnail_container_selector,
+        """Find the best scrollable container using enhanced detection with fallbacks"""
+        
+        logger.debug("🔍 Starting enhanced scrollable container detection...")
+        
+        # Strategy 1: Try specific gallery containers first
+        specific_selectors = [
+            "div[class*='thumsCou']",  # Known thumbnail container
             ".thumbnail-container",
             ".gallery-container", 
             ".scroll-container",
             ".gallery-content",
             ".content-wrapper",
-            # Parent container patterns
-            f"{self.config.thumbnail_container_selector}",
-            f"{self.config.thumbnail_selector}:first-child",
+            "[class*='gallery']",
+            "[class*='scroll']",
+            "[class*='content']"
         ]
         
-        for selector in container_selectors:
+        for selector in specific_selectors:
             try:
                 containers = await page.query_selector_all(selector)
+                logger.debug(f"   📊 Checking {len(containers)} containers for selector: {selector}")
                 
-                for container in containers:
+                for i, container in enumerate(containers):
                     try:
                         # Enhanced scrollability check
                         scroll_info = await container.evaluate("""el => {
                             const style = getComputedStyle(el);
                             const scrollHeight = el.scrollHeight;
                             const clientHeight = el.clientHeight;
-                            const scrollWidth = el.scrollWidth;
-                            const clientWidth = el.clientWidth;
                             
                             return {
                                 hasVerticalScroll: scrollHeight > clientHeight,
-                                hasHorizontalScroll: scrollWidth > clientWidth,
                                 overflowY: style.overflowY,
-                                overflowX: style.overflowX,
                                 scrollable: scrollHeight > clientHeight || 
-                                           scrollWidth > clientWidth ||
                                            style.overflowY === 'scroll' ||
-                                           style.overflowY === 'auto' ||
-                                           style.overflowX === 'scroll' ||
-                                           style.overflowX === 'auto',
+                                           style.overflowY === 'auto',
                                 rect: el.getBoundingClientRect(),
                                 scrollTop: el.scrollTop,
-                                scrollLeft: el.scrollLeft
+                                scrollHeight: scrollHeight,
+                                clientHeight: clientHeight,
+                                tagName: el.tagName,
+                                className: el.className
                             };
                         }""")
                         
-                        if scroll_info['scrollable'] and scroll_info['rect']['height'] > 100:
-                            logger.debug(f"Found scrollable container: {selector} (scrollHeight: {scroll_info.get('hasVerticalScroll', False)})")
+                        if scroll_info['scrollable'] and scroll_info['rect']['height'] > 50:
+                            logger.info(f"✅ Found scrollable container #{i}: {selector}")
+                            logger.info(f"   📐 Size: {scroll_info['scrollHeight']}px total, {scroll_info['clientHeight']}px visible")
+                            logger.info(f"   🎯 Tag: {scroll_info['tagName']}, Classes: {scroll_info['className'][:50]}...")
                             return container
                             
                     except Exception as e:
-                        logger.debug(f"Error checking container {selector}: {e}")
+                        logger.debug(f"   ❌ Error checking container #{i}: {e}")
                         continue
                         
             except Exception as e:
-                logger.debug(f"Error with selector {selector}: {e}")
+                logger.debug(f"   ❌ Error with selector {selector}: {e}")
                 continue
         
-        logger.debug("No suitable scrollable container found")
+        # Strategy 2: Find ANY scrollable element on the page
+        logger.debug("🔍 Strategy 1 failed, trying universal scrollable element detection...")
+        try:
+            scrollable_elements = await page.evaluate("""
+                () => {
+                    const allElements = document.querySelectorAll('*');
+                    const scrollableElements = [];
+                    
+                    for (const el of allElements) {
+                        try {
+                            const style = getComputedStyle(el);
+                            const scrollHeight = el.scrollHeight;
+                            const clientHeight = el.clientHeight;
+                            
+                            if ((scrollHeight > clientHeight && scrollHeight > 100) ||
+                                style.overflowY === 'scroll' || 
+                                style.overflowY === 'auto') {
+                                
+                                const rect = el.getBoundingClientRect();
+                                if (rect.height > 50) {
+                                    scrollableElements.push({
+                                        tagName: el.tagName,
+                                        className: el.className || '',
+                                        id: el.id || '',
+                                        scrollHeight: scrollHeight,
+                                        clientHeight: clientHeight,
+                                        rect: rect,
+                                        index: scrollableElements.length
+                                    });
+                                }
+                            }
+                        } catch (e) {
+                            // Skip elements that cause errors
+                        }
+                    }
+                    
+                    // Sort by scroll area (largest first)
+                    scrollableElements.sort((a, b) => 
+                        (b.scrollHeight - b.clientHeight) - (a.scrollHeight - a.clientHeight)
+                    );
+                    
+                    return scrollableElements.slice(0, 5); // Return top 5 candidates
+                }
+            """)
+            
+            logger.debug(f"   📊 Found {len(scrollable_elements)} scrollable elements")
+            
+            for element_info in scrollable_elements:
+                try:
+                    # Try to select this element
+                    selector_attempts = []
+                    if element_info['id']:
+                        selector_attempts.append(f"#{element_info['id']}")
+                    if element_info['className']:
+                        # Use first class
+                        first_class = element_info['className'].split()[0]
+                        selector_attempts.append(f".{first_class}")
+                    selector_attempts.append(element_info['tagName'].lower())
+                    
+                    for attempt_selector in selector_attempts:
+                        try:
+                            container = await page.query_selector(attempt_selector)
+                            if container:
+                                # Verify this is the right element
+                                verify_info = await container.evaluate("""el => ({
+                                    scrollHeight: el.scrollHeight,
+                                    clientHeight: el.clientHeight,
+                                    scrollable: el.scrollHeight > el.clientHeight
+                                })""")
+                                
+                                if verify_info['scrollable']:
+                                    logger.info(f"✅ Found universal scrollable element: {attempt_selector}")
+                                    logger.info(f"   📐 Size: {verify_info['scrollHeight']}px total, {verify_info['clientHeight']}px visible")
+                                    return container
+                        except:
+                            continue
+                            
+                except Exception as e:
+                    logger.debug(f"   ❌ Error with scrollable element: {e}")
+                    continue
+                    
+        except Exception as e:
+            logger.debug(f"❌ Universal detection failed: {e}")
+        
+        # Strategy 3: Use document.body or document.documentElement as last resort
+        logger.debug("🔍 Strategy 2 failed, trying document-level scrolling...")
+        try:
+            # Check if document itself is scrollable
+            doc_scroll_info = await page.evaluate("""
+                () => ({
+                    bodyScrollable: document.body.scrollHeight > document.body.clientHeight,
+                    docScrollable: document.documentElement.scrollHeight > document.documentElement.clientHeight,
+                    bodyHeight: document.body.scrollHeight,
+                    docHeight: document.documentElement.scrollHeight,
+                    viewportHeight: window.innerHeight
+                })
+            """)
+            
+            logger.debug(f"   📊 Document scroll info: {doc_scroll_info}")
+            
+            if doc_scroll_info['bodyScrollable'] or doc_scroll_info['docScrollable']:
+                # Return a special marker indicating we should use window scrolling
+                logger.info("✅ Using document-level scrolling (window.scrollBy)")
+                return "WINDOW_SCROLL"  # Special marker
+        except Exception as e:
+            logger.debug(f"❌ Document scroll check failed: {e}")
+        
+        logger.warning("⚠️ No suitable scrollable container found - all strategies failed")
         return None
     
     async def _wait_for_scroll_content_load(self, page) -> None:
@@ -4718,14 +4853,30 @@ class GenerationDownloadManager:
         try:
             logger.info("🚀 Starting generation download automation with intelligent completed generation detection")
             
-            # STEP 0: Scan for existing files to detect duplicates (if enabled)
+            # STEP 0: START_FROM: Navigate to specified datetime if provided (MUST BE FIRST)
+            if self.config.start_from:
+                logger.info(f"🎯 START_FROM MODE: Searching for generation with datetime '{self.config.start_from}'")
+                start_from_result = await self._find_start_from_generation(page, self.config.start_from)
+                
+                if start_from_result['found']:
+                    logger.info(f"✅ START_FROM: Found target generation, ready to begin downloads from next generation")
+                    # The search has positioned us at the target generation, skip all navigation steps
+                    logger.info("🚀 START_FROM: Skipping queue detection and navigation - starting downloads directly")
+                    
+                    # Jump directly to the download phase
+                    return await self.execute_download_phase(page, results)
+                else:
+                    logger.warning(f"⚠️ START_FROM: Could not find generation with datetime '{self.config.start_from}'")
+                    logger.warning("   Will continue with normal queue detection and navigation...")
+            
+            # STEP 1: Scan for existing files to detect duplicates (if enabled)
             existing_files = set()
             if self.config.duplicate_check_enabled:
                 existing_files = self.scan_existing_files()
                 if existing_files and self.config.stop_on_duplicate:
                     logger.info(f"🔍 Found {len(existing_files)} existing files - will stop if duplicate creation time detected")
             
-            # STEP 0.5: Initialize Enhanced SKIP mode (NEW FEATURE)
+            # STEP 1.5: Initialize Enhanced SKIP mode (NEW FEATURE)
             enhanced_skip_enabled = self.initialize_enhanced_skip_mode()
             if enhanced_skip_enabled:
                 logger.info("⚡ Enhanced SKIP mode is active - will fast-forward to last checkpoint")
@@ -4955,18 +5106,8 @@ class GenerationDownloadManager:
             # Initialize session tracking
             self.processing_start_time = datetime.now()
             
-            # START_FROM: Navigate to specified datetime if provided
-            if self.config.start_from:
-                logger.info(f"🎯 START_FROM MODE: Searching for generation with datetime '{self.config.start_from}'")
-                start_from_result = await self._find_start_from_generation(page, self.config.start_from)
-                
-                if start_from_result['found']:
-                    logger.info(f"✅ START_FROM: Found target generation, ready to begin downloads from next generation")
-                    # The boundary search has positioned us at the target generation
-                    # The automation will start downloading from the next generation
-                else:
-                    logger.warning(f"⚠️ START_FROM: Could not find generation with datetime '{self.config.start_from}'")
-                    logger.warning("   Will start from the beginning of the gallery instead")
+            # START_FROM search already completed at the beginning if needed
+            # If we reach here, either start_from was not used or target not found
             
             # NEW: Simplified landmark-based navigation loop
             # Start counting from the specified starting thumbnail
@@ -7191,3 +7332,60 @@ class GenerationDownloadManager:
                 'found': False,
                 'error': str(e)
             }
+    
+    async def execute_download_phase(self, page, results: Dict[str, Any]) -> Dict[str, Any]:
+        """Execute the main download phase after successful start_from positioning"""
+        try:
+            logger.info("🚀 Starting direct download phase after successful start_from positioning")
+            
+            # Initialize session tracking
+            self.processing_start_time = datetime.now()
+            
+            # Scan for existing files to detect duplicates (if enabled) 
+            existing_files = set()
+            if self.config.duplicate_check_enabled:
+                existing_files = self.scan_existing_files()
+                if existing_files and self.config.stop_on_duplicate:
+                    logger.info(f"🔍 Found {len(existing_files)} existing files - will stop if duplicate creation time detected")
+            
+            # Initialize Enhanced SKIP mode if needed
+            enhanced_skip_enabled = self.initialize_enhanced_skip_mode()
+            if enhanced_skip_enabled:
+                logger.info("⚡ Enhanced SKIP mode is active - will fast-forward to last checkpoint")
+            
+            # Configure browser download settings
+            logger.info("⚙️ Configuring Chromium browser settings to suppress download notifications")
+            settings_configured = await self._configure_chromium_download_settings(page)
+            if settings_configured:
+                logger.info("✅ Chromium download settings configured successfully")
+            
+            # Continue with normal download flow but skip navigation steps
+            logger.info("🔥 Starting main download loop from start_from position (navigation skipped)")
+            
+            # Set flag to indicate start_from was successful so we can skip navigation
+            self._start_from_positioning_successful = True
+            
+            # Pre-load gallery with initial scroll phase
+            logger.info("🔄 Pre-loading gallery with initial scroll phase to populate thumbnails...")
+            await self._preload_gallery_with_scroll_triggers(page)
+            
+            # Start enhanced gallery navigation (this is the main download loop)
+            navigation_success = False
+            navigation_success = await self.enhanced_gallery_navigation(page, results)
+            
+            if navigation_success:
+                logger.info("✅ Gallery navigation and downloads completed successfully")
+                results['success'] = True
+            else:
+                logger.warning("⚠️ Gallery navigation completed with issues")
+                results['success'] = results['downloads_completed'] > 0
+                
+            results['end_time'] = datetime.now().isoformat()
+            return results
+            
+        except Exception as e:
+            logger.error(f"❌ Error in download phase: {e}")
+            results['success'] = False
+            results['errors'].append(str(e))
+            results['end_time'] = datetime.now().isoformat()
+            return results
