@@ -7038,6 +7038,13 @@ class GenerationDownloadManager:
                 'error': f'Invalid datetime format. Expected: DD MMM YYYY HH:MM:SS'
             }
         
+        # Initialize boundary scroll manager if not already done
+        # (needed for verified scrolling methods)
+        if self.boundary_scroll_manager is None:
+            logger.info("   🔧 Initializing boundary scroll manager for start_from search...")
+            self.initialize_boundary_scroll_manager(page)
+            logger.info("   ✅ Boundary scroll manager ready with verified scroll methods")
+        
         try:
             # Use enhanced boundary detection logic but search for specific datetime
             logger.info("   🔍 Using enhanced container detection for start_from search...")
@@ -7126,30 +7133,45 @@ class GenerationDownloadManager:
                 if scroll_attempts < max_scroll_attempts:
                     logger.debug(f"   📜 Target not found in current containers, scrolling for more...")
                     
-                    # Wait for DOM updates after previous scroll (if any)
-                    if scroll_attempts > 0:
-                        logger.debug("   ⏳ Waiting for DOM updates after scroll...")
-                        await page.wait_for_timeout(2000)  # 2 seconds for DOM updates
-                        try:
-                            await page.wait_for_load_state('networkidle', timeout=3000)
-                        except:
-                            pass  # Continue if networkidle timeout
-                    
-                    # Perform scroll
+                    # Use the same verified scrolling methods as boundary search
+                    # (Element.scrollIntoView() and container.scrollTop)
                     try:
-                        await page.evaluate(f"window.scrollBy(0, {self.config.scroll_amount})")
-                        await page.wait_for_timeout(1500)  # Wait for new content to load
+                        logger.debug("   🎯 Using BoundaryScrollManager verified scroll methods...")
+                        
+                        # Use the proven scroll methods with fallback
+                        scroll_result = await self.boundary_scroll_manager.perform_scroll_with_fallback(
+                            target_distance=self.config.scroll_amount
+                        )
+                        
                         scroll_attempts += 1
                         
-                        # Check if new containers appeared
-                        new_containers = await page.query_selector_all("div[class*='thumsCou']")
-                        if len(new_containers) > current_container_count:
-                            logger.debug(f"   ✅ Scroll successful: {len(new_containers) - current_container_count} new containers")
+                        if scroll_result.success and scroll_result.scroll_distance > 50:
+                            logger.debug(f"   ✅ Verified scroll successful: {scroll_result.scroll_distance}px using {scroll_result.method_name}")
+                            
+                            # Check if new containers appeared
+                            new_containers = await page.query_selector_all("div[class*='thumsCou']")
+                            if len(new_containers) > current_container_count:
+                                logger.debug(f"   📊 New containers detected: {len(new_containers) - current_container_count}")
+                            else:
+                                logger.debug(f"   ⚠️ Scroll successful but no new containers visible yet")
+                                
+                            # Wait for DOM updates after successful scroll
+                            logger.debug("   ⏳ Waiting for DOM updates after verified scroll...")
+                            await page.wait_for_timeout(2000)  # Wait for content to load
+                            try:
+                                await page.wait_for_load_state('networkidle', timeout=3000)
+                            except:
+                                pass  # Continue if networkidle timeout
                         else:
-                            logger.debug(f"   ⚠️ Scroll attempt {scroll_attempts}: No new containers found")
+                            logger.debug(f"   ⚠️ Scroll attempt {scroll_attempts}: {scroll_result.method_name} returned {scroll_result.scroll_distance}px")
+                            if scroll_result.error_message:
+                                logger.debug(f"   ❌ Scroll error: {scroll_result.error_message}")
+                            
+                            # Still wait a bit even if scroll seemed to fail
+                            await page.wait_for_timeout(1000)
                             
                     except Exception as scroll_error:
-                        logger.debug(f"   ❌ Scroll error: {scroll_error}")
+                        logger.debug(f"   ❌ BoundaryScrollManager error: {scroll_error}")
                         scroll_attempts += 1
                         continue
                 else:

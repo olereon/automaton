@@ -130,11 +130,13 @@ python3.11 scripts/fast_generation_downloader.py --mode skip --start-from "03 Se
 python3.11 scripts/fast_generation_downloader.py --mode finish --start-from "03 Sep 2025 16:15:18"
 ```
 
-### Enhanced Boundary Detection
-- Uses same robust container detection as boundary scanning
-- Benefits from enhanced metadata extraction
-- Includes retry logic for failed extractions
-- Supports DOM timing and wait strategies
+### Enhanced Scrolling and Detection
+- **Verified Scroll Methods**: Uses the same proven BoundaryScrollManager as boundary search
+  - Primary: `Element.scrollIntoView()` with smart target selection
+  - Fallback: `container.scrollTop` for direct container scrolling
+- **Robust Container Detection**: Same enhanced detection as boundary scanning
+- **Enhanced Metadata Extraction**: Multiple extraction strategies with retry logic
+- **DOM Timing**: Proper wait strategies for dynamic content loading
 
 ## Logging and Debugging
 
