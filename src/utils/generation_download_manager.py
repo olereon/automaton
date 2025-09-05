@@ -196,10 +196,10 @@ class GenerationDownloadConfig:
     prompt_ellipsis_pattern: str = "</span>..."  # Pattern for finding prompt
     download_no_watermark_text: str = "Download without Watermark"
     
-    # OPTIMIZED PROMPT EXTRACTION SETTINGS
+    # OPTIMIZED PROMPT EXTRACTION SETTINGS (UPDATED September 2025)
     extraction_strategy: str = "longest_div"     # Strategy: "longest_div" or "legacy"
-    min_prompt_length: int = 150                 # Minimum chars for full prompt detection
-    prompt_class_selector: str = "div.sc-dDrhAi.dnESm"  # Target prompt div class
+    min_prompt_length: int = 50                  # Reduced for better detection
+    prompt_class_selector: str = ".sc-eKQYOU.bdGRCs"  # UPDATED: New prompt container class
     prompt_indicators: list = None               # Keywords that indicate prompt content
     
     # FAST DOWNLOAD OPTIMIZATION SETTINGS
@@ -235,7 +235,7 @@ class GenerationDownloadConfig:
     download_no_watermark_selector: str = "[data-spm-anchor-id='a2ty_o02.30365920.0.i2.6daf47258YB5qi']"
     
     generation_date_selector: str = ".sc-eJlwcH.gjlyBM span.sc-cSMkSB.hUjUPD:nth-child(2)"
-    prompt_selector: str = ".sc-jJRqov.cxtNJi span[aria-describedby]"
+    prompt_selector: str = ".sc-eKQYOU.bdGRCs span[aria-describedby]"  # UPDATED Sep 2025
     
     # Download settings
     max_downloads: int = 50
@@ -5832,13 +5832,15 @@ class GenerationDownloadManager:
                     
             # Try to get prompt start for comparison
             prompt_selectors = [
-                # Most specific first
-                ".sc-dDrhAi.dnESm span:first-child",  # Main prompt container first span
-                "xpath=//div[contains(@class, 'dnESm')]//span[1]",
-                ".sc-dDrhAi.dnESm span",  # Main prompt container
-                ".sc-jJRqov.cxtNJi span[aria-describedby]",
-                "div.sc-dDrhAi.dnESm",
-                # More general
+                # UPDATED September 2025 - New HTML structure
+                ".sc-eKQYOU.bdGRCs span[aria-describedby]",  # New primary selector
+                ".sc-fileXT.gEIKhI .sc-eKQYOU.bdGRCs span",  # With container context
+                ".sc-eKQYOU.bdGRCs span:first-child",  # First span in new container
+                # Legacy fallbacks (in case of mixed versions)
+                ".sc-dDrhAi.dnESm span:first-child",  # Old prompt container first span
+                ".sc-jJRqov.cxtNJi span[aria-describedby]",  # Old specific selector
+                # Generic fallbacks
+                "span[aria-describedby]",  # Generic aria-described spans
                 "[class*='prompt'] span, [class*='description'] span",
                 "xpath=//span[@aria-describedby]"
             ]
@@ -6945,30 +6947,90 @@ class GenerationDownloadManager:
                             prompt_text = line
                             break
             
-            # Strategy: Try DOM element extraction for real containers (not mocks)
+            # ROBUST STRATEGY: Use relative positioning and ellipsis pattern (Sep 2025)
             if not prompt_text and hasattr(container, 'query_selector_all'):
                 try:
-                    # Look for truncated prompt divs (most reliable)
-                    prompt_divs = await container.query_selector_all('div.sc-dDrhAi.dnESm')
-                    if prompt_divs:
-                        for div in prompt_divs:
-                            div_text = await div.text_content() or ""
-                            if len(div_text) > 20:
-                                # Remove trailing "..." if present
-                                prompt_text = div_text.replace('...', '').strip()
-                                break
+                    # Import the robust relative extractor
+                    from .relative_prompt_extractor import relative_prompt_extractor
                     
-                    # Fallback to span elements if no div found
-                    if not prompt_text:
-                        prompt_elements = await container.query_selector_all('span[aria-describedby], .ant-tooltip-open')
-                        for element in prompt_elements:
-                            element_text = await element.text_content() or ""
-                            # Skip if it looks like a creation time or other metadata
-                            if not re.match(r'\d{1,2}\s+\w{3}\s+\d{4}', element_text) and len(element_text) > 20:
-                                prompt_text = element_text.strip()
-                                break
-                except Exception:
-                    pass  # DOM extraction failed, use text-based approach
+                    # Use the specialized relative extraction
+                    prompt_text = await relative_prompt_extractor.extract_prompt_robust(container)
+                    if prompt_text:
+                        logger.info(f"🎉 Robust extraction succeeded: {prompt_text[:50]}...")
+                
+                except ImportError:
+                    logger.warning("Relative prompt extractor not available, using fallback")
+                except Exception as e:
+                    logger.debug(f"Robust relative extraction failed: {e}")
+                    
+                # Fallback: Simplified structure-based approach
+                if not prompt_text:
+                    try:
+                        # Method 1: Look for ellipsis pattern
+                        ellipsis_elements = await container.query_selector_all('text="..."')
+                        for ellipsis_el in ellipsis_elements[:3]:  # Limit to first 3
+                            # Get parent span with aria-describedby
+                            parent_span = await ellipsis_el.evaluate('''
+                                element => {
+                                    let current = element;
+                                    while (current && current.parentElement) {
+                                        if (current.tagName === 'SPAN' && 
+                                            current.hasAttribute('aria-describedby')) {
+                                            return current;
+                                        }
+                                        current = current.parentElement;
+                                    }
+                                    return null;
+                                }
+                            ''')
+                            
+                            if parent_span:
+                                text = await parent_span.text_content() or ""
+                                clean_text = text.replace('...', '').strip()
+                                if len(clean_text) > 20 and not re.match(r'\d{1,2}\s+\w{3}\s+\d{4}', clean_text):
+                                    prompt_text = clean_text
+                                    logger.info(f"✅ Ellipsis method: {prompt_text[:50]}...")
+                                    break
+                        
+                        # Method 2: Rank aria-describedby spans by length
+                        if not prompt_text:
+                            all_spans = await container.query_selector_all('span[aria-describedby]')
+                            candidates = []
+                            
+                            for span in all_spans:
+                                text = await span.text_content() or ""
+                                clean_text = text.replace('...', '').strip()
+                                
+                                # Skip obvious metadata
+                                if (len(clean_text) > 20 and 
+                                    'Creation Time' not in clean_text and
+                                    not re.match(r'\d{1,2}\s+\w{3}\s+\d{4}', clean_text) and
+                                    not clean_text.startswith('Wan') and 
+                                    not clean_text.endswith('P')):
+                                    
+                                    candidates.append(clean_text)
+                            
+                            # Use longest candidate (most likely full prompt)
+                            if candidates:
+                                prompt_text = max(candidates, key=len)
+                                logger.info(f"✅ Length ranking: {prompt_text[:50]}...")
+                    
+                    except Exception as e:
+                        logger.debug(f"Fallback structure extraction failed: {e}")
+                        
+                # Final fallback: Traditional selectors
+                if not prompt_text:
+                    try:
+                        prompt_divs = await container.query_selector_all('.sc-eKQYOU.bdGRCs, div.sc-dDrhAi.dnESm')
+                        if prompt_divs:
+                            for div in prompt_divs:
+                                div_text = await div.text_content() or ""
+                                if len(div_text) > 20:
+                                    prompt_text = div_text.replace('...', '').strip()
+                                    logger.info(f"✅ Traditional selector: {prompt_text[:50]}...")
+                                    break
+                    except Exception:
+                        pass
             
             if creation_time and prompt_text:
                 logger.debug(f"Extracted container metadata - Time: {creation_time}, Prompt: {prompt_text[:50]}...")
@@ -7077,8 +7139,8 @@ class GenerationDownloadManager:
                         else:
                             continue
                         
-                        # Extract truncated prompt
-                        prompt_element = container.locator('div.sc-dDrhAi.dnESm span').first
+                        # Extract prompt text (UPDATED Sep 2025)
+                        prompt_element = container.locator('.sc-eKQYOU.bdGRCs span, div.sc-dDrhAi.dnESm span').first
                         if await prompt_element.is_visible(timeout=500):
                             truncated_prompt = await prompt_element.text_content()
                             truncated_prompt = truncated_prompt.strip() if truncated_prompt else ""

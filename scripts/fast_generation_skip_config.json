@@ -21,18 +21,53 @@
     },
     {
       "type": "wait",
-      "value": 2000,
+      "value": 1000,
       "description": "Quick wait for page to load after login"
+    },
+    {
+      "type": "check_element",
+      "selector": "button.ant-modal-close[aria-label=\"Close\"]",
+      "value": {
+        "check": "exists",
+        "attribute": "element"
+      },
+      "timeout": 2000,
+      "description": "Check if close button popup exists"
+    },
+    {
+      "type": "if_begin",
+      "value": {
+        "condition": "check_passed"
+      },
+      "description": "If close button exists, click it"
+    },
+    {
+      "type": "click_button",
+      "selector": "button.ant-modal-close[aria-label=\"Close\"]",
+      "value": null,
+      "timeout": 3000,
+      "description": "Click the close button to dismiss popup"
+    },
+    {
+      "type": "if_end",
+      "description": "End conditional close button click"
+    },
+    {
+      "type": "wait",
+      "selector": null,
+      "value": 1000,
+      "timeout": 10000,
+      "description": "Wait for login to complete"
     },
     {
       "type": "start_generation_downloads",
       "value": {
-        "max_downloads": 100,
+        "max_downloads": 5,
         "downloads_folder": "/home/olereon/workspace/github.com/olereon/automaton/downloads/vids",
         "logs_folder": "/home/olereon/workspace/github.com/olereon/automaton/logs",
-        "download_timeout": 5000,
-        "verification_timeout": 8000,
-        "retry_attempts": 2,
+        "download_timeout": 3000,
+        "verification_timeout": 4000,
+        "retry_attempts": 1,
         
         "_comment_enhanced_naming": "Enhanced naming configuration",
         "use_descriptive_naming": true,
@@ -41,10 +76,10 @@
         "date_format": "%Y-%m-%d-%H-%M-%S",
         "id_format": "#{:09d}",
         
-        "_comment_optimized_extraction": "OPTIMIZED: Longest-div prompt extraction strategy",
+        "_comment_optimized_extraction": "UPDATED: Fixed prompt extraction for new HTML structure",
         "extraction_strategy": "longest_div",
-        "extraction_description": "Fast extraction using longest div among 31 prompt divs",
-        "min_prompt_length": 150,
+        "extraction_description": "Updated extraction for sc-eKQYOU bdGRCs container structure",
+        "min_prompt_length": 50,
         "prompt_indicators": ["camera", "scene", "shot", "frame", "view", "angle", "light", "shows", "reveals"],
         "enable_debug_logging": true,
         "debug_log_file": "logs/fast_generation_extraction_debug.log",
@@ -55,16 +90,16 @@
         "duplicate_check_enabled": true,
         "creation_time_comparison": true,
         
-        "_comment_fast_scroll": "Fast infinite scroll configuration",
-        "scroll_batch_size": 10,
-        "scroll_amount": 2500,
-        "scroll_wait_time": 1000,
-        "max_scroll_attempts": 10,
+        "_comment_optimized_scroll": "SPEED OPTIMIZED: Faster scroll parameters",
+        "scroll_batch_size": 5,
+        "scroll_amount": 3000,
+        "scroll_wait_time": 500,
+        "max_scroll_attempts": 5,
         
-        "_comment_fast_navigation": "Fast navigation between thumbnails",
-        "thumbnail_nav_timeout": 3000,
-        "metadata_extraction_timeout": 2000,
-        "download_click_timeout": 2000,
+        "_comment_speed_optimized_navigation": "OPTIMIZED: Reduced timeouts for faster navigation",
+        "thumbnail_nav_timeout": 1500,
+        "metadata_extraction_timeout": 1000,
+        "download_click_timeout": 1500,
         
         "_comment_text_landmarks": "Text-based element finding",
         "image_to_video_text": "Image to video",
@@ -73,21 +108,23 @@
         "prompt_ellipsis_pattern": "...",
         
         "_comment_selectors": "Page element selectors",
-        "completed_task_selector": "div[id$='__1']",
+        "completed_task_selector": "div[id$='__0']",
         "thumbnail_selector": ".thumsItem, .thumbnail-item",
         "thumbnail_container_selector": ".thumsInner",
         "button_panel_selector": ".sc-eYHxxX.fmURBt",
         "download_icon_href": "#icon-icon_tongyong_20px_xiazai",
         "download_button_index": 2,
         
-        "_comment_legacy_selectors": "CSS fallback selectors",
+        "_comment_updated_selectors": "UPDATED: Fixed selectors for new HTML structure September 2025",
         "download_button_selector": "[data-spm-anchor-id='a2ty_o02.30365920.0.i1.6daf47258YB5qi']",
         "download_no_watermark_selector": ".sc-fbUgXY.hMAwvg",
-        "generation_date_selector": ".sc-eJlwcH.gjlyBM span.sc-cSMkSB.hUjUPD:nth-child(2)",
-        "prompt_selector": ".sc-jJRqov.cxtNJi span[aria-describedby]"
+        "generation_date_selector": ".sc-hAYgFD.fLPdud",
+        "prompt_selector": ".sc-eKQYOU.bdGRCs span[aria-describedby]",
+        "prompt_class_selector": ".sc-eKQYOU.bdGRCs",
+        "prompt_container_selector": ".sc-fileXT.gEIKhI"
       },
-      "timeout": 120000,
-      "description": "Start fast automated generation downloads in SKIP mode (continue past duplicates)"
+      "timeout": 90000,
+      "description": "SPEED OPTIMIZED: Fast automated generation downloads in SKIP mode with reduced timeouts"
     },
     {
       "type": "check_generation_status",

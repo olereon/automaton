@@ -29,10 +29,11 @@ except ImportError:
 class FastGenerationDownloader:
     """Optimized generation downloader with duplicate detection and fast processing"""
     
-    def __init__(self, config_path: str, duplicate_mode: str = "finish", start_from: str = None):
+    def __init__(self, config_path: str, duplicate_mode: str = "finish", start_from: str = None, max_downloads: int = None):
         self.config_path = Path(config_path)
         self.duplicate_mode = duplicate_mode.lower()
         self.start_from = start_from
+        self.max_downloads = max_downloads  # Command-line override for max downloads
         self.downloads_folder = None
         self.existing_files = set()
         
@@ -45,6 +46,10 @@ class FastGenerationDownloader:
         if self.start_from:
             print(f"🎯 Start From: {self.start_from}")
             print("   📌 Will search for this generation and start downloading from the next one")
+        
+        if self.max_downloads:
+            print(f"📊 Max Downloads: {self.max_downloads}")
+            print(f"   📌 Will limit downloads to {self.max_downloads} items")
         
     def scan_existing_files(self):
         """Scan downloads folder for existing files and extract creation times"""
@@ -106,6 +111,12 @@ class FastGenerationDownloader:
                 if self.start_from:
                     action_data['value']['start_from'] = self.start_from
                     print(f"   🎯 Set start_from = '{self.start_from}'")
+                
+                # Override max_downloads if specified on command line
+                if self.max_downloads is not None:
+                    original_max = action_data['value'].get('max_downloads', 'not set')
+                    action_data['value']['max_downloads'] = self.max_downloads
+                    print(f"   📊 Override max_downloads: {original_max} → {self.max_downloads}")
                 
                 if self.duplicate_mode == "skip":
                     # Set SKIP mode parameters
@@ -274,6 +285,12 @@ Examples:
   
   # Combine start-from with SKIP mode
   python fast_generation_downloader.py --mode skip --start-from "03 Sep 2025 16:15:18"
+  
+  # Limit downloads to specific number
+  python fast_generation_downloader.py --max-downloads 5
+  
+  # Combine all options
+  python fast_generation_downloader.py --config my_config.json --mode skip --max-downloads 10
         """
     )
     
@@ -303,6 +320,12 @@ Examples:
         help='Start downloads from specific datetime (format: "DD MMM YYYY HH:MM:SS", e.g., "03 Sep 2025 16:15:18")'
     )
     
+    parser.add_argument(
+        '--max-downloads', '-n',
+        type=int,
+        help='Maximum number of downloads (overrides config file value)'
+    )
+    
     return parser.parse_args()
 
 
@@ -325,9 +348,13 @@ async def main():
         print(f"🎯 Start from: {args.start_from}")
         print("📌 Will search for this generation and start downloading from the next one")
     
+    if args.max_downloads:
+        print(f"📊 Max downloads: {args.max_downloads}")
+        print("📌 Will override config file max_downloads setting")
+    
     print("=" * 60)
     
-    downloader = FastGenerationDownloader(args.config, args.mode, args.start_from)
+    downloader = FastGenerationDownloader(args.config, args.mode, args.start_from, args.max_downloads)
     
     # If scan-only mode, just scan and exit
     if args.scan_only:
