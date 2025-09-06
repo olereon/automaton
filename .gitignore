@@ -126,10 +126,48 @@ temp/
 *_archive/
 archive_*
 
-# Test reports and results
-tests/reports/
+# Test reports and results (keep organized reports)
+tests/reports/*.json
+tests/reports/*.html
+tests/reports/*.csv
 *test_report.json
 *test_results.json
+test_results_*.json
+validation_report_*.json
+
+# Temporary test files and debug outputs
+tests/*_debug_*.py
+tests/*_temp_*.py
+tests/*_scratch_*.py
+tests/test_*_temporary.py
+tests/debug_*.py
+tests/temp_*.py
+
+# Documentation - temporary and debugging files
+docs/*_debug_*.md
+docs/*_temp_*.md  
+docs/*_scratch_*.md
+docs/temp_*.md
+docs/debug_*.md
+
+# HIVE system and collective intelligence files (testing framework artifacts)
+docs/HIVE_*.md
+docs/*_HIVE_*.md
+*hive-mind-prompt*.txt
+.hive-mind-*.json
+
+# Direct download test artifacts (superseded by main implementation)
+scripts/direct_download_test*.py
+scripts/direct_download_test*.json
+scripts/*_direct_download_*.py
+direct_download_test*.log
+direct_download_test*.json
+
+# Performance testing artifacts (keep final reports)
+*_performance_test_*.json
+*_benchmark_*.json
+*_stress_test_*.json
+performance_debug_*.log
 
 # Old/deprecated files
 !_Old-tasks/
