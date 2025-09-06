@@ -8121,6 +8121,12 @@ class GenerationDownloadManager:
             scroll_attempts = 0
             max_scroll_attempts = 5
             
+            # PAGE REFRESH MECHANISM: Track containers processed for DOM refresh
+            containers_processed_since_refresh = 0
+            refresh_threshold = self.config.scroll_batch_size or 10  # Refresh page after processing batch (configurable)
+            total_refreshes_performed = 0
+            max_refreshes = 5  # Limit total refreshes to prevent infinite loops
+            
             # RESTORED: Continuous scroll algorithm with proper WHILE loop structure (as originally designed)
             container_index = 0
             completed_found_this_cycle = False
@@ -8134,6 +8140,7 @@ class GenerationDownloadManager:
                 while container_index < len(container_hash_ids) and downloads_completed < self.config.max_downloads:
                     hash_id = container_hash_ids[container_index]
                     containers_processed += 1
+                    containers_processed_since_refresh += 1
                     logger.info(f"🔄 Processing generation container {containers_processed}/{len(container_hash_ids)} (hash: {hash_id[:8]}...)")
                     
                     try:
@@ -8299,6 +8306,68 @@ class GenerationDownloadManager:
                         container_index += 1
                         continue
                 
+                # PAGE REFRESH MECHANISM: Refresh page after processing batch to reset DOM state
+                if (containers_processed_since_refresh >= refresh_threshold and 
+                    total_refreshes_performed < max_refreshes):
+                    
+                    total_refreshes_performed += 1
+                    logger.info(f"🔄 PAGE REFRESH {total_refreshes_performed}/{max_refreshes}: Processed {containers_processed_since_refresh} containers, refreshing page to reset DOM state")
+                    
+                    try:
+                        # Refresh the page to reset DOM and JavaScript state
+                        await page.reload(wait_until="networkidle", timeout=30000)
+                        logger.info("   ✅ Page refreshed successfully")
+                        
+                        # Wait for page to stabilize after refresh
+                        await page.wait_for_timeout(3000)
+                        
+                        # Verify we're still on the correct page after refresh
+                        current_url = page.url
+                        if "/generate" not in current_url:
+                            logger.warning(f"   ⚠️ Page URL changed after refresh: {current_url}")
+                            # Navigate back to generate page if needed
+                            await page.goto("https://wan.video/generate")
+                            await page.wait_for_timeout(2000)
+                        
+                        # Reinitialize container detection after refresh
+                        logger.info("   🔄 Reinitializing container detection after refresh...")
+                        fresh_containers = await page.query_selector_all("div[id*='__']")
+                        fresh_container_hash_ids = []
+                        
+                        for container in fresh_containers:
+                            try:
+                                full_container_id = await container.get_attribute('id')
+                                if full_container_id and '__' in full_container_id:
+                                    hash_id = self._get_container_hash_id(full_container_id)
+                                    if hash_id not in container_hash_ids:  # Only add truly new containers
+                                        fresh_container_hash_ids.append(hash_id)
+                            except Exception:
+                                continue
+                        
+                        # Log detailed refresh results
+                        logger.info(f"   📊 REFRESH RESULTS: Found {len(fresh_containers)} total containers, {len(fresh_container_hash_ids)} are new")
+                        
+                        if fresh_container_hash_ids:
+                            logger.info(f"   ✅ Adding {len(fresh_container_hash_ids)} new containers to processing queue")
+                            container_hash_ids.extend(fresh_container_hash_ids)
+                            scroll_attempts = 0  # Reset scroll attempts since we have fresh content
+                            completed_found_this_cycle = True  # Mark as successful to continue processing
+                        else:
+                            logger.info("   📋 No new containers found after refresh")
+                            # Don't mark as completed_found_this_cycle so scroll will be attempted
+                        
+                        # Reset refresh counter
+                        containers_processed_since_refresh = 0
+                        
+                    except Exception as refresh_error:
+                        logger.error(f"   ❌ Page refresh failed: {refresh_error}")
+                        # Continue without refresh if it fails
+                        containers_processed_since_refresh = 0
+                        
+                elif containers_processed_since_refresh >= refresh_threshold:
+                    logger.warning(f"   ⚠️ Refresh threshold reached but max refreshes ({max_refreshes}) already performed")
+                    containers_processed_since_refresh = 0  # Reset counter to prevent continuous warnings
+                
                 # ALGORITHM STEP 6: After processing current batch, scroll if no completed containers found
                 if not completed_found_this_cycle and scroll_attempts < max_scroll_attempts:
                     logger.info(f"📜 ALGORITHM Step 6: No completed containers found, scrolling to find more content (attempt {scroll_attempts + 1}/{max_scroll_attempts})")
@@ -8348,7 +8417,10 @@ class GenerationDownloadManager:
             logger.info(f"🏁 GENERATION CONTAINER MODE completed:")
             logger.info(f"   📊 Containers processed: {containers_processed}")
             logger.info(f"   ⬇️ Downloads completed: {downloads_completed}")
+            logger.info(f"   🔄 Page refreshes performed: {total_refreshes_performed}/{max_refreshes}")
             logger.info(f"   ✅ Success rate: {downloads_completed}/{containers_processed} ({downloads_completed/containers_processed*100 if containers_processed > 0 else 0:.1f}%)")
+            logger.info(f"   📋 Total containers in final queue: {len(container_hash_ids)}")
+            logger.info(f"   🔍 Final scroll attempts: {scroll_attempts}/{max_scroll_attempts}")
             
             return results
             
