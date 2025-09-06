@@ -19,6 +19,7 @@ from enum import Enum
 from .download_manager import DownloadManager, DownloadConfig
 from .boundary_scroll_manager import BoundaryScrollManager
 from .enhanced_metadata_extraction import extract_container_metadata_enhanced
+from .gallery_navigation_fix import RobustGalleryNavigator, gallery_navigator
 
 logger = logging.getLogger(__name__)
 
@@ -264,6 +265,9 @@ class GenerationDownloadConfig:
                 'shows', 'reveals', 'begins', 'starts', 'opens', 'focuses',
                 'character', 'person', 'figure', 'subject', 'object'
             ]
+        
+        # FIXED: Add computed log_file_path attribute
+        self.log_file_path = str(Path(self.logs_folder) / self.log_filename)
 
 
 class GenerationDownloadLogger:
@@ -274,12 +278,24 @@ class GenerationDownloadLogger:
         self.log_file_path = Path(config.logs_folder) / config.log_filename
         self.ensure_log_directory()
         
+        # Enhanced chronological logging features
+        self.use_chronological_ordering = True
+        self.placeholder_id = "#999999999"
+        self.support_enhanced_skip_mode = True
+        logger.info("✅ GenerationDownloadLogger initialized with chronological ordering")
+        
     def ensure_log_directory(self):
         """Ensure the logs directory exists"""
         Path(self.config.logs_folder).mkdir(parents=True, exist_ok=True)
         
     def get_next_file_id(self) -> str:
-        """Get the next sequential file ID"""
+        """Get the next sequential file ID with enhanced placeholder support"""
+        # For new chronological logging system, use placeholder initially
+        if hasattr(self, 'use_chronological_ordering') and self.use_chronological_ordering:
+            logger.info(f"📋 Using placeholder ID for new entry: {self.placeholder_id}")
+            return self.placeholder_id
+        
+        # Legacy ID generation (fallback)
         if not self.log_file_path.exists():
             return self.config.id_format.format(self.config.starting_file_id)
             
@@ -290,15 +306,15 @@ class GenerationDownloadLogger:
             if not content:
                 return self.config.id_format.format(self.config.starting_file_id)
                 
-            # Find the last file ID in the log
+            # Find the last file ID in the log, excluding placeholders
             lines = content.split('\n')
             last_id = self.config.starting_file_id
             
             for line in lines:
                 if line.startswith('#'):
-                    # Extract number from format like #000000057
+                    # Extract number from format like #000000057, skip placeholder
                     match = re.match(r'#(\d+)', line)
-                    if match:
+                    if match and match.group(1) != "999999999":
                         last_id = max(last_id, int(match.group(1)))
                         
             return self.config.id_format.format(last_id + 1)
@@ -656,6 +672,10 @@ class GenerationDownloadManager:
         self.file_manager = GenerationFileManager(config)
         self.file_namer = EnhancedFileNamer(config)
         
+        # Initialize robust gallery navigator (September 2025 fix)
+        self.gallery_navigator = RobustGalleryNavigator()
+        logger.info("🎯 Robust gallery navigation initialized")
+        
         # Initialize debug logger
         try:
             from .generation_debug_logger import GenerationDebugLogger
@@ -824,18 +844,19 @@ class GenerationDownloadManager:
         prompt_key = prompt_text[:100] if prompt_text else ""
         
         for log_datetime, log_entry in existing_log_entries.items():
-            # CRITICAL FIX: Skip incomplete log entries (from previous failed runs)
-            # Placeholder ID #999999999 indicates incomplete/failed downloads
-            file_id = log_entry.get('file_id', '')
-            if file_id == '#999999999':
-                logger.info(f"⏭️ FILTERING: Skipping incomplete log entry: {log_datetime} (file_id: {file_id})")
+            # CRITICAL FIX REMOVED: Don't skip #999999999 entries - they are valid downloads awaiting renumbering
+            # The #999999999 placeholder is used for all new downloads until renumber script runs
+            # Only skip entries that are completely empty or invalid
+            log_prompt = log_entry.get('prompt', '')
+            
+            # Skip only truly empty/invalid entries, not placeholder IDs
+            if not log_datetime or (not log_prompt and not log_entry.get('file_id')):
+                logger.debug(f"⏭️ FILTERING: Skipping empty/invalid log entry: {log_datetime}")
                 continue
             
-            # Match both datetime AND prompt for robustness (Algorithm Step 6a)
-            log_prompt = log_entry.get('prompt', '')[:100]
-            
-            if (log_datetime == creation_time and log_prompt == prompt_key):
-                logger.warning(f"🚫 Algorithm Duplicate detected! Time: {creation_time}, Prompt: {prompt_key[:50]}...")
+            # Match ONLY datetime for duplicate detection (as per original requirement)
+            if log_datetime == creation_time:
+                logger.warning(f"🚫 Algorithm Duplicate detected! Time: {creation_time}")
                 
                 # Step 6a: Initiate skipping if in SKIP mode
                 if self.config.duplicate_mode == DuplicateMode.SKIP:
@@ -1322,30 +1343,27 @@ class GenerationDownloadManager:
             return False
     
     async def navigate_to_next_thumbnail_landmark(self, page) -> bool:
-        """Navigate to next thumbnail using active-class landmark approach"""
+        """Navigate to next thumbnail using robust navigation with cycle prevention"""
         try:
-            logger.info("🧭 Using landmark-based thumbnail navigation")
+            logger.info("🧭 Using robust gallery navigation (cycle prevention enabled)")
             
-            # Step 1: Find current active thumbnail (for reference)
-            current_active = await self.find_active_thumbnail(page)
-            if current_active:
-                current_class = await current_active.get_attribute('class') or ''
-                logger.debug(f"📍 Current active thumbnail classes: {current_class}")
-            else:
-                logger.debug("📍 No currently active thumbnail detected")
-            
-            # Step 2: Activate the next thumbnail
-            success = await self.activate_next_thumbnail(page)
+            # Use enhanced navigation system
+            success, thumbnail_id = await self.gallery_navigator.navigate_to_next_unprocessed_thumbnail(page)
             
             if success:
-                logger.info("✅ Successfully navigated to next thumbnail using landmark method")
+                logger.info(f"✅ Successfully navigated to thumbnail: {thumbnail_id}")
+                
+                # Get navigation stats for monitoring
+                nav_stats = self.gallery_navigator.get_navigation_stats()
+                logger.debug(f"📊 Navigation stats: {nav_stats}")
+                
                 return True
             else:
-                logger.warning("⚠️ Failed to navigate to next thumbnail - may need scrolling")
+                logger.warning("⚠️ Failed to navigate to next thumbnail - no unprocessed thumbnails found")
                 return False
                 
         except Exception as e:
-            logger.error(f"Error in landmark-based navigation: {e}")
+            logger.error(f"Error in robust gallery navigation: {e}")
             return False
     
     async def preload_gallery_thumbnails(self, page) -> bool:
@@ -2597,71 +2615,41 @@ class GenerationDownloadManager:
             return {}
 
     async def check_comprehensive_duplicate(self, page, thumbnail_id: str, existing_files: set = None) -> bool:
-        """Simple duplicate detection using datetime + prompt pair (Algorithm Step 6a)"""
+        """Enhanced duplicate detection using robust content comparison (September 2025)"""
         try:
-            logger.info(f"🔍 COMPREHENSIVE CHECK: Extracting full metadata from gallery for {thumbnail_id}")
+            logger.info(f"🔍 ENHANCED CHECK: Extracting full metadata from gallery for {thumbnail_id}")
             
             # Extract FULL metadata from gallery (complete prompt + date)
             metadata = await self.extract_metadata_from_page(page)
             if not metadata:
-                logger.warning(f"⚠️ COMPREHENSIVE CHECK: Failed to extract metadata for {thumbnail_id}")
+                logger.warning(f"⚠️ ENHANCED CHECK: Failed to extract metadata for {thumbnail_id}")
                 return False
             
             generation_date = metadata.get('generation_date', '')
             prompt = metadata.get('prompt', '')
             
-            logger.info(f"🔍 COMPREHENSIVE CHECK: Extracted date='{generation_date}', prompt_length={len(prompt) if prompt else 0}")
+            logger.info(f"🔍 ENHANCED CHECK: Extracted date='{generation_date}', prompt_length={len(prompt) if prompt else 0}")
             
             if not generation_date or not prompt:
-                logger.warning(f"⚠️ COMPREHENSIVE CHECK: Missing date or prompt for {thumbnail_id}")
+                logger.warning(f"⚠️ ENHANCED CHECK: Missing date or prompt for {thumbnail_id}")
                 return False
             
-            # Load existing log entries for comparison (Algorithm Step 6a)
-            if hasattr(self, 'existing_log_entries') and self.existing_log_entries:
-                existing_entries = self.existing_log_entries
-            else:
-                existing_entries = self._load_existing_log_entries()
+            # USE ENHANCED DUPLICATE DETECTION
+            is_duplicate, reason = self.gallery_navigator.is_content_duplicate(metadata)
             
-            # Simple datetime + prompt (100 chars) duplicate detection
-            if generation_date in existing_entries:
-                existing_entry = existing_entries[generation_date]
+            if is_duplicate:
+                logger.warning(f"🛑 DUPLICATE DETECTED: {reason}")
                 
-                # CRITICAL FIX: Skip incomplete log entries (from previous failed runs)
-                # Placeholder ID #999999999 indicates incomplete/failed downloads
-                file_id = existing_entry.get('file_id', '')
-                if file_id == '#999999999':
-                    logger.info(f"⏭️ FILTERING: Skipping incomplete log entry in comprehensive check: {generation_date} (file_id: {file_id})")
-                    return False  # Not a duplicate - allow download
-                
-                existing_prompt = existing_entry.get('prompt', '')
-                
-                # Compare first 100 characters of prompts
-                current_prompt_100 = prompt[:100]
-                existing_prompt_100 = existing_prompt[:100]
-                
-                if current_prompt_100 == existing_prompt_100:
-                    logger.info(f"🛑 DUPLICATE DETECTED: Date='{generation_date}', Prompt match (100 chars)")
-                    
-                    # Handle duplicate based on mode
-                    if self.config.duplicate_mode == DuplicateMode.FINISH:
-                        logger.info("🎯 FINISH MODE: Stopping at duplicate")
-                        return True
-                    elif self.config.duplicate_mode == DuplicateMode.SKIP:
-                        # CRITICAL FIX: Check if boundary was just downloaded to prevent infinite loop
-                        if hasattr(self, 'boundary_just_downloaded') and self.boundary_just_downloaded:
-                            logger.info("🔄 CONSECUTIVE DUPLICATE after boundary download detected")
-                            logger.info("⏭️ SKIPPING: Using fast-forward mode instead of exit-scan-return to handle consecutive duplicates")
-                            
-                            # Reset boundary flag after first consecutive duplicate
-                            self.boundary_just_downloaded = False
-                            
-                            # Return "skip" to continue in fast-forward mode instead of triggering exit-scan-return
-                            return "skip"
-                        else:
-                            logger.info("⏭️ SKIP MODE: Found duplicate, entering exit-scan workflow")
-                            return "exit_scan_return"  # Trigger exit-scan-return strategy
+                # Handle duplicate based on mode
+                if self.config.duplicate_mode == DuplicateMode.FINISH:
+                    logger.info("🎯 FINISH MODE: Stopping at duplicate")
+                    return True
+                else:  # SKIP mode
+                    logger.info("⏭️ SKIP MODE: Marking as duplicate but continuing")
+                    return True
             
-            return False  # No duplicate detected
+            logger.info(f"✅ ENHANCED CHECK: No duplicate found for {thumbnail_id}")
+            return False
             
         except Exception as e:
             logger.debug(f"Error in duplicate check: {e}")
@@ -4192,7 +4180,43 @@ class GenerationDownloadManager:
                 if duplicate_result == "exit_scan_return":
                     # Algorithm Step 6a: Initiate skipping process
                     logger.info("🚀 Initiating SKIP mode exit-scan-return workflow")
-                    return await self.exit_gallery_and_scan_generations(page)
+                    scan_result = await self.exit_gallery_and_scan_generations(page)
+                    
+                    # Handle boundary scan result properly
+                    if scan_result and scan_result.get('found'):
+                        # Boundary scan succeeded - gallery is now open at boundary generation
+                        logger.info(f"✅ BOUNDARY SCAN SUCCESS: Found boundary at container #{scan_result.get('container_index')}")
+                        logger.info(f"   📅 Datetime: '{scan_result.get('creation_time')}'")
+                        logger.info(f"   🚀 Gallery is now open at boundary - proceeding with download")
+                        
+                        # Continue with download process - don't return the scan result
+                        # The boundary generation is now active in the gallery and ready to download
+                        is_boundary_download = True
+                        boundary_metadata_dict = {
+                            'generation_date': scan_result.get('creation_time'),
+                            'prompt': scan_result.get('prompt', 'Unknown')
+                        }
+                        
+                        # Extract fresh metadata from the gallery for full prompt and verification
+                        logger.info("🔍 Extracting fresh metadata from boundary generation in gallery")
+                        fresh_metadata = await self.extract_metadata_from_page(page)
+                        if fresh_metadata and fresh_metadata.get('generation_date') == boundary_metadata_dict['generation_date']:
+                            logger.info("✅ Fresh metadata matches boundary - using full gallery metadata")
+                            metadata_dict = fresh_metadata
+                        else:
+                            logger.warning("⚠️ Fresh metadata mismatch - using boundary metadata")
+                            metadata_dict = boundary_metadata_dict
+                        
+                        # Continue to download section instead of returning
+                        # Skip further duplicate checks since boundary is already verified as new
+                        duplicate_result = False
+                        
+                        # Also skip session duplicate check since this is boundary
+                        logger.info("🚀 BOUNDARY: Skipping remaining duplicate checks - proceeding directly to download")
+                    else:
+                        logger.warning("❌ Boundary scan failed, stopping")
+                        self.should_stop = True
+                        return False
                 elif duplicate_result and self.config.stop_on_duplicate:
                     logger.info(f"🛑 STOPPING: Algorithm-compliant duplicate detected ({creation_time})")
                     logger.info("🔄 All newer files have already been downloaded")
@@ -4203,10 +4227,14 @@ class GenerationDownloadManager:
                     return "skip_continue"
                 
                 # Method 3: Check session-based duplicates (already processed in this run) - fallback
-                session_duplicate_id = f"{creation_time}|{thumbnail_id}"
-                if session_duplicate_id in self.processed_thumbnails:
-                    logger.warning(f"⏭️  Skipping session duplicate: {session_duplicate_id}")
-                    return "skip_continue"
+                # Skip session duplicate check for boundary downloads since boundary is already verified as new
+                if not is_boundary_download:
+                    session_duplicate_id = f"{creation_time}|{thumbnail_id}"
+                    if session_duplicate_id in self.processed_thumbnails:
+                        logger.warning(f"⏭️  Skipping session duplicate: {session_duplicate_id}")
+                        return "skip_continue"
+                else:
+                    logger.info("🚀 BOUNDARY: Skipping session duplicate check - boundary already verified as new")
             
             # Continue with download process using existing logic...
             file_id = self.logger.get_next_file_id()
@@ -4293,12 +4321,14 @@ class GenerationDownloadManager:
                         download_duration=time.time() - download_start_time
                     )
                     
-                    # Log to file (remove incorrect await)
-                    self.logger.log_download(metadata)
-                    
-                    self.downloads_completed += 1
-                    logger.info(f"✅ Successfully downloaded: {final_filename}")
-                    return True
+                    # FIXED: Log to file (use proper logger method)
+                    if self.logger.log_download(metadata):
+                        self.downloads_completed += 1
+                        logger.info(f"✅ Successfully downloaded: {final_filename} (Count: {self.downloads_completed})")
+                        return True
+                    else:
+                        logger.error(f"❌ Failed to log download metadata for: {final_filename}")
+                        return False
                 else:
                     logger.error(f"Download file not found for thumbnail {thumbnail_id}")
                     return False
@@ -4741,7 +4771,7 @@ class GenerationDownloadManager:
                 download_duration=download_duration
             )
             
-            # Log the download
+            # FIXED: Log the download with consistent counter update
             if self.logger.log_download(metadata):
                 self.downloads_completed += 1
                 logger.info(f"Successfully completed download {self.downloads_completed}: {file_id}")
@@ -4838,6 +4868,399 @@ class GenerationDownloadManager:
             logger.error(f"Error finding completed generations: {e}")
             return []
 
+    async def _validate_download_environment(self) -> bool:
+        """Validate download environment and configuration"""
+        try:
+            # Check downloads folder exists or create it
+            downloads_path = Path(self.config.downloads_folder)
+            downloads_path.mkdir(parents=True, exist_ok=True)
+            
+            # Check logs folder exists or create it
+            logs_path = Path(self.config.logs_folder)
+            logs_path.mkdir(parents=True, exist_ok=True)
+            
+            # Validate configuration parameters
+            if self.config.max_downloads <= 0:
+                logger.error("Invalid max_downloads configuration")
+                return False
+                
+            logger.info(f"✅ Environment validation passed")
+            logger.info(f"   Downloads: {downloads_path}")
+            logger.info(f"   Logs: {logs_path}")
+            logger.info(f"   Max downloads: {self.config.max_downloads}")
+            
+            return True
+        except Exception as e:
+            logger.error(f"Environment validation failed: {e}")
+            return False
+    
+    def _initialize_chronological_logging(self):
+        """Initialize chronological logging system with placeholder numbering"""
+        try:
+            if hasattr(self, 'logger') and self.logger:
+                # Set the logger to use chronological ordering
+                self.logger.use_chronological_ordering = True
+                self.logger.placeholder_id = "#999999999"
+                logger.info("✅ Chronological logging initialized with #999999999 placeholders")
+            else:
+                logger.warning("⚠️ Logger not available for chronological initialization")
+        except Exception as e:
+            logger.error(f"Failed to initialize chronological logging: {e}")
+    
+    async def _enhanced_start_from_navigation(self, page) -> Dict[str, Any]:
+        """Enhanced START_FROM navigation with improved search algorithm"""
+        try:
+            logger.info(f"🔍 Enhanced START_FROM search for: '{self.config.start_from}'")
+            
+            # Use existing start_from logic but with enhanced error handling
+            result = await self._find_start_from_generation(page, self.config.start_from)
+            
+            if result['found']:
+                logger.info("✅ START_FROM target found and positioned")
+                return {'success': True, 'positioned': True}
+            else:
+                logger.warning("⚠️ START_FROM target not found, will continue with normal flow")
+                return {'success': False, 'positioned': False}
+                
+        except Exception as e:
+            logger.error(f"START_FROM navigation error: {e}")
+            return {'success': False, 'error': str(e)}
+    
+    async def _enhanced_gallery_navigation(self, page) -> Dict[str, Any]:
+        """Enhanced gallery navigation with intelligent pre-loading"""
+        try:
+            logger.info("🧭 Initiating enhanced gallery navigation")
+            
+            # Check if we're already in the gallery view
+            thumbnail_containers = await page.query_selector_all("div[class*='thumsCou']")
+            if thumbnail_containers:
+                logger.info(f"✅ Already in gallery view with {len(thumbnail_containers)} thumbnails")
+                return {'success': True, 'thumbnails_found': len(thumbnail_containers)}
+            
+            # Navigate to gallery if needed
+            logger.info("🔄 Navigating to gallery view")
+            await self.navigate_to_first_thumbnail(page)
+            
+            # Verify navigation success
+            await page.wait_for_timeout(2000)
+            thumbnail_containers = await page.query_selector_all("div[class*='thumsCou']")
+            
+            if thumbnail_containers:
+                logger.info(f"✅ Gallery navigation successful, {len(thumbnail_containers)} thumbnails loaded")
+                return {'success': True, 'thumbnails_found': len(thumbnail_containers)}
+            else:
+                logger.error("❌ Gallery navigation failed - no thumbnails found")
+                return {'success': False, 'error': 'No thumbnails found after navigation'}
+                
+        except Exception as e:
+            logger.error(f"Gallery navigation error: {e}")
+            return {'success': False, 'error': str(e)}
+    
+    def _initialize_enhanced_skip_mode_v2(self) -> bool:
+        """Initialize Enhanced SKIP mode v2 with checkpoint resume capability"""
+        try:
+            if self.config.duplicate_mode == DuplicateMode.SKIP:
+                # Check if we have a log file to use for checkpoint resume
+                if hasattr(self, 'logger') and self.logger:
+                    log_path = getattr(self.logger, 'log_file_path', None)
+                    if log_path and os.path.exists(log_path):
+                        logger.info("✅ Enhanced SKIP mode v2 initialized with checkpoint capability")
+                        self.enhanced_skip_v2_active = True
+                        return True
+                
+                logger.info("⚡ Enhanced SKIP mode v2 initialized without checkpoint")
+                self.enhanced_skip_v2_active = True
+                return True
+            else:
+                logger.info("📌 FINISH mode - Enhanced SKIP mode not needed")
+                self.enhanced_skip_v2_active = False
+                return False
+                
+        except Exception as e:
+            logger.error(f"Enhanced SKIP mode initialization error: {e}")
+            self.enhanced_skip_v2_active = False
+            return False
+    
+    async def _advanced_thumbnail_discovery(self, page) -> List[Dict[str, Any]]:
+        """Advanced thumbnail discovery with metadata pre-extraction"""
+        try:
+            logger.info("🔍 Starting advanced thumbnail discovery")
+            
+            # Perform initial scroll to load more thumbnails
+            scroll_count = 0
+            max_scrolls = 5
+            
+            while scroll_count < max_scrolls:
+                initial_count = len(await page.query_selector_all("div[class*='thumsCou']"))
+                
+                # Scroll down
+                await page.evaluate("window.scrollBy(0, 1000)")
+                await page.wait_for_timeout(2000)
+                
+                new_count = len(await page.query_selector_all("div[class*='thumsCou']"))
+                
+                if new_count > initial_count:
+                    logger.info(f"📜 Scroll {scroll_count + 1}: Found {new_count - initial_count} new thumbnails")
+                    scroll_count += 1
+                else:
+                    logger.info("📜 No more thumbnails found, stopping scroll")
+                    break
+            
+            # Get all thumbnail elements
+            thumbnail_elements = await page.query_selector_all("div[class*='thumsCou']")
+            
+            # Create catalog with basic info
+            catalog = []
+            for i, element in enumerate(thumbnail_elements):
+                catalog.append({
+                    'index': i,
+                    'element': element,
+                    'unique_id': f"thumbnail_{i}",
+                    'processed': False,
+                    'metadata_extracted': False
+                })
+            
+            logger.info(f"✅ Advanced discovery complete: {len(catalog)} thumbnails catalogued")
+            return catalog
+            
+        except Exception as e:
+            logger.error(f"Advanced thumbnail discovery error: {e}")
+            return []
+    
+    async def _execute_main_algorithm_loop(self, page, results: Dict[str, Any], 
+                                         thumbnail_catalog: List[Dict[str, Any]], 
+                                         existing_files: set) -> Dict[str, Any]:
+        """Execute the main algorithm loop (Steps 8-25)"""
+        try:
+            logger.info("🔄 Starting main algorithm loop (Steps 8-25)")
+            
+            downloaded_count = 0
+            processed_count = 0
+            consecutive_failures = 0
+            max_consecutive_failures = 10
+            
+            for thumbnail_info in thumbnail_catalog:
+                if downloaded_count >= self.config.max_downloads:
+                    logger.info(f"🎯 Max downloads reached: {downloaded_count}")
+                    break
+                
+                if self.should_stop:
+                    logger.info("🛑 Stop signal received")
+                    break
+                
+                try:
+                    # STEP 8: Select next thumbnail for processing
+                    logger.info(f"📋 STEP 8: Processing thumbnail {thumbnail_info['index']}")
+                    results['steps_completed'].append(f"step_8_select_{thumbnail_info['index']}")
+                    
+                    # STEP 9: Click thumbnail and wait for load
+                    logger.info(f"🖱️ STEP 9: Click thumbnail {thumbnail_info['index']}")
+                    await thumbnail_info['element'].click(timeout=5000)
+                    await page.wait_for_timeout(2000)
+                    
+                    # STEP 10: Extract metadata with enhanced strategies
+                    logger.info(f"📊 STEP 10: Extract metadata for thumbnail {thumbnail_info['index']}")
+                    metadata = await self._enhanced_metadata_extraction(page)
+                    
+                    if not metadata or not metadata.get('generation_date'):
+                        consecutive_failures += 1
+                        logger.warning(f"⚠️ Metadata extraction failed ({consecutive_failures}/{max_consecutive_failures})")
+                        if consecutive_failures >= max_consecutive_failures:
+                            logger.error("❌ Too many consecutive metadata failures")
+                            break
+                        continue
+                    
+                    # STEP 11: Duplicate detection with enhanced algorithm
+                    logger.info(f"🔍 STEP 11: Duplicate detection for {metadata['generation_date']}")
+                    is_duplicate = self._enhanced_duplicate_detection(metadata, existing_files)
+                    
+                    if is_duplicate:
+                        if self.config.duplicate_mode == DuplicateMode.FINISH:
+                            logger.info("🛑 FINISH mode: Stopping at duplicate")
+                            self.should_stop = True
+                            break
+                        else:
+                            logger.info("⏭️ SKIP mode: Skipping duplicate")
+                            continue
+                    
+                    # STEP 12-25: Download processing, validation, and logging
+                    download_success = await self._process_download_with_validation(page, metadata, thumbnail_info)
+                    
+                    if download_success:
+                        downloaded_count += 1
+                        consecutive_failures = 0
+                        logger.info(f"✅ Download {downloaded_count} successful")
+                    else:
+                        consecutive_failures += 1
+                        logger.warning(f"⚠️ Download failed ({consecutive_failures}/{max_consecutive_failures})")
+                    
+                    processed_count += 1
+                    
+                    # Brief pause between downloads
+                    await page.wait_for_timeout(1000)
+                    
+                except Exception as e:
+                    consecutive_failures += 1
+                    logger.error(f"❌ Thumbnail processing error: {e}")
+                    if consecutive_failures >= max_consecutive_failures:
+                        logger.error("❌ Too many consecutive failures, stopping")
+                        break
+            
+            # Finalize results
+            results['downloads_completed'] = downloaded_count
+            results['total_thumbnails_processed'] = processed_count
+            results['success'] = downloaded_count > 0
+            results['end_time'] = datetime.now().isoformat()
+            
+            logger.info(f"🎉 Algorithm complete: {downloaded_count} downloads, {processed_count} processed")
+            return results
+            
+        except Exception as e:
+            logger.error(f"❌ Main algorithm loop error: {e}")
+            results['errors'].append(str(e))
+            return results
+    
+    async def _enhanced_metadata_extraction(self, page) -> Dict[str, Any]:
+        """Enhanced metadata extraction with multiple strategies"""
+        try:
+            # Use existing enhanced extraction
+            from .enhanced_metadata_extraction import extract_container_metadata_enhanced
+            return await extract_container_metadata_enhanced(page, self.config)
+        except Exception as e:
+            logger.error(f"Enhanced metadata extraction failed: {e}")
+            return {}
+    
+    def _enhanced_duplicate_detection(self, metadata: Dict[str, Any], existing_files: set) -> bool:
+        """Enhanced duplicate detection with improved accuracy"""
+        try:
+            creation_time = metadata.get('generation_date', '')
+            prompt_text = metadata.get('prompt', '')
+            
+            if not creation_time:
+                return False
+            
+            # Use existing duplicate detection logic
+            return self.check_duplicate_exists(creation_time, prompt_text)
+            
+        except Exception as e:
+            logger.error(f"Enhanced duplicate detection error: {e}")
+            return False
+    
+    async def _process_download_with_validation(self, page, metadata: Dict[str, Any], 
+                                              thumbnail_info: Dict[str, Any]) -> bool:
+        """Process download with full validation (Steps 12-25)"""
+        try:
+            logger.info(f"📥 Processing download for {metadata.get('generation_date', 'Unknown')}")
+            
+            # Use existing download logic but with enhanced validation
+            download_result = await self.download_single_generation_robust(page, thumbnail_info)
+            
+            if download_result == True:
+                logger.info("✅ Download and validation successful")
+                return True
+            else:
+                logger.warning(f"⚠️ Download failed or was skipped: {download_result}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Download processing error: {e}")
+            return False
+    
+    async def _fallback_generation_mode(self, page, results: Dict[str, Any]) -> Dict[str, Any]:
+        """Fallback to generation container mode when gallery navigation fails"""
+        logger.info("🔄 Falling back to generation container mode")
+        return await self.execute_generation_container_mode(page, results)
+
+    async def run_download_automation_v2(self, page) -> Dict[str, Any]:
+        """
+        NEW 25-STEP GENERATION DOWNLOAD ALGORITHM
+        Enhanced automation with robust scrolling, duplicate handling, and chronological logging
+        """
+        results = {
+            'success': False,
+            'downloads_completed': 0,
+            'errors': [],
+            'scrolls_performed': 0,
+            'total_thumbnails_processed': 0,
+            'start_time': datetime.now().isoformat(),
+            'end_time': None,
+            'algorithm_version': '2.0',
+            'steps_completed': []
+        }
+        
+        try:
+            logger.info("🚀 Starting NEW 25-Step Generation Download Algorithm v2.0")
+            logger.info("=" * 80)
+            
+            # STEP 1: Initialize system state and validate configuration
+            results['steps_completed'].append('step_1_init')
+            logger.info("📋 STEP 1: System initialization and configuration validation")
+            if not await self._validate_download_environment():
+                raise RuntimeError("Environment validation failed")
+            
+            # STEP 2: Scan existing files for intelligent duplicate detection  
+            results['steps_completed'].append('step_2_scan')
+            logger.info("🔍 STEP 2: Scanning existing files for duplicate detection")
+            existing_files = self.scan_existing_files() if self.config.duplicate_check_enabled else set()
+            logger.info(f"   Found {len(existing_files)} existing files")
+            
+            # STEP 3: Initialize chronological logging system
+            results['steps_completed'].append('step_3_logging')
+            logger.info("📝 STEP 3: Initialize chronological logging with #999999999 placeholders")
+            self._initialize_chronological_logging()
+            
+            # STEP 3.5: Check and close any modal dialogs (Close button)
+            logger.info("🔍 STEP 3.5: Checking for modal Close button and closing if present")
+            try:
+                close_button = await page.query_selector('button.ant-modal-close[aria-label="Close"]')
+                if close_button:
+                    logger.info("   ✅ Found Close modal button - clicking to close")
+                    await close_button.click()
+                    await page.wait_for_timeout(1000)  # Wait for modal to close
+                    logger.info("   🚫 Modal closed successfully")
+                else:
+                    logger.info("   ℹ️ No Close modal button found - proceeding normally")
+            except Exception as e:
+                logger.debug(f"   ⚠️ Error checking for Close modal button: {e}")
+                logger.info("   ℹ️ Continuing with automation process")
+            
+            # STEP 4: Handle START_FROM parameter with enhanced navigation
+            results['steps_completed'].append('step_4_start_from')
+            if self.config.start_from:
+                logger.info(f"🎯 STEP 4: START_FROM mode - seeking '{self.config.start_from}'")
+                start_result = await self._enhanced_start_from_navigation(page)
+                if not start_result['success']:
+                    logger.warning("⚠️ START_FROM navigation failed, continuing with normal flow")
+            else:
+                logger.info("📌 STEP 4: No START_FROM specified, proceeding to gallery")
+            
+            # STEP 5: Enhanced gallery navigation and pre-loading
+            results['steps_completed'].append('step_5_navigation')
+            logger.info("🧭 STEP 5: Enhanced gallery navigation and infinite scroll pre-loading")
+            nav_result = await self._enhanced_gallery_navigation(page)
+            if not nav_result['success']:
+                return await self._fallback_generation_mode(page, results)
+            
+            # STEP 6: Initialize Enhanced SKIP mode with checkpoint resume
+            results['steps_completed'].append('step_6_skip_mode')
+            logger.info("⏩ STEP 6: Initialize Enhanced SKIP mode with smart checkpoint resume")
+            skip_mode_active = self._initialize_enhanced_skip_mode_v2()
+            
+            # STEP 7: Advanced thumbnail discovery and cataloging
+            results['steps_completed'].append('step_7_discovery')
+            logger.info("🔎 STEP 7: Advanced thumbnail discovery with metadata pre-extraction")
+            thumbnail_catalog = await self._advanced_thumbnail_discovery(page)
+            logger.info(f"   Discovered {len(thumbnail_catalog)} thumbnails")
+            
+            # STEP 8-25: Main processing loop with enhanced algorithm
+            return await self._execute_main_algorithm_loop(page, results, thumbnail_catalog, existing_files)
+            
+        except Exception as e:
+            logger.error(f"❌ Algorithm failure: {e}")
+            results['errors'].append(str(e))
+            results['success'] = False
+            return results
+    
     async def run_download_automation(self, page) -> Dict[str, Any]:
         """Run the complete generation download automation with intelligent scrolling"""
         results = {
@@ -5251,10 +5674,24 @@ class GenerationDownloadManager:
                                 logger.debug(f"Metadata check error: {metadata_check_error}")
                         
                         if success is True:
-                            results['downloads_completed'] += 1
-                            logger.info(f"✅ Successfully downloaded thumbnail #{thumbnail_count}")
+                            # FIXED: Use consistent counter tracking
+                            results['downloads_completed'] = self.downloads_completed
+                            logger.info(f"✅ Successfully downloaded thumbnail #{thumbnail_count} (Total: {self.downloads_completed})")
                             consecutive_failures = 0  # Reset failure counter
                             self.same_generation_count = 0  # Reset infinite loop counter on success
+                            
+                            # Mark thumbnail as processed in gallery navigator
+                            try:
+                                current_thumbnail = await self.gallery_navigator.get_single_active_thumbnail(page)
+                                if current_thumbnail:
+                                    thumbnail_id = await self.gallery_navigator._get_thumbnail_identifier(current_thumbnail)
+                                    # Get metadata for the processed thumbnail
+                                    metadata = await self.extract_metadata_from_page(page)
+                                    if metadata:
+                                        self.gallery_navigator.mark_thumbnail_processed(thumbnail_id, metadata)
+                                        logger.debug(f"📝 Marked thumbnail {thumbnail_id} as processed")
+                            except Exception as e:
+                                logger.debug(f"Error marking thumbnail as processed: {e}")
                             
                             # CRITICAL FIX: Keep boundary flag until next thumbnail is processed
                             # This allows the next duplicate check to know it's a consecutive duplicate
@@ -6273,7 +6710,16 @@ class GenerationDownloadManager:
                             
                             # ENHANCED: Click this container to open gallery and download the boundary generation
                             logger.info(f"   🖱️ Attempting to click boundary container...")
-                            click_success = await self._click_boundary_container_enhanced(container, total_containers_scanned, container_time, page)
+                            
+                            # Get hash ID for robust container identification
+                            full_container_id = await container.get_attribute('id')
+                            if full_container_id:
+                                container_hash = self._get_container_hash_id(full_container_id)
+                                logger.debug(f"   📦 Using hash ID {container_hash} for boundary click")
+                                click_success = await self._click_boundary_container_enhanced(container, total_containers_scanned, container_time, page, container_hash)
+                            else:
+                                logger.warning("   ⚠️ Could not get container ID, using original method")
+                                click_success = await self._click_boundary_container_enhanced(container, total_containers_scanned, container_time, page)
                             
                             if click_success:
                                 logger.info("✅ Gallery opened at boundary, ready to download boundary generation")
@@ -6708,8 +7154,8 @@ class GenerationDownloadManager:
     # Note: _scroll_entire_generation_page_for_boundary_detection removed
     # Now using incremental scan-as-you-scroll approach in _find_download_boundary_sequential
     
-    async def _click_boundary_container(self, container, container_index: int) -> bool:
-        """Click boundary container using the same method as initial navigation"""
+    async def _click_boundary_container(self, container, container_index: int, hash_id: str = None) -> bool:
+        """Click boundary container using hash-based selectors for robust identification"""
         try:
             # Get page reference correctly from ElementHandle (async)
             frame = await container.owner_frame()
@@ -6719,19 +7165,24 @@ class GenerationDownloadManager:
             current_url = page.url
             logger.info(f"🔍 Current URL before boundary click: {current_url}")
             
-            # Get container ID to create direct selector (same approach as initial navigation)
-            container_id = await container.get_attribute('id')
-            if not container_id:
-                logger.error("❌ Could not get container ID for boundary click")
-                return False
+            # Use hash_id if provided, otherwise extract from container
+            if hash_id:
+                container_hash = hash_id
+                logger.info(f"🔍 Using provided hash ID: {container_hash}")
+            else:
+                # Get container ID and extract hash for robust identification
+                full_container_id = await container.get_attribute('id')
+                if not full_container_id:
+                    logger.error("❌ Could not get container ID for boundary click")
+                    return False
+                container_hash = self._get_container_hash_id(full_container_id)
+                logger.info(f"🔍 Extracted hash from full ID {full_container_id} → {container_hash}")
             
-            logger.info(f"🔍 Attempting boundary click using container ID: {container_id}")
-            
-            # Step 15: Click container using same method as initial navigation
-            # Use direct page.click() with container ID selector - this is what works for initial navigation
+            # Step 15: Click container using hash-based selector for robustness
+            # Use direct page.click() with hash-based selector
             try:
-                container_selector = f"div[id='{container_id}']"
-                logger.info(f"🔍 Clicking boundary container using selector: {container_selector}")
+                container_selector = f'div[id^="{container_hash}__"]'
+                logger.info(f"🔍 Clicking boundary container using hash selector: {container_selector}")
                 
                 await page.click(container_selector, timeout=5000)
                 await page.wait_for_timeout(2000)  # Wait for navigation
@@ -6739,35 +7190,38 @@ class GenerationDownloadManager:
                 # Verify gallery opened
                 if await self._verify_gallery_opened(page):
                     logger.info(f"✅ Step 15: Successfully opened gallery from boundary container #{container_index}")
-                    logger.info(f"✅ Used same method as initial navigation - direct page.click()")
+                    logger.info(f"✅ Used hash-based selector for robust identification")
                     return True
                 else:
                     logger.warning(f"❌ Gallery didn't open after clicking container #{container_index}")
                     
             except Exception as e:
-                logger.error(f"Failed to click boundary container with ID selector: {e}")
+                logger.error(f"Failed to click boundary container with hash selector: {e}")
                 
-                # Fallback: try the generic selector approach (same as initial navigation)
+                # Fallback: try to find current container and use number-based selector
                 try:
-                    # Extract the number from container ID (e.g., "__13" from "50cb0dc8c77c4a3e91c959c431aa3b53__13")
-                    import re
-                    match = re.search(r'__(\d+)$', container_id)
-                    if match:
-                        container_number = match.group(1)
-                        fallback_selector = f"div[id$='__{container_number}']"
-                        logger.info(f"🔄 Trying fallback selector: {fallback_selector}")
-                        
-                        await page.click(fallback_selector, timeout=5000)
-                        await page.wait_for_timeout(2000)
-                        
-                        if await self._verify_gallery_opened(page):
-                            logger.info(f"✅ Step 15: Successfully opened gallery using fallback selector")
-                            return True
+                    current_container = self._find_container_by_hash_id(page, container_hash)
+                    if current_container:
+                        full_id = await current_container.get_attribute('id')
+                        if full_id:
+                            import re
+                            match = re.search(r'__(\d+)$', full_id)
+                            if match:
+                                container_number = match.group(1)
+                                fallback_selector = f"div[id$='__{container_number}']"
+                                logger.info(f"🔄 Trying fallback selector: {fallback_selector}")
+                                
+                                await page.click(fallback_selector, timeout=5000)
+                                await page.wait_for_timeout(2000)
+                                
+                                if await self._verify_gallery_opened(page):
+                                    logger.info(f"✅ Step 15: Successfully opened gallery using fallback selector")
+                                    return True
                 
                 except Exception as fallback_error:
                     logger.error(f"Fallback click also failed: {fallback_error}")
             
-            logger.error(f"❌ Failed to click boundary container #{container_index} using page.click() method")
+            logger.error(f"❌ Failed to click boundary container #{container_index} using hash-based methods")
             return False
             
         except Exception as e:
@@ -6806,10 +7260,23 @@ class GenerationDownloadManager:
             logger.error(f"Error verifying gallery opened: {e}")
             return False
     
-    async def _click_boundary_container_enhanced(self, container, container_index: int, container_time: str, page) -> bool:
-        """Enhanced boundary container click with better error handling and retry logic"""
+    async def _click_boundary_container_enhanced(self, container, container_index: int, container_time: str, page, hash_id: str = None) -> bool:
+        """Enhanced boundary container click with hash-based selectors for robustness"""
         try:
             logger.info(f"🖱️ ENHANCED boundary click for container #{container_index} (datetime: {container_time})")
+            
+            # Get hash ID for robust identification
+            if hash_id:
+                container_hash = hash_id
+                logger.debug(f"   📦 Using provided hash ID: {container_hash}")
+            else:
+                full_container_id = await container.get_attribute('id')
+                if full_container_id:
+                    container_hash = self._get_container_hash_id(full_container_id)
+                    logger.debug(f"   📦 Extracted hash from {full_container_id} → {container_hash}")
+                else:
+                    logger.error("   ❌ Could not get container ID for enhanced click")
+                    return False
             
             # Strategy 1: Direct container click (most reliable)
             try:
@@ -6824,41 +7291,41 @@ class GenerationDownloadManager:
             except Exception as e:
                 logger.debug(f"   ❌ Strategy 1 failed: {e}")
             
-            # Strategy 2: Page selector click using container ID
+            # Strategy 2: Hash-based selector click
             try:
-                logger.debug("   🎯 Strategy 2: Page selector click")
-                container_id = await container.get_attribute('id')
-                if container_id:
-                    container_selector = f"div[id='{container_id}']"
-                    logger.debug(f"   🔍 Using selector: {container_selector}")
+                logger.debug("   🎯 Strategy 2: Hash-based selector click")
+                container_selector = f'div[id^="{container_hash}__"]'
+                logger.debug(f"   🔍 Using hash selector: {container_selector}")
+                
+                await page.click(container_selector, timeout=5000)
+                await page.wait_for_timeout(2000)
+                
+                if await self._verify_gallery_opened(page):
+                    logger.info("   ✅ Strategy 2 success: Hash selector click opened gallery")
+                    return True
                     
-                    await page.click(container_selector, timeout=5000)
-                    await page.wait_for_timeout(2000)
-                    
-                    if await self._verify_gallery_opened(page):
-                        logger.info("   ✅ Strategy 2 success: Selector click opened gallery")
-                        return True
-                        
             except Exception as e:
                 logger.debug(f"   ❌ Strategy 2 failed: {e}")
             
-            # Strategy 3: Fallback selector using container number
+            # Strategy 3: Fallback selector using current container number
             try:
-                logger.debug("   🎯 Strategy 3: Fallback selector")
-                container_id = await container.get_attribute('id')
-                if container_id:
-                    match = re.search(r'__(\d+)$', container_id)
-                    if match:
-                        container_number = match.group(1)
-                        fallback_selector = f"div[id$='__{container_number}']"
-                        logger.debug(f"   🔍 Using fallback selector: {fallback_selector}")
-                        
-                        await page.click(fallback_selector, timeout=5000)
-                        await page.wait_for_timeout(2000)
-                        
-                        if await self._verify_gallery_opened(page):
-                            logger.info("   ✅ Strategy 3 success: Fallback click opened gallery")
-                            return True
+                logger.debug("   🎯 Strategy 3: Fallback number selector")
+                current_container = self._find_container_by_hash_id(page, container_hash)
+                if current_container:
+                    current_id = await current_container.get_attribute('id')
+                    if current_id:
+                        match = re.search(r'__(\d+)$', current_id)
+                        if match:
+                            container_number = match.group(1)
+                            fallback_selector = f"div[id$='__{container_number}']"
+                            logger.debug(f"   🔍 Using fallback selector: {fallback_selector}")
+                            
+                            await page.click(fallback_selector, timeout=5000)
+                            await page.wait_for_timeout(2000)
+                            
+                            if await self._verify_gallery_opened(page):
+                                logger.info("   ✅ Strategy 3 success: Fallback click opened gallery")
+                                return True
                             
             except Exception as e:
                 logger.debug(f"   ❌ Strategy 3 failed: {e}")
@@ -6911,40 +7378,117 @@ class GenerationDownloadManager:
             return False
             
     async def _extract_container_metadata(self, container, text_content: str) -> Optional[Dict[str, str]]:
-        """Extract creation time and prompt from container text"""
+        """
+        Extract creation time and prompt from container using simplified selector-based approach
+        This replaces the complex gallery metadata extraction with direct container extraction
+        """
         try:
-            # Look for creation time pattern: "31 Aug 2025 13:32:04" or "01 Sep 2025 00:47:18"
-            time_pattern = r'Creation Time\s*(\d{1,2}\s+\w{3}\s+\d{4}\s+\d{2}:\d{2}:\d{2})'
-            time_match = re.search(time_pattern, text_content)
-            if not time_match:
-                # Try alternative pattern without "Creation Time" prefix
-                time_pattern = r'(\d{1,2}\s+\w{3}\s+\d{4}\s+\d{2}:\d{2}:\d{2})'
-                time_match = re.search(time_pattern, text_content)
+            logger.debug("   🔍 Starting simplified container metadata extraction...")
             
-            creation_time = time_match.group(1) if time_match else ""
-            
-            # Extract prompt text from text_content
+            # Strategy 1: Direct selector-based extraction using identified selectors
+            creation_time = ""
             prompt_text = ""
             
-            if creation_time:
-                # Extract prompt text after creation time
-                lines = text_content.split('\n')
-                for i, line in enumerate(lines):
-                    if creation_time in line and i + 1 < len(lines):
-                        # Get the next line as prompt
-                        potential_prompt = lines[i + 1].strip()
-                        if potential_prompt and len(potential_prompt) > 10:
-                            prompt_text = potential_prompt
+            try:
+                # Extract Creation Time using selector pattern: span containing "Creation Time" + adjacent span
+                time_elements = await container.query_selector_all('span')
+                for i, span in enumerate(time_elements):
+                    span_text = await span.text_content() or ""
+                    if "Creation Time" in span_text and i + 1 < len(time_elements):
+                        # Get the next span which should contain the actual time
+                        next_span = time_elements[i + 1]
+                        time_text = await next_span.text_content() or ""
+                        # Extract time pattern from the next span
+                        time_pattern = r'(\d{1,2}\s+\w{3}\s+\d{4}\s+\d{2}:\d{2}:\d{2})'
+                        time_match = re.search(time_pattern, time_text)
+                        if time_match:
+                            creation_time = time_match.group(1)
+                            logger.debug(f"   ✅ Extracted creation time via selectors: {creation_time}")
                             break
                 
-                # Fallback: if we didn't find prompt after creation time, look for any substantial text
+                # Extract Prompt using EXACT HTML structure pattern provided by user
                 if not prompt_text:
+                    try:
+                        # Look for the specific div.sc-eKQYOU.bdGRCs container
+                        prompt_containers = await container.query_selector_all('div.sc-eKQYOU.bdGRCs')
+                        
+                        for prompt_container in prompt_containers:
+                            container_html = await prompt_container.inner_html()
+                            
+                            # Check if ellipsis "..." is present (indicates text prompt)
+                            if '...' in container_html:
+                                # Extract the first span content (before the ellipsis)
+                                first_span = await prompt_container.query_selector('span:first-child')
+                                if first_span:
+                                    span_text = await first_span.text_content()
+                                    if span_text and span_text.strip():
+                                        prompt_text = span_text.strip()
+                                        logger.debug(f"   ✅ Extracted prompt with ellipsis: {prompt_text[:50]}...")
+                                        logger.debug(f"   🔍 DEBUG: prompt_text immediately after extraction: '{prompt_text[:50]}'")
+                                        break
+                            else:
+                                # No ellipsis found = no text prompt (other generation mode)
+                                prompt_text = "NO PROMPT"
+                                logger.debug(f"   ✅ No ellipsis found - using placeholder: {prompt_text}")
+                                break
+                                
+                    except Exception as e:
+                        logger.debug(f"   Exact HTML pattern extraction error: {e}")
+                    
+                    # Fallback to generic extraction if exact pattern fails
+                    if not prompt_text:
+                        logger.debug("   🔄 Falling back to generic span extraction...")
+                        span_elements = await container.query_selector_all('span')
+                        for span in span_elements:
+                            span_text = await span.text_content() or ""
+                            clean_text = span_text.strip()
+                            
+                            # Look for meaningful prompt text
+                            if (len(clean_text) > 10 and
+                                'Creation Time' not in clean_text and
+                                'Inspiration Mode' not in clean_text and
+                                not re.match(r'^\d{1,2}\s+\w{3}\s+\d{4}', clean_text)):
+                                prompt_text = clean_text
+                                logger.debug(f"   ✅ Extracted prompt via fallback: {prompt_text[:50]}...")
+                                break
+                        
+                        # Final fallback: use "NO PROMPT" if nothing found
+                        if not prompt_text:
+                            prompt_text = "NO PROMPT"
+                            logger.debug(f"   ✅ No prompt found - using placeholder: {prompt_text}")
+                            
+            except Exception as e:
+                logger.debug(f"   Selector-based extraction error: {e}")
+            
+            # Strategy 2: Fallback to text-based pattern matching if selectors fail
+            if not creation_time or not prompt_text:
+                logger.debug("   🔄 Falling back to text-based pattern extraction...")
+                
+                # Look for creation time pattern in text content
+                if not creation_time:
+                    time_pattern = r'Creation Time\s*(\d{1,2}\s+\w{3}\s+\d{4}\s+\d{2}:\d{2}:\d{2})'
+                    time_match = re.search(time_pattern, text_content)
+                    if not time_match:
+                        # Try alternative pattern without "Creation Time" prefix
+                        time_pattern = r'(\d{1,2}\s+\w{3}\s+\d{4}\s+\d{2}:\d{2}:\d{2})'
+                        time_match = re.search(time_pattern, text_content)
+                    
+                    creation_time = time_match.group(1) if time_match else ""
+                
+                # Text-based prompt extraction for fallback
+                if not prompt_text:
+                    lines = text_content.split('\n')
                     for line in lines:
                         line = line.strip()
-                        if (line and len(line) > 20 and 
+                        if (line and len(line) > 15 and  # Lower minimum length
                             'Creation Time' not in line and 
-                            not re.match(r'\d{1,2}\s+\w{3}\s+\d{4}', line)):
+                            'Inspiration Mode' not in line and
+                            not re.match(r'^\d{1,2}\s+\w{3}\s+\d{4}', line) and  # Not a date at start
+                            not line.lower() in ['use', 'rerun', 'delete', 'download'] and  # Not button text
+                            len(line.split()) > 3 and  # At least 4 words
+                            'Inspiration Mode' not in line):
                             prompt_text = line
+                            logger.debug(f"   ✅ Extracted prompt via text patterns: {prompt_text[:50]}...")
                             break
             
             # ROBUST STRATEGY: Use relative positioning and ellipsis pattern (Sep 2025)
@@ -7032,20 +7576,25 @@ class GenerationDownloadManager:
                     except Exception:
                         pass
             
+            # Return results with debugging
+            logger.debug(f"   🔍 DEBUG: Final values before return - creation_time='{creation_time}', prompt_text='{prompt_text[:50] if prompt_text else 'EMPTY'}'")
+            
             if creation_time and prompt_text:
-                logger.debug(f"Extracted container metadata - Time: {creation_time}, Prompt: {prompt_text[:50]}...")
+                logger.info(f"   ✅ Container metadata extraction successful - Time: {creation_time}, Prompt: {prompt_text[:50]}...")
                 return {
                     'creation_time': creation_time,
                     'prompt': prompt_text
                 }
             elif creation_time:
-                logger.debug(f"Extracted creation time only: {creation_time}")
+                logger.warning(f"   ⚠️ Partial extraction - Time: {creation_time}, but no prompt found")
+                # Use "NO PROMPT" placeholder instead of empty string
                 return {
                     'creation_time': creation_time,
-                    'prompt': ''
+                    'prompt': 'NO PROMPT'
                 }
-            
-            return None
+            else:
+                logger.warning("   ❌ Container metadata extraction failed - no creation time or prompt found")
+                return None
             
         except Exception as e:
             logger.debug(f"Error extracting container metadata: {e}")
@@ -7489,6 +8038,11 @@ class GenerationDownloadManager:
             # Initialize session tracking
             self.processing_start_time = datetime.now()
             
+            # CRITICAL FIX: Load existing log entries for duplicate detection
+            if self.config.duplicate_check_enabled:
+                self.existing_log_entries = self._load_existing_log_entries()
+                logger.info(f"📋 Loaded {len(self.existing_log_entries)} existing log entries for duplicate detection")
+            
             # Scan for existing files to detect duplicates (if enabled)
             existing_files = set()
             if self.config.duplicate_check_enabled:
@@ -7546,69 +8100,244 @@ class GenerationDownloadManager:
             
             logger.info(f"📊 GENERATION CONTAINER MODE: Found {len(all_containers)} generation containers to process")
             
-            # Process generation containers one by one
+            # CRITICAL FIX: Extract container hash IDs (strip dynamic index) for robust processing
+            container_hash_ids = []
+            for container in all_containers:
+                try:
+                    full_container_id = await container.get_attribute('id')
+                    if full_container_id:
+                        # Strip the dynamic index part (__<int>) to get stable hash ID
+                        hash_id = self._get_container_hash_id(full_container_id)
+                        container_hash_ids.append(hash_id)
+                        logger.debug(f"   📦 Container: {full_container_id} → hash: {hash_id}")
+                except Exception as e:
+                    logger.debug(f"Failed to get container ID: {e}")
+            
+            logger.info(f"📋 Extracted {len(container_hash_ids)} container hash IDs for processing")
+            
+            # ALGORITHM Implementation: Process generation containers with scrolling and retry
             downloads_completed = 0
             containers_processed = 0
+            scroll_attempts = 0
+            max_scroll_attempts = 5
             
-            for container in all_containers:
-                if downloads_completed >= self.config.max_downloads:
-                    logger.info(f"✅ GENERATION CONTAINER MODE: Reached maximum downloads limit ({self.config.max_downloads})")
-                    break
+            # RESTORED: Continuous scroll algorithm with proper WHILE loop structure (as originally designed)
+            container_index = 0
+            completed_found_this_cycle = False
+            
+            while downloads_completed < self.config.max_downloads and scroll_attempts < max_scroll_attempts:
+                # Reset cycle tracking
+                completed_found_this_cycle = False
+                current_cycle_start = container_index
                 
-                containers_processed += 1
-                logger.info(f"🔄 Processing generation container {containers_processed}/{len(all_containers)}")
-                
-                try:
-                    # Extract metadata from generation container
-                    text_content = await container.text_content()
-                    if not text_content:
-                        logger.debug(f"   ⏭️ Skipping container {containers_processed}: No text content")
-                        continue
+                # Process current batch of containers
+                while container_index < len(container_hash_ids) and downloads_completed < self.config.max_downloads:
+                    hash_id = container_hash_ids[container_index]
+                    containers_processed += 1
+                    logger.info(f"🔄 Processing generation container {containers_processed}/{len(container_hash_ids)} (hash: {hash_id[:8]}...)")
                     
-                    # Use enhanced metadata extraction
-                    metadata = await extract_container_metadata_enhanced(container, text_content)
-                    
-                    if not metadata or not metadata.get('creation_time'):
-                        logger.debug(f"   ⏭️ Skipping container {containers_processed}: No creation time metadata")
-                        continue
-                    
-                    container_time = metadata['creation_time']
-                    container_prompt = metadata.get('prompt', 'No prompt available')
-                    
-                    logger.info(f"   📅 Generation: {container_time}")
-                    logger.info(f"   📝 Prompt: {container_prompt[:100]}...")
-                    
-                    # Check for duplicates if enabled
-                    if self.config.duplicate_check_enabled and container_time in existing_files:
-                        if self.config.duplicate_mode.value == 'finish':
-                            logger.info(f"🛑 FINISH mode: Duplicate detected ({container_time}) - stopping downloads")
-                            break
-                        elif self.config.duplicate_mode.value == 'skip':
-                            logger.info(f"⏭️ SKIP mode: Duplicate detected ({container_time}) - skipping this generation")
+                    try:
+                        # CRITICAL FIX: Find container by hash ID (ignores dynamic index changes)
+                        container = self._find_container_by_hash_id(page, hash_id)
+                        if not await container.is_visible():
+                            logger.warning(f"   ⚠️ Container {hash_id}__* no longer exists, skipping...")
+                            container_index += 1
                             continue
                     
-                    # Click the generation container to open it in the gallery
-                    logger.info(f"   🖱️ Clicking generation container to open in gallery...")
-                    await container.click()
-                    await page.wait_for_timeout(3000)  # Wait for gallery to open
+                        # Extract metadata from generation container
+                        text_content = await container.text_content()
+                        if not text_content:
+                            logger.debug(f"   ⏭️ Skipping container {containers_processed}: No text content")
+                            container_index += 1
+                            continue
                     
-                    # Try to download from the opened gallery
-                    download_success = await self._attempt_download_from_current_position(page, containers_processed)
-                    
-                    if download_success:
-                        downloads_completed += 1
-                        logger.info(f"✅ Successfully downloaded generation {containers_processed}: {container_time}")
-                    else:
-                        logger.warning(f"⚠️ Failed to download generation {containers_processed}: {container_time}")
-                    
-                    # Navigate back to /generate page for next container
-                    logger.debug("   🔙 Navigating back to /generate page...")
-                    await page.go_back()
-                    await page.wait_for_timeout(2000)  # Wait for page to load
-                    
-                except Exception as e:
-                    logger.error(f"❌ Error processing generation container {containers_processed}: {e}")
-                    continue
+                        # CRITICAL FIX: Check generation status before processing (Algorithm Step 3)
+                        # Filter by status: Queuing, Estimated, rendering, wrong = skip; others = completed
+                        if "Queuing" in text_content:
+                            logger.info(f"   ⏳ SKIPPING: Container {containers_processed} is Queuing")
+                            container_index += 1
+                            continue
+                        elif "Estimated" in text_content:
+                            logger.info(f"   ⏳ SKIPPING: Container {containers_processed} is Generating (Estimated time)")
+                            container_index += 1
+                            continue
+                        elif "rendering" in text_content:
+                            logger.info(f"   ⏳ SKIPPING: Container {containers_processed} is Rendering")
+                            container_index += 1
+                            continue
+                        elif "wrong" in text_content:
+                            logger.info(f"   🧹 FAILED GENERATION DETECTED: Container {containers_processed} - initiating cleanup process")
+                            
+                            try:
+                                # Extract metadata from failed generation using same method as successful ones
+                                failed_metadata = await extract_container_metadata_enhanced(container, text_content)
+                                
+                                if failed_metadata and failed_metadata.get('creation_time'):
+                                    failed_time = failed_metadata['creation_time']
+                                    failed_prompt = failed_metadata.get('prompt', 'No prompt available')
+                                    
+                                    # Add FAILED prefix to prompt as requested
+                                    prefixed_prompt = f"FAILED!!!__{failed_prompt}"
+                                    
+                                    logger.info(f"   📅 Failed Generation: {failed_time} [FAILED - CLEANUP REQUIRED]")
+                                    logger.info(f"   📝 Failed Prompt: {prefixed_prompt[:100]}...")
+                                    
+                                    # Add failed entry to generation log with FAILED prefix
+                                    logger.info(f"   📋 CLEANUP: Adding failed generation to log with FAILED prefix")
+                                    await self._add_failed_generation_to_log(failed_time, prefixed_prompt)
+                                    
+                                    # Delete the failed container to clean up obstructions
+                                    logger.info(f"   🗑️ CLEANUP: Deleting failed generation container")
+                                    deletion_success = await self._delete_failed_generation(container, containers_processed, failed_time, hash_id)
+                                    
+                                    if deletion_success:
+                                        logger.info(f"✅ CLEANUP COMPLETE: Failed generation cleaned up successfully: {failed_time}")
+                                    else:
+                                        logger.warning(f"⚠️ CLEANUP WARNING: Failed to delete failed generation container: {failed_time}")
+                                
+                                else:
+                                    logger.warning(f"   ⚠️ CLEANUP: Could not extract metadata from failed generation {containers_processed}")
+                                    logger.info(f"   🗑️ CLEANUP: Attempting to delete failed container anyway to prevent obstruction")
+                                    
+                                    # Still try to delete even if extraction failed - cleanup is important
+                                    deletion_success = await self._delete_failed_generation(container, containers_processed, "UNKNOWN_TIME", hash_id)
+                                    
+                                    if deletion_success:
+                                        logger.info(f"✅ CLEANUP: Failed container deleted despite metadata extraction failure")
+                            
+                            except Exception as cleanup_error:
+                                logger.error(f"❌ CLEANUP ERROR: Failed generation cleanup failed: {cleanup_error}")
+                                logger.info(f"   ⚠️ CLEANUP: Continuing with main workflow despite cleanup failure")
+                            
+                            # Always increment and continue - don't let cleanup failures break main workflow
+                            container_index += 1
+                            continue
+                        
+                        # Use enhanced metadata extraction
+                        metadata = await extract_container_metadata_enhanced(container, text_content)
+                        
+                        if not metadata or not metadata.get('creation_time'):
+                            logger.debug(f"   ⏭️ Skipping container {containers_processed}: No creation time metadata")
+                            container_index += 1
+                            continue
+                        
+                        container_time = metadata['creation_time']
+                        container_prompt = metadata.get('prompt', 'No prompt available')
+                        
+                        logger.info(f"   📅 Generation: {container_time} [COMPLETED - READY FOR DOWNLOAD]")
+                        logger.info(f"   📝 Container Preview Prompt: {container_prompt[:100]}...")
+                        
+                        # ALGORITHM STEP 5a-5b: Check for duplicates and delete if found
+                        if self.config.duplicate_check_enabled:
+                            logger.info(f"   🔍 DUPLICATE CHECK: Checking {container_time} against {len(self.existing_log_entries)} log entries")
+                            
+                            # Check both existing files AND log entries for comprehensive duplicate detection
+                            log_duplicate_result = self.check_duplicate_exists(container_time, container_prompt)
+                            file_duplicate = container_time in existing_files
+                            
+                            logger.info(f"   📊 DUPLICATE CHECK RESULTS: log_duplicate={log_duplicate_result}, file_duplicate={file_duplicate}")
+                            
+                            # Consider it a duplicate if found in either files or log entries
+                            is_duplicate = file_duplicate or log_duplicate_result
+                            
+                            if is_duplicate:
+                                logger.info(f"🚨 DUPLICATE DETECTED: {container_time} - Algorithm Step 5b: Deleting duplicate")
+                                
+                                # Algorithm Step 5b: Delete the duplicate generation
+                                deletion_success = await self._delete_duplicate_generation(container, containers_processed, container_time, hash_id)
+                                
+                                if deletion_success:
+                                    logger.info(f"✅ Successfully deleted duplicate generation: {container_time}")
+                                else:
+                                    logger.warning(f"⚠️ Failed to delete duplicate generation: {container_time}")
+                                
+                                # Skip this generation and continue to next
+                                container_index += 1
+                                continue
+                        
+                        # Click the generation container to open it in the gallery
+                        logger.info(f"   🖱️ Clicking generation container to open in gallery...")
+                        await container.click()
+                        await page.wait_for_timeout(3000)  # Wait for gallery to open
+                        
+                        # Try to download from the opened gallery - PASS EXISTING METADATA
+                        download_success = await self._attempt_download_from_current_position(page, containers_processed, container, existing_metadata=metadata)
+                        
+                        if download_success:
+                            downloads_completed += 1
+                            logger.info(f"✅ Successfully downloaded generation {containers_processed}: {container_time}")
+                            
+                            # ALGORITHM Step 5h: Close gallery and delete downloaded container
+                            logger.info("   🔄 ALGORITHM Step 5h: Closing gallery and deleting downloaded container")
+                            
+                            # Close the gallery using the Close icon
+                            await self._close_gallery_view(page)
+                            
+                            # Delete the downloaded container  
+                            deletion_success = await self._delete_downloaded_generation(page, container, containers_processed, container_time, hash_id)
+                            if deletion_success:
+                                logger.info(f"   ✅ Downloaded container deleted successfully: {container_time}")
+                            else:
+                                logger.warning(f"   ⚠️ Failed to delete downloaded container: {container_time}")
+                        else:
+                            logger.warning(f"⚠️ Failed to download generation {containers_processed}: {container_time}")
+                            # Still close gallery if download failed
+                            await self._close_gallery_view(page)
+                        
+                        # Continue to next container in the loop (Algorithm Step 5i)
+                        logger.info(f"   ✅ Algorithm Step 5i: Container {containers_processed} processed successfully")
+                        completed_found_this_cycle = True  # Mark that we found completed containers
+                        container_index += 1  # Move to next container
+                        
+                        # Check if we've reached max downloads
+                        if downloads_completed >= self.config.max_downloads:
+                            logger.info(f"🎯 Reached max downloads ({self.config.max_downloads}), stopping automation")
+                            break
+                        
+                    except Exception as e:
+                        logger.error(f"❌ Error processing generation container {containers_processed}: {e}")
+                        container_index += 1
+                        continue
+                
+                # ALGORITHM STEP 6: After processing current batch, scroll if no completed containers found
+                if not completed_found_this_cycle and scroll_attempts < max_scroll_attempts:
+                    logger.info(f"📜 ALGORITHM Step 6: No completed containers found, scrolling to find more content (attempt {scroll_attempts + 1}/{max_scroll_attempts})")
+                    try:
+                        # Scroll down to load more generations  
+                        await page.evaluate("window.scrollBy(0, 2500)")
+                        await page.wait_for_timeout(3000)  # Wait for new content to load
+                        
+                        # Rescan for new containers after scroll
+                        logger.info("   🔄 Rescanning for new containers after scroll...")
+                        containers = await page.query_selector_all("div[id*='__']")
+                        new_container_hash_ids = []
+                        
+                        for container in containers:
+                            try:
+                                full_container_id = await container.get_attribute('id')
+                                if full_container_id and '__' in full_container_id:
+                                    hash_id = self._get_container_hash_id(full_container_id)
+                                    if hash_id not in container_hash_ids:  # Only add new containers
+                                        new_container_hash_ids.append(hash_id)
+                            except Exception:
+                                continue
+                        
+                        if new_container_hash_ids:
+                            logger.info(f"   ✅ Found {len(new_container_hash_ids)} new containers after scroll - extending container list")
+                            # CRITICAL: Simply extend the container list - the outer while loop will process them
+                            container_hash_ids.extend(new_container_hash_ids)
+                            scroll_attempts = 0  # Reset scroll attempts since we found new content
+                        else:
+                            logger.info("   ⚠️ No new containers found after scroll")
+                            scroll_attempts += 1
+                        
+                    except Exception as scroll_error:
+                        logger.error(f"   ❌ Error during scroll: {scroll_error}")
+                        scroll_attempts += 1
+                else:
+                    # If we found completed containers in this cycle, reset scroll attempts
+                    if completed_found_this_cycle:
+                        scroll_attempts = 0
             
             # Update results
             results['success'] = downloads_completed > 0
@@ -7630,58 +8359,1054 @@ class GenerationDownloadManager:
             results['end_time'] = datetime.now().isoformat()
             return results
     
-    async def _attempt_download_from_current_position(self, page, container_index: int) -> bool:
-        """Attempt to download from the currently opened generation in the gallery"""
+    async def _attempt_download_from_current_position(self, page, container_index: int, container=None, existing_metadata=None) -> bool:
+        """
+        Attempt to download from the currently opened generation in the gallery
+        Following Algorithm Steps 5f-5g: Find Download button → Click Download without/with Watermark
+        
+        Uses simplified container-based metadata extraction instead of complex gallery navigation
+        """
         try:
-            logger.debug(f"   🔍 Attempting download from generation container {container_index}")
+            logger.info(f"   🎯 DOWNLOAD ATTEMPT: Container {container_index} - following algorithm steps 5f-5g")
             
             # Wait for gallery to fully load
-            await page.wait_for_timeout(2000)
-            
-            # Look for download button or download elements
-            download_selectors = [
-                'button:has-text("Download")',
-                '[aria-label*="download"]',
-                '[class*="download"]',
-                'a[href*="download"]',
-                self.config.download_no_watermark_selector,
-                'button:has-text("Download without Watermark")',
-            ]
-            
-            download_element = None
-            for selector in download_selectors:
-                try:
-                    element = await page.query_selector(selector)
-                    if element:
-                        # Check if element is visible
-                        if await element.is_visible():
-                            download_element = element
-                            logger.debug(f"   ✅ Found download element: {selector}")
-                            break
-                except Exception as e:
-                    logger.debug(f"   Selector {selector} failed: {e}")
-                    continue
-            
-            if not download_element:
-                logger.debug(f"   ⚠️ No download element found for container {container_index}")
-                return False
-            
-            # Click the download element
-            logger.debug(f"   🖱️ Clicking download element...")
-            await download_element.click()
-            
-            # Wait for download to start
             await page.wait_for_timeout(3000)
             
-            # Check if download started successfully
-            # This is a simplified check - in real implementation you might want to
-            # monitor the downloads folder or check for download progress indicators
-            logger.debug(f"   ✅ Download attempt completed for container {container_index}")
-            return True
+            # Step 5f: Look for the Download button in icon panel
+            # According to task spec: find text containing [Video, Effects, Frame, References, Repaint, Inpaint]
+            # then locate the third icon which is the Download button
+            logger.debug("   🔍 Step 5f: Looking for Download button in icon panel...")
+            
+            # Strategy 1: Look for download icon by SVG reference (from task example)
+            download_icon_selectors = [
+                'span[role="img"]:has(svg use[xlink:href="#icon-icon_tongyong_20px_xiazai"])',  # Exact from task spec
+                'span.anticon.operate-icon:has(svg use[xlink:href*="xiazai"])',  # Variant
+                'span[class*="operate-icon"]:has(svg)',  # Generic icon approach
+            ]
+            
+            download_button = None
+            for selector in download_icon_selectors:
+                try:
+                    element = await page.query_selector(selector)
+                    if element and await element.is_visible():
+                        download_button = element
+                        logger.info(f"   ✅ Found download icon: {selector}")
+                        break
+                except Exception as e:
+                    logger.debug(f"   Download icon selector {selector} failed: {e}")
+            
+            if not download_button:
+                logger.warning(f"   ⚠️ Download icon not found, trying alternative approaches...")
+                # Fallback: Look for any clickable element with download indication
+                fallback_selectors = [
+                    'button:has-text("Download")',
+                    '[aria-label*="download"]',
+                    '[title*="download"]',
+                    'span:has(svg[fill="currentColor"]):nth-child(3)',  # Third icon approach
+                ]
+                for selector in fallback_selectors:
+                    try:
+                        element = await page.query_selector(selector)
+                        if element and await element.is_visible():
+                            download_button = element
+                            logger.info(f"   ✅ Found download element (fallback): {selector}")
+                            break
+                    except Exception as e:
+                        logger.debug(f"   Fallback selector {selector} failed: {e}")
+            
+            if not download_button:
+                logger.error(f"   ❌ No download button found for container {container_index}")
+                return False
+            
+            # Click the download button to open download options
+            logger.info(f"   🖱️ Step 5f: Clicking download button...")
+            await download_button.click()
+            await page.wait_for_timeout(2000)  # Wait for download options to appear
+            
+            # Step 5f continued: Look for "Download without Watermark" or "Download with Watermark"
+            logger.debug("   🔍 Looking for watermark download options...")
+            
+            watermark_selectors = [
+                'text="Download without Watermark"',  # Exact text match
+                'button:has-text("Download without Watermark")',
+                'span:has-text("Download without Watermark")',
+                'text="Download with Watermark"',  # Fallback option
+                'button:has-text("Download with Watermark")',
+                'span:has-text("Download with Watermark")',
+            ]
+            
+            watermark_option = None
+            selected_option = None
+            for selector in watermark_selectors:
+                try:
+                    element = await page.query_selector(selector)
+                    if element and await element.is_visible():
+                        watermark_option = element
+                        selected_option = "without" if "without" in selector else "with"
+                        logger.info(f"   ✅ Found watermark option: {selector}")
+                        break
+                except Exception as e:
+                    logger.debug(f"   Watermark selector {selector} failed: {e}")
+            
+            if not watermark_option:
+                logger.error(f"   ❌ No watermark download option found for container {container_index}")
+                return False
+            
+            # Get metadata BEFORE starting download (we need creation time and prompt for naming)
+            current_metadata = None
+            
+            # PRIMARY: Use existing container metadata (truncated prompt method - ALWAYS WORKS)
+            if existing_metadata:
+                logger.info("   ✅ Using PRIMARY container metadata (truncated prompt method)")
+                current_metadata = existing_metadata
+            elif container:
+                logger.info("   ✅ Using PRIMARY container-based extraction (truncated prompt method)")
+                container_text = await container.text_content() or ""
+                current_metadata = await self._extract_container_metadata(container, container_text)
+            
+            # FALLBACK ONLY: Gallery extraction if container method fails (this method has issues)
+            if not current_metadata:
+                logger.warning("   ⚠️ PRIMARY container extraction failed - trying FALLBACK gallery method")
+                current_metadata = await self._extract_gallery_metadata(page)
+            
+            if not current_metadata:
+                logger.error("   ❌ Could not extract metadata for download")
+                return False
+            
+            creation_time = current_metadata.get('creation_time')
+            prompt_text = current_metadata.get('prompt', '')
+            
+            # DEBUG: Check what we actually got from metadata extraction
+            logger.debug(f"   🔍 DEBUG: current_metadata = {current_metadata}")
+            logger.debug(f"   🔍 DEBUG: creation_time = '{creation_time}'")
+            logger.debug(f"   🔍 DEBUG: prompt_text = '{prompt_text[:100] if prompt_text else 'EMPTY'}'")
+            
+            if not creation_time:
+                logger.error("   ❌ No creation time found for download")
+                return False
+            
+            logger.info(f"   ✅ Container metadata extraction successful - Time: {creation_time}, Prompt: {prompt_text[:50]}...")
+            
+            # REUSE WORKING IMPLEMENTATION: Set up download promise handling BEFORE clicking
+            download_promise = None
+            
+            def handle_download(download):
+                nonlocal download_promise
+                download_promise = download
+                logger.info(f"   📥 Download started: {download.suggested_filename}")
+            
+            page.on("download", handle_download)
+            
+            try:
+                # Click the watermark option to start download
+                logger.info(f"   🖱️ Step 5f: Clicking 'Download {selected_option} Watermark' option...")
+                await watermark_option.click()
+                
+                # Step 5g: Detect download start, intercept file, save with naming schema
+                logger.info("   🎯 Step 5g: Intercepting download and applying naming schema...")
+                
+                # Wait for download to start
+                await page.wait_for_timeout(3000)
+                
+                # Step 5g: Process download using working promise pattern
+                success = await self._process_download_with_promise(creation_time, prompt_text, download_promise)
+                
+                if success:
+                    logger.info(f"   ✅ Successfully downloaded generation {container_index}: {creation_time}")
+                    return True
+                else:
+                    logger.warning(f"   ⚠️ Failed to download generation {container_index}: {creation_time}")
+                    return False
+                    
+            finally:
+                # Clean up event listener
+                try:
+                    page.remove_listener("download", handle_download)
+                except:
+                    pass  # Ignore cleanup errors
+            
+        except Exception as metadata_error:
+            logger.error(f"   ❌ Failed to extract metadata for download: {metadata_error}")
+            return False
             
         except Exception as e:
             logger.error(f"   ❌ Download attempt failed for container {container_index}: {e}")
             return False
+
+    async def _extract_gallery_metadata(self, page) -> Optional[Dict[str, str]]:
+        """
+        Extract metadata from current gallery view
+        Following Algorithm Step 5d: Use landmark method to find Creation Time and prompt
+        """
+        try:
+            logger.debug("   🔍 Extracting metadata from gallery view using landmark method...")
+            
+            # Use the landmark method from task specification: find "Inspiration Mode" and navigate to metadata
+            landmark_selectors = [
+                'span:has-text("Inspiration Mode")',
+                'span[class*="fLPdud"]:has-text("Inspiration Mode")',
+                'text="Inspiration Mode"',
+            ]
+            
+            inspiration_element = None
+            for selector in landmark_selectors:
+                try:
+                    element = await page.query_selector(selector)
+                    if element:
+                        inspiration_element = element
+                        logger.debug(f"   ✅ Found Inspiration Mode landmark: {selector}")
+                        break
+                except Exception as e:
+                    logger.debug(f"   Landmark selector {selector} failed: {e}")
+            
+            if not inspiration_element:
+                logger.warning("   ⚠️ Inspiration Mode landmark not found, trying alternative extraction...")
+                return await self._extract_gallery_metadata_alternative(page)
+            
+            # Navigate backwards from Inspiration Mode to find Creation Time
+            # According to task spec: Creation Time is one <span> before "Inspiration Mode"
+            try:
+                # Get parent container and find creation time
+                parent = await inspiration_element.query_selector('xpath=..')
+                if parent:
+                    # Look for spans with creation time pattern
+                    time_spans = await parent.query_selector_all('span')
+                    creation_time = None
+                    
+                    for span in time_spans:
+                        span_text = await span.text_content()
+                        if span_text and self._is_valid_creation_time(span_text):
+                            creation_time = span_text
+                            logger.debug(f"   ✅ Found creation time: {creation_time}")
+                            break
+                
+                # Find prompt text by looking for ellipsis pattern
+                prompt_text = ""
+                prompt_selectors = [
+                    'span[aria-describedby*=":r"]',  # Common pattern for prompt spans
+                    'span:has-text("...")',  # Look for ellipsis
+                    'div[class*="cuLCIf"] span',  # From task example
+                ]
+                
+                for selector in prompt_selectors:
+                    try:
+                        elements = await page.query_selector_all(selector)
+                        for element in elements:
+                            text = await element.text_content()
+                            if text and len(text) > 50 and not self._is_valid_creation_time(text):
+                                # This looks like prompt text
+                                prompt_text = text.replace('...', '').strip()
+                                logger.debug(f"   ✅ Found prompt text: {prompt_text[:50]}...")
+                                break
+                        if prompt_text:
+                            break
+                    except Exception as e:
+                        logger.debug(f"   Prompt selector {selector} failed: {e}")
+                
+                if creation_time:
+                    return {
+                        'creation_time': creation_time,
+                        'prompt': prompt_text
+                    }
+                else:
+                    logger.warning("   ⚠️ Could not extract creation time from gallery")
+                    return None
+                    
+            except Exception as nav_error:
+                logger.warning(f"   ⚠️ Navigation from landmark failed: {nav_error}")
+                return await self._extract_gallery_metadata_alternative(page)
+                
+        except Exception as e:
+            logger.error(f"   ❌ Gallery metadata extraction failed: {e}")
+            return None
+
+    async def _extract_gallery_metadata_alternative(self, page) -> Optional[Dict[str, str]]:
+        """Alternative metadata extraction without landmark method"""
+        try:
+            logger.debug("   🔄 Using alternative metadata extraction...")
+            
+            # Look for any creation time pattern on the page
+            creation_time = None
+            time_patterns = [
+                r'\d{2} \w{3} \d{4} \d{2}:\d{2}:\d{2}',  # "05 Sep 2025 17:06:29"
+                r'\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}',  # Alternative format
+            ]
+            
+            page_text = await page.text_content()
+            import re
+            for pattern in time_patterns:
+                matches = re.findall(pattern, page_text)
+                if matches:
+                    creation_time = matches[0]  # Take first match
+                    logger.debug(f"   ✅ Found creation time (alternative): {creation_time}")
+                    break
+            
+            return {
+                'creation_time': creation_time,
+                'prompt': 'Extracted from gallery'  # Fallback prompt
+            } if creation_time else None
+            
+        except Exception as e:
+            logger.error(f"   ❌ Alternative metadata extraction failed: {e}")
+            return None
+
+    def _is_valid_creation_time(self, text: str) -> bool:
+        """Check if text matches creation time pattern"""
+        import re
+        patterns = [
+            r'\d{2} \w{3} \d{4} \d{2}:\d{2}:\d{2}',  # "05 Sep 2025 17:06:29"
+            r'\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}',  # Alternative format
+        ]
+        for pattern in patterns:
+            if re.match(pattern, text.strip()):
+                return True
+        return False
+
+    async def _process_download_file(self, creation_time: str, prompt_text: str) -> bool:
+        """
+        Process downloaded file: rename with naming schema and add to log
+        Following Algorithm Step 5g-5h: File management and logging
+        """
+        try:
+            logger.info(f"   📁 Step 5g: Processing download file for {creation_time}")
+            
+            # REUSE WORKING IMPLEMENTATION: File system detection fallback only
+            downloads_path = Path(self.config.downloads_folder)
+            downloads_path.mkdir(parents=True, exist_ok=True)
+            
+            # Try to find recently downloaded file
+            downloaded_file = await self._fallback_file_detection(creation_time, downloads_path)
+            
+            if downloaded_file:
+                # Log successful download
+                await self._add_to_generation_log(creation_time, prompt_text, downloaded_file.name)
+                logger.info(f"   ✅ Step 5g: Successfully processed download: {downloaded_file.name}")
+                return True
+            else:
+                # Log failed download
+                await self._add_to_generation_log(creation_time, prompt_text, "download_failed")
+                logger.warning(f"   ⚠️ Step 5g: No download file found for {creation_time}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"   ❌ Error processing download file: {e}")
+            return False
+    
+    async def _fallback_file_detection(self, creation_time: str, downloads_path: Path) -> Path:
+        """
+        Fallback file detection - look for recently downloaded files
+        REUSE WORKING IMPLEMENTATION: Based on proven file detection patterns
+        """
+        try:
+            import time
+            current_time = time.time()
+            time_window = 120  # Look for files in last 2 minutes
+            
+            # Search locations (reuse working pattern from docs)
+            search_locations = [
+                downloads_path,  # Configured download path
+                Path.home() / "Downloads",  # Default browser downloads
+                Path("/tmp"),  # Temp downloads
+                Path("."),  # Current directory
+            ]
+            
+            new_files = []
+            
+            for location in search_locations:
+                if not location.exists():
+                    continue
+                    
+                try:
+                    for file_path in location.iterdir():
+                        if file_path.is_file() and file_path.suffix.lower() in ['.mp4', '.mov', '.avi', '.webm', '.mkv']:
+                            file_age = current_time - file_path.stat().st_mtime
+                            if file_age < time_window:  # Recent download
+                                new_files.append(file_path)
+                except Exception as e:
+                    logger.debug(f"   Could not scan {location}: {e}")
+            
+            if new_files:
+                # Return most recent file
+                latest_file = max(new_files, key=lambda f: f.stat().st_mtime)
+                logger.info(f"   ✅ Found recent download: {latest_file.name} (age: {current_time - latest_file.stat().st_mtime:.1f}s)")
+                
+                # Move to downloads folder if needed
+                if latest_file.parent != downloads_path:
+                    time_formatted = self._format_creation_time(creation_time)
+                    new_name = f"vid_{time_formatted}_skipTest{latest_file.suffix}"
+                    target_path = downloads_path / new_name
+                    
+                    # Handle conflicts
+                    counter = 1
+                    while target_path.exists():
+                        name_parts = new_name.split('.')
+                        name_without_ext = '.'.join(name_parts[:-1])
+                        ext = name_parts[-1] if len(name_parts) > 1 else ''
+                        new_name = f"{name_without_ext}_v{counter}.{ext}" if ext else f"{name_without_ext}_v{counter}"
+                        target_path = downloads_path / new_name
+                        counter += 1
+                    
+                    import shutil
+                    shutil.move(str(latest_file), str(target_path))
+                    logger.info(f"   📁 Moved file to: {target_path.name}")
+                    return target_path
+                else:
+                    return latest_file
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"   ❌ Fallback file detection failed: {e}")
+            return None
+    
+    async def _process_download_with_promise(self, creation_time: str, prompt_text: str, download_promise) -> bool:
+        """
+        Process download using Playwright download promise - REUSE WORKING IMPLEMENTATION
+        This is the proven pattern from the existing working download methods
+        """
+        try:
+            downloads_path = Path(self.config.downloads_folder)
+            downloads_path.mkdir(parents=True, exist_ok=True)
+            
+            downloaded_file = None
+            
+            # Primary method: Use download promise (WORKING IMPLEMENTATION)
+            if download_promise:
+                try:
+                    # Generate filename with proper naming schema
+                    time_formatted = self._format_creation_time(creation_time)
+                    target_filename = f"vid_{time_formatted}_skipTest.mp4"
+                    target_path = downloads_path / target_filename
+                    
+                    # Handle filename conflicts
+                    if target_path.exists():
+                        counter = 1
+                        while target_path.exists():
+                            target_filename = f"vid_{time_formatted}_skipTest_v{counter}.mp4"
+                            target_path = downloads_path / target_filename
+                            counter += 1
+                    
+                    # WORKING PATTERN: Save download using promise (from lines 4280-4281)
+                    await download_promise.save_as(str(target_path))
+                    downloaded_file = target_path
+                    logger.info(f"   ✅ Download saved using promise: {downloaded_file.name}")
+                    
+                except Exception as e:
+                    logger.error(f"   ❌ Failed to save download using promise: {e}")
+            
+            # Fallback: File detection if promise failed  
+            if not downloaded_file:
+                logger.info(f"   🔍 Fallback: Searching for download files...")
+                downloaded_file = await self._fallback_file_detection(creation_time, downloads_path)
+            
+            if downloaded_file:
+                # Log successful download
+                await self._add_to_generation_log(creation_time, prompt_text, downloaded_file.name)
+                logger.info(f"   ✅ Step 5g: Successfully processed download: {downloaded_file.name}")
+                return True
+            else:
+                # Log failed download
+                await self._add_to_generation_log(creation_time, prompt_text, "download_failed")
+                logger.warning(f"   ⚠️ Step 5g: No download file found for {creation_time}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"   ❌ Error processing download with promise: {e}")
+            return False
+    
+    async def _detect_downloaded_files(self, creation_time: str, prompt_text: str, max_wait_attempts: int, wait_time: int) -> bool:
+        """
+        Detect downloaded files with retry logic and timeout protection
+        """
+            
+        downloads_path = Path(self.config.downloads_folder)
+        downloads_path.mkdir(parents=True, exist_ok=True)
+        
+        # Check browser's actual download directory first
+        browser_download_paths = [
+            downloads_path,  # Our configured path
+            Path.home() / "Downloads",  # Default browser downloads
+            Path("/tmp"),  # Temp downloads
+            Path("."),  # Current directory
+        ]
+        
+        logger.info(f"   🔍 Searching for downloads in: {len(browser_download_paths)} locations")
+        for path in browser_download_paths:
+            logger.debug(f"     📂 {path}")
+        
+        new_files = []
+        
+        # ENHANCED: Retry file detection with timeout protection
+        for attempt in range(max_wait_attempts):
+                logger.debug(f"   🔍 Attempt {attempt + 1}/{max_wait_attempts}: Checking for downloaded files...")
+                
+                # Wait for download to complete
+                await asyncio.sleep(wait_time)
+                
+                # Check downloads folder for new files (extended time window)
+                import time
+                current_time = time.time()
+                new_files = []
+                
+                # ENHANCED: Look for files modified in the last 120 seconds (2 minutes)
+                time_window = 120
+                
+                for file_path in downloads_path.iterdir():
+                    if file_path.is_file():
+                        file_age = current_time - file_path.stat().st_mtime
+                        if file_age < time_window:  # File modified in last 2 minutes
+                            new_files.append(file_path)
+                
+                # ENHANCED: Check all potential download locations
+                for download_dir in browser_download_paths[1:]:  # Skip configured path (already checked)
+                    if download_dir.exists():
+                        for file_path in download_dir.iterdir():
+                            if file_path.is_file() and file_path.suffix.lower() in ['.mp4', '.mov', '.avi', '.webm', '.mkv']:
+                                file_age = current_time - file_path.stat().st_mtime
+                                if file_age < time_window:  # Recent download
+                                    new_files.append(file_path)
+                
+                # If files found, break out of retry loop
+                if new_files:
+                    logger.info(f"   ✅ Found {len(new_files)} download file(s) on attempt {attempt + 1}")
+                    break
+                    
+                # Log attempt status with more detail
+                if attempt < max_wait_attempts - 1:
+                    logger.debug(f"   ⏳ Attempt {attempt + 1}/{max_wait_attempts}: No files found, waiting {wait_time}s...")
+                else:
+                    logger.warning(f"   ⚠️ Final attempt {attempt + 1}/{max_wait_attempts}: No files found")
+            
+        if not new_files:
+            logger.warning(f"   ⚠️ No recent download files found after {max_wait_attempts} attempts ({max_wait_attempts * wait_time}s total wait)")
+            logger.info(f"   📂 Searched in {len(browser_download_paths)} locations for video files (.mp4, .mov, .avi, .webm, .mkv)")
+            # Log as attempted but failed
+            await self._add_to_generation_log(creation_time, prompt_text, "download_not_found")
+            return False  # Return False since no file was actually processed
+            
+        # Use the most recent file
+        latest_file = max(new_files, key=lambda f: f.stat().st_mtime)
+        logger.info(f"   ✅ Found download file: {latest_file.name} (size: {latest_file.stat().st_size} bytes)")
+        
+        # ENHANCED: Generate proper filename with naming schema
+        time_formatted = self._format_creation_time(creation_time)
+        file_extension = latest_file.suffix  # Preserve original extension
+        new_filename = f"vid_{time_formatted}_skipTest{file_extension}"
+        target_path = downloads_path / new_filename
+        
+        # ENHANCED: Move and rename the file with error handling
+        import shutil
+        try:
+            # Ensure target doesn't exist (avoid conflicts)
+            if target_path.exists():
+                counter = 1
+                while target_path.exists():
+                    name_parts = new_filename.split('.')
+                    name_without_ext = '.'.join(name_parts[:-1])
+                    ext = name_parts[-1] if len(name_parts) > 1 else ''
+                    new_filename = f"{name_without_ext}_v{counter}.{ext}" if ext else f"{name_without_ext}_v{counter}"
+                    target_path = downloads_path / new_filename
+                    counter += 1
+            
+            shutil.move(str(latest_file), str(target_path))
+            logger.info(f"   ✅ Step 5g: File renamed and moved: {new_filename}")
+            
+            # FIXED: Add metadata to generation_downloads.txt
+            await self._add_to_generation_log(creation_time, prompt_text, new_filename)
+            
+            return True
+            
+        except Exception as move_error:
+            logger.error(f"   ❌ Failed to move file: {move_error}")
+            # Still try to log the download attempt
+            await self._add_to_generation_log(creation_time, prompt_text, latest_file.name)
+            return False
+            
+        except Exception as e:
+            logger.error(f"   ❌ File processing failed: {e}")
+            return False
+
+    def _format_creation_time(self, creation_time: str) -> str:
+        """Convert creation time to filename format: YYYY-MM-DD-HH-MM-SS"""
+        try:
+            # Parse: "05 Sep 2025 17:06:29" -> "2025-09-05-17-06-29"
+            from datetime import datetime
+            dt = datetime.strptime(creation_time, "%d %b %Y %H:%M:%S")
+            return dt.strftime("%Y-%m-%d-%H-%M-%S")
+        except Exception as e:
+            logger.warning(f"   ⚠️ Time formatting failed: {e}, using fallback")
+            # Fallback: use current timestamp
+            from datetime import datetime
+            return datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
+
+    async def _add_failed_generation_to_log(self, creation_time: str, prefixed_prompt: str):
+        """Add failed generation entry to generation_downloads.txt with FAILED prefix and chronological ordering"""
+        try:
+            log_file = Path(self.config.log_file_path)
+            log_file.parent.mkdir(parents=True, exist_ok=True)
+            
+            # Create new failed entry with proper format (matching original schema)
+            new_entry = {
+                'id': '#999999999',
+                'creation_time': creation_time,
+                'prompt_text': prefixed_prompt,  # Already has "FAILED!!!__" prefix
+                'separator': '========================================'
+            }
+            
+            logger.info(f"   📝 CLEANUP: Adding failed generation to log: {creation_time}")
+            
+            # Read and parse existing entries if file exists
+            existing_entries = []
+            if log_file.exists():
+                existing_entries = self._parse_log_entries(log_file)
+            
+            # Add new failed entry to list
+            existing_entries.append(new_entry)
+            
+            # Sort by creation time (newest first) - same as successful downloads
+            sorted_entries = self._sort_entries_by_creation_time(existing_entries)
+            
+            # Write back to file with proper formatting
+            self._write_sorted_entries_to_log(log_file, sorted_entries)
+            
+            logger.info(f"   ✅ CLEANUP: Failed generation logged successfully: {creation_time}")
+            
+        except Exception as e:
+            logger.error(f"   ❌ CLEANUP ERROR: Failed to log failed generation: {e}")
+            # Don't raise - let cleanup continue
+    
+    async def _delete_failed_generation(self, container, container_index: int, creation_time: str, hash_id: str = None) -> bool:
+        """
+        CLEANUP: Delete failed generation container by clicking Delete button
+        
+        Same deletion process as duplicates but for failed generations.
+        Looks for "Use-Rerun-Delete" panel and clicks Delete button.
+        Handles confirmation popup if it appears.
+        
+        Returns:
+            bool: True if deletion successful, False otherwise
+        """
+        try:
+            logger.info(f"   🗑️ CLEANUP: Attempting to delete failed generation {container_index}")
+            
+            # Look for Delete button using same selectors as duplicate deletion
+            delete_selectors = [
+                # PRIMARY: Delete button with the specific SVG icon (most reliable)
+                'div.right-container-operation button:has(use[xlink:href="#icon-icon_tongyong_20px_shanchu"])',
+                
+                # FIXED: Delete is the 3rd button in Use-Rerun-Delete sequence
+                'div.sc-jVkSTN.dfFQuI.right-container-operation button:nth-child(3)',  # Third button (Delete)
+                'div.right-container-operation button:nth-child(3)',                    # Third button (Delete)
+                
+                # Alternative specific selectors
+                'div.right-container-operation div.sc-jxKUFb.bQvma-D button',        # The delete button container
+            ]
+            
+            # First find the operation panel within this container (using Locator API)
+            panel = container.locator('div.right-container-operation, .sc-jVkSTN.dfFQuI.right-container-operation')
+            if not await panel.count():
+                logger.warning(f"   ⚠️ CLEANUP: No operation panel found for failed container {container_index}")
+                return False
+            
+            logger.info("   🎛️ Found container operation panel (Use-Rerun-Delete)")
+            
+            # Try to find delete button using the selectors (using Locator API)
+            delete_button = None
+            used_selector = None
+            
+            for selector in delete_selectors:
+                try:
+                    delete_button = container.locator(selector)
+                    if await delete_button.count() and await delete_button.is_visible():
+                        used_selector = selector
+                        break
+                except Exception:
+                    continue
+            
+            if not delete_button or not await delete_button.count():
+                logger.warning(f"   ⚠️ CLEANUP: Delete button not found for failed container {container_index}")
+                return False
+            
+            logger.info(f"   ✅ Found delete button using selector: {used_selector}")
+            
+            # Get button details for debugging (using Locator API)
+            button_text = await delete_button.text_content() or ""
+            button_class = await delete_button.get_attribute('class') or ""
+            logger.info(f"   📋 Button details: text='{button_text}', class='{button_class}'")
+            
+            # Click the delete button
+            logger.info("   🖱️ Clicking delete button...")
+            await delete_button.click()
+            
+            # Handle confirmation popup (same as duplicate deletion) - need to get page from container
+            popup_handled = await self._handle_delete_confirmation(container.page)
+            logger.info(f"   🗑️ Delete button clicked for failed generation {creation_time}")
+            logger.info(f"   ✅ Confirmation popup handled: {popup_handled}")
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"   ❌ CLEANUP ERROR: Failed to delete failed generation {container_index}: {e}")
+            return False
+
+    async def _add_to_generation_log(self, creation_time: str, prompt_text: str, filename: str):
+        """Add entry to generation_downloads.txt with true chronological ordering by Creation Time (newest first)"""
+        try:
+            log_file = Path(self.config.log_file_path)
+            log_file.parent.mkdir(parents=True, exist_ok=True)
+            
+            # Create new entry with proper format (matching original schema)
+            new_entry = {
+                'id': '#999999999',
+                'creation_time': creation_time,
+                'prompt_text': prompt_text,
+                'separator': '========================================'
+            }
+            
+            logger.info(f"   ✅ Step 5g: Adding to log with chronological sorting: {creation_time}")
+            
+            # Read and parse existing entries if file exists
+            existing_entries = []
+            if log_file.exists():
+                existing_entries = self._parse_log_entries(log_file)
+            
+            # Add new entry to list
+            existing_entries.append(new_entry)
+            
+            # Sort by creation time (newest first)
+            sorted_entries = self._sort_entries_by_creation_time(existing_entries)
+            
+            # Write all entries back to file in proper chronological order
+            self._write_sorted_entries_to_log(log_file, sorted_entries)
+                
+            logger.info(f"   ✅ Step 5g: Metadata logged successfully with chronological ordering")
+            
+        except Exception as e:
+            logger.error(f"   ❌ Failed to add to generation log: {e}")
+    
+    def _parse_log_entries(self, log_file: Path) -> list:
+        """Parse existing log entries from file"""
+        entries = []
+        try:
+            with open(log_file, 'r', encoding='utf-8') as f:
+                content = f.read().strip()
+            
+            if not content:
+                return entries
+            
+            # Split by separator and process each entry
+            raw_entries = content.split('========================================')
+            
+            for raw_entry in raw_entries:
+                raw_entry = raw_entry.strip()
+                if not raw_entry:
+                    continue
+                    
+                lines = raw_entry.split('\n')
+                if len(lines) >= 3:
+                    entry = {
+                        'id': lines[0].strip(),
+                        'creation_time': lines[1].strip(),
+                        'prompt_text': '\n'.join(lines[2:]).strip(),
+                        'separator': '========================================'
+                    }
+                    entries.append(entry)
+            
+            logger.debug(f"   📊 Parsed {len(entries)} existing log entries")
+            return entries
+            
+        except Exception as e:
+            logger.error(f"   ❌ Error parsing log entries: {e}")
+            return entries
+    
+    def _sort_entries_by_creation_time(self, entries: list) -> list:
+        """Sort entries by creation time (newest first)"""
+        try:
+            from datetime import datetime
+            
+            def parse_creation_time(time_str: str):
+                """Parse creation time string to datetime for sorting"""
+                try:
+                    # Handle format: "05 Sep 2025 17:06:29"
+                    return datetime.strptime(time_str, '%d %b %Y %H:%M:%S')
+                except ValueError:
+                    try:
+                        # Handle alternative format: "2025-09-05 17:06:29" 
+                        return datetime.strptime(time_str, '%Y-%m-%d %H:%M:%S')
+                    except ValueError:
+                        # Fallback: return very old date so it appears last
+                        logger.warning(f"   ⚠️ Cannot parse creation time: {time_str}")
+                        return datetime(1900, 1, 1)
+            
+            # Sort by creation time (newest first)
+            sorted_entries = sorted(entries, 
+                                  key=lambda x: parse_creation_time(x['creation_time']), 
+                                  reverse=True)
+            
+            logger.debug(f"   ✅ Sorted {len(sorted_entries)} entries by creation time (newest first)")
+            return sorted_entries
+            
+        except Exception as e:
+            logger.error(f"   ❌ Error sorting entries: {e}")
+            return entries
+    
+    def _write_sorted_entries_to_log(self, log_file: Path, entries: list):
+        """Write sorted entries back to log file"""
+        try:
+            with open(log_file, 'w', encoding='utf-8') as f:
+                for i, entry in enumerate(entries):
+                    # Write entry in original format
+                    f.write(f"{entry['id']}\n{entry['creation_time']}\n{entry['prompt_text']}\n{entry['separator']}")
+                    
+                    # Add newline between entries (except after last entry)
+                    if i < len(entries) - 1:
+                        f.write('\n')
+                
+                # Add final newline
+                f.write('\n')
+            
+            logger.debug(f"   ✅ Wrote {len(entries)} entries to log file in chronological order")
+            
+        except Exception as e:
+            logger.error(f"   ❌ Error writing entries to log: {e}")
+    
+    async def _delete_duplicate_generation(self, container, container_index: int, creation_time: str, hash_id: str = None) -> bool:
+        """
+        Algorithm Step 5b: Delete duplicate generation by clicking Delete button
+        
+        Looks for "Use-Rerun-Delete" panel in the generation container and clicks Delete button.
+        Handles confirmation popup if it appears.
+        
+        Returns:
+            bool: True if deletion successful, False otherwise
+        """
+        try:
+            logger.info(f"   🗑️ Algorithm Step 5b: Attempting to delete duplicate generation {container_index}")
+            
+            # Look for Delete button in the "Use-Rerun-Delete" panel within this container
+            # Use the specific HTML structure provided by user - Delete is the THIRD button, not :last-child
+            delete_selectors = [
+                # PRIMARY: Delete button with the specific SVG icon (most reliable)
+                'div.right-container-operation button:has(use[xlink:href="#icon-icon_tongyong_20px_shanchu"])',
+                
+                # FIXED: Delete is the 3rd button in Use-Rerun-Delete sequence
+                'div.sc-jVkSTN.dfFQuI.right-container-operation button:nth-child(3)',  # Third button (Delete)
+                'div.right-container-operation button:nth-child(3)',                    # Third button (Delete)
+                
+                # Alternative specific selectors based on HTML structure
+                'div.right-container-operation div.sc-jxKUFb.bQvma-D button',        # The delete button container
+                
+                # SVG icon fallback selectors
+                'button:has(use[xlink:href="#icon-icon_tongyong_20px_shanchu"])',    # Any button with delete icon
+                'button:has(svg use[xlink:href="#icon-icon_tongyong_20px_shanchu"])', # Button containing delete SVG
+                
+                # More specific text-based selectors to avoid "Use" button
+                'div.right-container-operation button:not(:has-text("Use")):not(:has-text("Rerun"))',
+                'button[aria-label*="delete" i]',               # Button with delete in aria-label
+                'button[title*="delete" i]',                    # Button with delete in title
+                
+                # Generic fallback selectors (last resort)
+                'button:has-text("Delete")',                    # Button with Delete text
+                'button[class*="delete"]',                      # Button with delete class
+            ]
+            
+            delete_button_found = False
+            
+            # First, try to find the container operation panel
+            operation_panel = None
+            try:
+                operation_panel = container.locator('div.right-container-operation').first
+                if await operation_panel.is_visible():
+                    logger.info(f"   🎛️ Found container operation panel (Use-Rerun-Delete)")
+            except Exception as e:
+                logger.debug(f"   Could not find operation panel: {e}")
+            
+            for selector in delete_selectors:
+                try:
+                    # Look for delete button within this specific container
+                    delete_button = container.locator(selector).first
+                    
+                    if await delete_button.is_visible():
+                        logger.info(f"   ✅ Found delete button using selector: {selector}")
+                        
+                        # Get some info about the button for debugging
+                        try:
+                            button_text = await delete_button.inner_text()
+                            button_class = await delete_button.get_attribute('class')
+                            logger.info(f"   📋 Button details: text='{button_text}', class='{button_class[:100] if button_class else 'none'}'")
+                        except:
+                            pass
+                        
+                        # Click the delete button
+                        logger.info(f"   🖱️ Clicking delete button...")
+                        await delete_button.click()
+                        delete_button_found = True
+                        
+                        # Wait a moment for any confirmation popup
+                        await container.page.wait_for_timeout(1500)
+                        
+                        # Look for confirmation popup and click confirm if present
+                        confirmation_handled = await self._handle_delete_confirmation(container.page)
+                        
+                        logger.info(f"   🗑️ Delete button clicked for generation {creation_time}")
+                        logger.info(f"   ✅ Confirmation popup handled: {confirmation_handled}")
+                        
+                        # Wait for deletion to complete and DOM to update
+                        await container.page.wait_for_timeout(2500)
+                        
+                        return True
+                        
+                except Exception as selector_error:
+                    logger.debug(f"   🔍 Selector {selector} failed: {selector_error}")
+                    continue
+            
+            if not delete_button_found:
+                logger.warning(f"   ❌ No delete button found for generation {container_index}")
+                logger.debug(f"   🔍 Tried selectors: {delete_selectors}")
+                return False
+            
+        except Exception as e:
+            logger.error(f"   ❌ Error deleting duplicate generation {container_index}: {e}")
+            return False
+    
+    async def _close_gallery_view(self, page) -> bool:
+        """
+        Algorithm Step 5h: Close gallery by clicking the Close icon
+        Uses the exact HTML structure provided by user
+        """
+        try:
+            logger.info("   🚫 Closing gallery with Close icon...")
+            
+            # Close icon selectors based on provided HTML structure
+            close_selectors = [
+                # Primary selector with exact xlink:href
+                'span.anticon.close-icon svg use[xlink:href="#icon-icon_tongyong_20px_guanbi"]',
+                'span.close-icon svg use[xlink:href="#icon-icon_tongyong_20px_guanbi"]',
+                
+                # Alternative selectors for the close icon container
+                'span.sc-lokenD.klijhb span.close-icon',
+                'span.anticon.close-icon',
+                'span.close-icon',
+                
+                # Fallback selectors
+                'svg use[xlink:href="#icon-icon_tongyong_20px_guanbi"]',
+                '[class*="close-icon"]',
+                'span[role="img"]:has(svg use[xlink:href*="guanbi"])',
+            ]
+            
+            for selector in close_selectors:
+                try:
+                    close_element = await page.query_selector(selector)
+                    if close_element and await close_element.is_visible():
+                        logger.info(f"   ✅ Found Close icon using selector: {selector}")
+                        await close_element.click()
+                        await page.wait_for_timeout(2000)  # Wait for gallery to close
+                        logger.info("   🚫 Gallery closed successfully")
+                        return True
+                except Exception as e:
+                    logger.debug(f"   Close selector {selector} failed: {e}")
+                    continue
+            
+            logger.warning("   ⚠️ Close icon not found - gallery may remain open")
+            return False
+            
+        except Exception as e:
+            logger.error(f"   ❌ Error closing gallery view: {e}")
+            return False
+    
+    async def _delete_downloaded_generation(self, page, container, container_index: int, creation_time: str, hash_id: str = None) -> bool:
+        """
+        Algorithm Step 5h: Delete the downloaded generation container
+        This is the same logic as duplicate deletion but for downloaded containers
+        """
+        try:
+            logger.info(f"   🗑️ Algorithm Step 5h: Deleting downloaded generation {container_index}")
+            return await self._delete_duplicate_generation(container, container_index, creation_time, hash_id)
+            
+        except Exception as e:
+            logger.error(f"   ❌ Error deleting downloaded generation {container_index}: {e}")
+            return False
+    
+    async def _handle_delete_confirmation(self, page) -> bool:
+        """
+        Handle deletion confirmation popup if it appears
+        
+        Returns:
+            bool: True if confirmation was handled (or no popup found), False if error
+        """
+        try:
+            # Common confirmation popup selectors
+            confirmation_selectors = [
+                'button:has-text("Confirm")',
+                'button:has-text("Yes")', 
+                'button:has-text("Delete")',
+                'button:has-text("OK")',
+                'button[class*="confirm"]',
+                'button[class*="primary"]',
+                '.modal button:has-text("Delete")',
+                '.dialog button:has-text("Confirm")',
+                '.popup button:has-text("Yes")'
+            ]
+            
+            # Wait a short time to see if confirmation popup appears
+            await page.wait_for_timeout(500)
+            
+            for selector in confirmation_selectors:
+                try:
+                    confirm_button = page.locator(selector).first
+                    
+                    if await confirm_button.is_visible():
+                        logger.info(f"   ✅ Found confirmation button: {selector}")
+                        await confirm_button.click()
+                        await page.wait_for_timeout(1000)  # Wait for action to complete
+                        return True
+                        
+                except Exception:
+                    continue
+            
+            # No confirmation popup found (this is normal)
+            logger.debug("   ℹ️ No confirmation popup detected")
+            return True
+            
+        except Exception as e:
+            logger.error(f"   ❌ Error handling confirmation popup: {e}")
+            return False
+    
+    def _get_container_hash_id(self, full_container_id: str) -> str:
+        """
+        Extract the unique hash part from container ID, stripping the dynamic index.
+        
+        Args:
+            full_container_id: Full container ID like "492c565335a14de197cd7edc44167edc__7"
+            
+        Returns:
+            str: Hash part like "492c565335a14de197cd7edc44167edc"
+        """
+        if not full_container_id:
+            return full_container_id
+        
+        # Split by '__' and take the first part (unique hash)
+        if '__' in full_container_id:
+            hash_part = full_container_id.split('__')[0]
+            return hash_part
+        
+        # If no '__' found, return as-is
+        return full_container_id
+    
+    def _find_container_by_hash_id(self, page, hash_id: str):
+        """
+        Find container by hash ID using CSS selector that matches the hash part.
+        
+        Args:
+            page: Playwright page object
+            hash_id: Hash part of container ID like "492c565335a14de197cd7edc44167edc"
+            
+        Returns:
+            Playwright element locator for the container
+        """
+        # Use CSS selector that matches IDs starting with the hash
+        container_selector = f'div[id^="{hash_id}__"]'
+        return page.locator(container_selector).first
     
     async def run_main_thumbnail_loop(self, page, results: Dict[str, Any]) -> bool:
         """Run the main thumbnail processing loop - extracted from run_download_automation for reuse"""

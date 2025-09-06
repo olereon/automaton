@@ -20,10 +20,28 @@ sys.path.insert(0, parent_dir)
 # Import from src directory
 try:
     from src.core.engine import WebAutomationEngine, AutomationConfig, Action, ActionType
+    from src.core.controller import AutomationController
 except ImportError:
-    # Alternative import path
-    sys.path.insert(0, os.path.join(parent_dir, 'src'))
-    from core.engine import WebAutomationEngine, AutomationConfig, Action, ActionType
+    try:
+        # Alternative import path
+        sys.path.insert(0, os.path.join(parent_dir, 'src'))
+        from core.engine import WebAutomationEngine, AutomationConfig, Action, ActionType
+        from core.controller import AutomationController
+    except ImportError:
+        # Final fallback - direct import
+        import importlib.util
+        engine_spec = importlib.util.spec_from_file_location("engine", os.path.join(parent_dir, "src", "core", "engine.py"))
+        engine_module = importlib.util.module_from_spec(engine_spec)
+        engine_spec.loader.exec_module(engine_module)
+        WebAutomationEngine = engine_module.WebAutomationEngine
+        AutomationConfig = engine_module.AutomationConfig
+        Action = engine_module.Action
+        ActionType = engine_module.ActionType
+        
+        controller_spec = importlib.util.spec_from_file_location("controller", os.path.join(parent_dir, "src", "core", "controller.py"))
+        controller_module = importlib.util.module_from_spec(controller_spec)
+        controller_spec.loader.exec_module(controller_module)
+        AutomationController = controller_module.AutomationController
 
 
 class FastGenerationDownloader:
@@ -197,8 +215,10 @@ class FastGenerationDownloader:
             viewport=config_data.get('viewport', {"width": 2560, "height": 1440})
         )
         
-        # Create automation engine
-        engine = WebAutomationEngine(config)
+        # Create automation controller and engine with stop functionality
+        controller = AutomationController()
+        controller.start_automation(total_actions=self.max_downloads or 50)
+        engine = WebAutomationEngine(config, controller=controller)
         
         try:
             print(f"📋 Automation: {config.name}")
@@ -256,8 +276,10 @@ class FastGenerationDownloader:
             # Cleanup
             try:
                 await engine.cleanup()
+                controller.stop_automation()
                 print("🧹 Cleanup completed")
-            except:
+            except Exception as cleanup_error:
+                print(f"⚠️ Cleanup warning: {cleanup_error}")
                 pass
 
 

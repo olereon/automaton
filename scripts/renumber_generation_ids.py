@@ -41,11 +41,13 @@ def renumber_generation_ids(log_file_path: str = None):
         
         # Pattern to match generation IDs (e.g., #000000001, #999999999, etc.)
         id_pattern = re.compile(r'#\d{9}')
+        placeholder_pattern = re.compile(r'#999999999')
         
         # Process lines and renumber IDs
         processed_lines = []
         id_counter = 1
         total_entries = 0
+        placeholders_replaced = 0
         
         for line in lines:
             # Skip existing summary lines at the beginning
@@ -54,12 +56,20 @@ def renumber_generation_ids(log_file_path: str = None):
             
             # Check if line contains a generation ID
             if id_pattern.search(line):
+                # Check if it's a placeholder ID
+                is_placeholder = placeholder_pattern.search(line)
+                
                 # Replace the ID with the new sequential number
                 new_id = f"#{id_counter:09d}"
                 new_line = id_pattern.sub(new_id, line)
                 processed_lines.append(new_line)
                 
-                print(f"   ✏️ Entry {id_counter}: {new_id}")
+                if is_placeholder:
+                    print(f"   🔄 Entry {id_counter}: {new_id} (was placeholder #999999999)")
+                    placeholders_replaced += 1
+                else:
+                    print(f"   ✏️ Entry {id_counter}: {new_id}")
+                
                 id_counter += 1
                 total_entries += 1
             else:
@@ -70,10 +80,16 @@ def renumber_generation_ids(log_file_path: str = None):
         current_time = datetime.now()
         summary_lines = [
             f"Updated on {current_time.strftime('%Y-%m-%d')} {current_time.strftime('%H:%M:%S')}\n",
-            f"Total generations: {total_entries}\n",
+            f"Total generations: {total_entries}\n"
+        ]
+        
+        if placeholders_replaced > 0:
+            summary_lines.append(f"Placeholders replaced: {placeholders_replaced}\n")
+        
+        summary_lines.extend([
             "=" * 80 + "\n",
             "\n"
-        ]
+        ])
         
         # Combine summary with processed lines
         final_content = summary_lines + processed_lines
@@ -96,6 +112,8 @@ def renumber_generation_ids(log_file_path: str = None):
         print(f"📊 Summary:")
         print(f"   • Updated on: {current_time.strftime('%Y-%m-%d %H:%M:%S')}")
         print(f"   • Total generations: {total_entries}")
+        if placeholders_replaced > 0:
+            print(f"   • Placeholders replaced: {placeholders_replaced}")
         print(f"   • IDs renumbered: #000000001 to #{total_entries:09d}")
         print(f"   • Backup saved to: {backup_path}")
         print("=" * 60)

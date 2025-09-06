@@ -112,15 +112,40 @@ class GenerationDownloadHandlers:
             
             # Configure browser downloads to go to our directory
             try:
-                # Set up download path in browser context
+                # Set up proper download path in browser context
                 context = self.page.context
-                await context.route("**", lambda route: route.continue_())
-                logger.debug(f"Browser download path configured to: {config.downloads_folder}")
+                
+                # FIXED: Set up download event handler instead of route
+                async def handle_download(download):
+                    """Handle downloads and save to configured directory"""
+                    try:
+                        # Get the suggested filename
+                        suggested_name = download.suggested_filename
+                        download_path = Path(config.downloads_folder) / suggested_name
+                        
+                        # Ensure directory exists
+                        download_path.parent.mkdir(parents=True, exist_ok=True)
+                        
+                        # Save to configured location
+                        await download.save_as(str(download_path))
+                        logger.debug(f"Download saved to: {download_path}")
+                        
+                    except Exception as e:
+                        logger.warning(f"Download handler error: {e}")
+                
+                # Register download event handler
+                context.on("download", handle_download)
+                logger.debug(f"Browser download handler configured for: {config.downloads_folder}")
+                
             except Exception as e:
-                logger.warning(f"Could not configure browser download path: {e}")
+                logger.warning(f"Could not configure browser download handler: {e}")
             
-            # Start the download automation
-            results = await self._generation_download_manager.run_download_automation(self.page)
+            # Start the download automation with NEW 25-Step Algorithm v2.0
+            logger.info(f"🚀 Starting NEW 25-Step Generation Download Algorithm v2.0")
+            logger.info(f"📊 Max downloads: {config.max_downloads}")
+            logger.info(f"🔄 Duplicate mode: {config.duplicate_mode}")
+            
+            results = await self._generation_download_manager.run_download_automation_v2(self.page)
             
             # Mark as inactive when complete
             self._generation_downloads_active = False
