@@ -111,6 +111,13 @@ workflows/
 *secret*
 *password*
 
+# Private folder with credentials and API keys
+Private/
+/Private/
+Private/*
+!Private/.gitkeep
+!Private/README.md
+
 # Application logs
 app_logs/
 *.log.backup

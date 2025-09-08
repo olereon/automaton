@@ -10,14 +10,14 @@
     {
       "type": "login",
       "value": {
-        "username": "shyraoleg@outlook.com",
-        "password": "Wanv!de025",
+        "credential_file": "credentials.json",
+        "credential_key": "wan_video_login",
         "username_selector": "input[placeholder=\"Email address\"]",
         "password_selector": "input[type=\"password\"]",
         "submit_selector": "button:has-text(\"Log in\")[type=\"submit\"]"
       },
       "timeout": 15000,
-      "description": "Fast login to the generation platform"
+      "description": "Secure login using credentials from Private/credentials.json"
     },
     {
       "type": "wait",

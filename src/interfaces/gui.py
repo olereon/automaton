@@ -158,6 +158,9 @@ class AutomationGUI:
         # Start log processor
         self.root.after(100, self._process_log_queue)
         
+        # Start periodic browser state validation
+        self.root.after(2000, self._validate_browser_state)
+        
     def _configure_ttk_fonts(self, base_font_size):
         """Configure TTK widget fonts with proper scaling - ALL elements at least 20px"""
         # ABSOLUTE MINIMUM: 20px for ALL UI elements as requested
@@ -553,6 +556,15 @@ class AutomationGUI:
         ModernButton(file_frame, text="New Config", 
                     command=self._new_config).pack(side=tk.LEFT, padx=2)
         
+        # Browser control (moved from controls panel)
+        browser_frame = ttk.Frame(config_frame)
+        browser_frame.grid(row=6, column=0, columnspan=2, pady=(10, 0), sticky=(tk.W, tk.E))
+        
+        self.browser_button = ModernButton(browser_frame, text="🌐 Open Browser",
+                                         command=self._toggle_browser,
+                                         state=tk.NORMAL)
+        self.browser_button.pack(fill=tk.X)
+        
     def _create_actions_panel(self, parent):
         """Create actions panel"""
         actions_frame = ttk.LabelFrame(parent, text="Actions", padding="10")
@@ -607,18 +619,24 @@ class AutomationGUI:
         # Stop button will use error color from theme
         self.stop_button.pack(fill=tk.X, pady=5)
         
-        # Close Browser button
-        self.close_browser_button = ModernButton(controls_frame, text="🌐 Close Browser",
-                                                command=self._close_browser,
-                                                state=tk.DISABLED)
-        self.close_browser_button.pack(fill=tk.X, pady=5)
         
-        # Progress
-        ttk.Label(controls_frame, text="Progress:").pack(anchor=tk.W, pady=(10, 5))
+        # Pause/Resume button (replaces Close Browser)
+        self.pause_button = ModernButton(controls_frame, text="⏸ Pause",
+                                        command=self._toggle_pause_resume,
+                                        state=tk.DISABLED)
+        self.pause_button.pack(fill=tk.X, pady=5)
+        
+        # Progress with dynamic action count
+        self.progress_label = ttk.Label(controls_frame, text="Progress: Ready")
+        self.progress_label.pack(anchor=tk.W, pady=(10, 5))
         self.progress_var = tk.DoubleVar()
         self.progress_bar = ttk.Progressbar(controls_frame, variable=self.progress_var,
                                           maximum=100)
         self.progress_bar.pack(fill=tk.X, pady=5)
+        
+        # Progress tracking variables
+        self.current_action = 0
+        self.total_actions = 0
         
         # Status
         self.status_label = ttk.Label(controls_frame, text="Ready")
@@ -1951,13 +1969,19 @@ class AutomationGUI:
         self.is_running = True
         self.stop_requested = False
         
-        # Disable run button, enable stop
+        # Update button states
         self.run_button.config(state=tk.DISABLED)
         self.stop_button.config(state=tk.NORMAL)
+        self.pause_button.config(state=tk.NORMAL, text="⏸ Pause")
         
         # Reset progress
         self.progress_var.set(0)
+        self.progress_label.config(text="Progress: Starting...")
         self.status_label.config(text="Running...")
+        
+        # Initialize progress tracking
+        self.current_action = 0
+        self.total_actions = len(self.actions_data) if hasattr(self, 'actions_data') else 0
         
         # Build config and run in thread
         config = self._build_config_from_ui()
@@ -1997,6 +2021,9 @@ class AutomationGUI:
             
             # Start the controller for the automation
             self.controller.start_automation(total_actions=len(config.actions))
+            
+            # Register progress callback for real-time GUI updates
+            self.controller.register_progress_callback(self._update_progress_display)
             
             # Reuse existing engine if available, otherwise create new one
             if self.current_engine:
@@ -2119,15 +2146,15 @@ Errors: {len(results.get('errors', []))}
             self.stop_button.config(state="disabled")
             
             # Log stop request
-            self._log_message("🛑 Stop requested by user", "warning")
+            self._log("🛑 Stop requested by user", "warning")
             
             # Signal the controller to stop automation
             if self.controller:
                 success = self.controller.stop_automation(emergency=False)
                 if success:
-                    self._log_message("✅ Stop signal sent to automation controller", "info")
+                    self._log("✅ Stop signal sent to automation controller", "info")
                 else:
-                    self._log_message("⚠️ Controller stop failed - automation may not be running", "warning")
+                    self._log("⚠️ Controller stop failed - automation may not be running", "warning")
             
             # If we have an engine with a page, try to stop gracefully
             if hasattr(self, 'current_engine') and self.current_engine:
@@ -2137,16 +2164,16 @@ Errors: {len(results.get('errors', []))}
                         # This will interrupt any ongoing page operations
                         asyncio.create_task(self._graceful_stop())
                     except Exception as e:
-                        self._log_message(f"⚠️ Error during graceful stop: {e}", "error")
+                        self._log(f"⚠️ Error during graceful stop: {e}", "error")
             
             # Update status
-            self._log_message("⏹️ Automation stopped by user", "info")
+            self._log("⏹️ Automation stopped by user", "info")
             
             # Reset UI state
             self._reset_ui_after_completion()
             
         except Exception as e:
-            self._log_message(f"❌ Error stopping automation: {e}", "error")
+            self._log(f"❌ Error stopping automation: {e}", "error")
             messagebox.showerror("Stop Error", f"Failed to stop automation: {str(e)}")
             
             # Force UI reset even if stop failed
@@ -2174,17 +2201,26 @@ Errors: {len(results.get('errors', []))}
         self.stop_requested = False
         
         # Reset buttons
-        self.run_button.config(state=tk.NORMAL, text="Run Automation")
+        self.run_button.config(state=tk.NORMAL, text="▶ Run Automation")
         self.stop_button.config(state=tk.DISABLED)
+        self.pause_button.config(state=tk.DISABLED, text="⏸ Pause")
         
-        # Update status
+        # Reset progress display
+        self.progress_label.config(text="Progress: Ready")
         self.status_label.config(text="Ready")
         
-        # Enable browser close if browser is still open
+        # Update browser button state
         if self.current_engine and hasattr(self.current_engine, 'browser') and self.current_engine.browser:
-            self.close_browser_button.config(state=tk.NORMAL)
+            self.browser_button.config(text="🌐 Close Browser")
         else:
-            self.close_browser_button.config(state=tk.DISABLED)
+            self.browser_button.config(text="🌐 Open Browser")
+        
+        # Unregister progress callback if controller exists
+        if self.controller and hasattr(self.controller, 'progress_callbacks'):
+            try:
+                self.controller.unregister_progress_callback(self._update_progress_display)
+            except:
+                pass  # Ignore if callback wasn't registered
     
     def _close_browser(self):
         """Close the browser manually"""
@@ -2856,6 +2892,357 @@ Errors: {len(results.get('errors', []))}
         y = max(0, y)
         
         dialog.geometry(f"{dialog_width}x{dialog_height}+{x}+{y}")
+
+    def _update_progress_display(self, current_action: int, total_actions: int, status_message: str = None):
+        """Update progress display with current action count - called from controller"""
+        self.current_action = current_action + 1  # Display as 1-based
+        self.total_actions = total_actions
+        
+        # Update progress text
+        progress_text = f"Progress: Action {self.current_action} of {self.total_actions}"
+        if status_message:
+            progress_text = f"Progress: {status_message}"
+        
+        # Update progress bar
+        progress_percentage = (current_action / total_actions * 100) if total_actions > 0 else 0
+        
+        # Thread-safe GUI updates
+        self.root.after(0, lambda: self._safe_progress_update(progress_text, progress_percentage))
+    
+    def _safe_progress_update(self, progress_text: str, progress_percentage: float):
+        """Thread-safe progress update method"""
+        try:
+            self.progress_label.config(text=progress_text)
+            self.progress_var.set(progress_percentage)
+        except Exception as e:
+            self._log(f"Progress update error: {e}", "error")
+    
+    def _toggle_pause_resume(self):
+        """Toggle between pause and resume automation"""
+        if not self.controller:
+            self._log("No controller available for pause/resume", "error")
+            return
+            
+        try:
+            if self.controller.is_running():
+                # Pause automation
+                success = self.controller.pause_automation()
+                if success:
+                    self.pause_button.config(text="▶ Resume")
+                    self._log("⏸️ Automation paused", "info")
+                    self.status_label.config(text="Paused")
+                else:
+                    self._log("⚠️ Failed to pause automation", "warning")
+                    
+            elif self.controller.is_paused():
+                # Resume automation
+                success = self.controller.resume_automation()
+                if success:
+                    self.pause_button.config(text="⏸ Pause")
+                    self._log("▶️ Automation resumed", "info")
+                    self.status_label.config(text="Running...")
+                else:
+                    self._log("⚠️ Failed to resume automation", "warning")
+            else:
+                self._log("⚠️ Automation not in running or paused state", "warning")
+                
+        except Exception as e:
+            self._log(f"❌ Error toggling pause/resume: {e}", "error")
+    
+    def _toggle_browser(self):
+        """Toggle browser open/close state"""
+        try:
+            # Check current button state first (most reliable indicator)
+            current_text = self.browser_button.config('text')[-1]
+            
+            if current_text == "🌐 Close Browser":
+                # Button shows "Close" - browser should be open, try to close it
+                self._close_manual_browser()
+                return
+            elif current_text == "🔄 Closing...":
+                # Browser is currently closing, ignore click
+                self._log("⏳ Browser is currently closing, please wait...", "warning")
+                return
+            
+            # Button shows "Open" or we're unsure - check actual browser state
+            browser_is_open = False
+            if hasattr(self, 'manual_browser_refs') and self.manual_browser_refs and 'browser' in self.manual_browser_refs:
+                try:
+                    browser = self.manual_browser_refs['browser']
+                    if browser and browser.is_connected():
+                        browser_is_open = True
+                        # Browser is actually open but button shows "Open" - fix button state
+                        self.browser_button.config(text="🌐 Close Browser")
+                        self._log("🔧 Fixed browser button state - browser was already open", "info")
+                        return
+                except Exception as e:
+                    # Browser connection lost, clean up references
+                    self.manual_browser_refs = {}
+                    self._log("🧹 Cleaned up disconnected browser references", "info")
+            
+            # No browser open - open new one
+            self._open_browser()
+            
+        except Exception as e:
+            self._log(f"❌ Error toggling browser: {e}", "error")
+            # Reset button to safe state
+            self.browser_button.config(text="🌐 Open Browser")
+    
+    def _open_browser(self):
+        """Open a new visible browser instance for manual testing"""
+        try:
+            # Run browser opening in a separate thread to avoid blocking GUI
+            import threading
+            def open_browser_thread():
+                try:
+                    import asyncio
+                    from playwright.async_api import async_playwright
+                    
+                    async def launch_browser():
+                        # Create new event loop for this thread
+                        try:
+                            playwright = await async_playwright().start()
+                            
+                            # Launch visible browser for manual testing
+                            browser = await playwright.chromium.launch(
+                                headless=False,  # Visible browser window
+                                slow_mo=100,     # Slightly slower for better visibility
+                                devtools=True,   # Open DevTools for inspection
+                                args=[
+                                    '--start-maximized',
+                                    '--disable-web-security',
+                                    '--disable-features=VizDisplayCompositor',
+                                    '--disable-background-timer-throttling',
+                                    '--disable-backgrounding-occluded-windows',
+                                    '--disable-renderer-backgrounding'
+                                ]
+                            )
+                            
+                            # Create new context and page
+                            context = await browser.new_context(
+                                viewport={'width': 1280, 'height': 720},
+                                user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                            )
+                            
+                            page = await context.new_page()
+                            
+                            # Navigate to a useful starting page for testing
+                            start_url = self.url_var.get() if self.url_var.get() else "https://www.google.com"
+                            await page.goto(start_url, wait_until='domcontentloaded', timeout=30000)
+                            
+                            # Store browser references for closing later
+                            if not hasattr(self, 'manual_browser_refs'):
+                                self.manual_browser_refs = {}
+                            
+                            self.manual_browser_refs = {
+                                'playwright': playwright,
+                                'browser': browser,
+                                'context': context,
+                                'page': page
+                            }
+                            
+                            # Update GUI on main thread
+                            self.root.after(0, lambda: self._on_browser_opened(start_url))
+                            
+                        except Exception as e:
+                            self.root.after(0, lambda: self._log(f"❌ Browser launch error: {e}", "error"))
+                            self.root.after(0, lambda: self.browser_button.config(text="🌐 Open Browser"))
+                    
+                    # Create and run event loop
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    loop.run_until_complete(launch_browser())
+                    
+                except Exception as e:
+                    self.root.after(0, lambda: self._log(f"❌ Browser thread error: {e}", "error"))
+                    self.root.after(0, lambda: self.browser_button.config(text="🌐 Open Browser"))
+            
+            # Start browser opening thread
+            threading.Thread(target=open_browser_thread, daemon=True).start()
+            
+            # Immediate feedback to user
+            self._log("🚀 Opening browser window for manual testing...", "info")
+            
+        except Exception as e:
+            self._log(f"❌ Error starting browser opening: {e}", "error")
+    
+    def _on_browser_opened(self, start_url):
+        """Called when browser is successfully opened"""
+        self.browser_button.config(text="🌐 Close Browser")
+        self._log(f"✅ Browser opened successfully at {start_url}", "info")
+        self._log("🔧 DevTools enabled for manual testing and inspection", "info")
+        
+        # Start periodic browser state validation
+        self._validate_browser_state()
+    
+    def _validate_browser_state(self):
+        """Validate browser state and sync button text accordingly"""
+        try:
+            browser_is_open = False
+            
+            # Check if browser is actually open and connected
+            if hasattr(self, 'manual_browser_refs') and self.manual_browser_refs and 'browser' in self.manual_browser_refs:
+                try:
+                    browser = self.manual_browser_refs['browser']
+                    if browser and browser.is_connected():
+                        browser_is_open = True
+                    else:
+                        self.manual_browser_refs = {}
+                except Exception as e:
+                    # Browser disconnected, clean up
+                    self.manual_browser_refs = {}
+            
+            # Get current button state
+            current_text = self.browser_button.config('text')[-1]
+            
+            # Sync button state with actual browser state
+            if browser_is_open and current_text != "🌐 Close Browser":
+                self.browser_button.config(text="🌐 Close Browser")
+                self._log("🔧 Fixed browser button state - browser was already open", "info")
+            elif not browser_is_open and current_text not in ["🌐 Open Browser"]:
+                # More aggressive - reset any non-open state when browser is closed
+                if current_text in ["🌐 Close Browser", "🔄 Closing..."]:
+                    self.browser_button.config(text="🌐 Open Browser")
+                    self._log("🔧 Fixed browser button state - browser was closed", "info")
+            
+            # Schedule next validation in 2 seconds if browser is open, or 5 seconds if closed
+            next_check = 2000 if browser_is_open else 5000
+            self.root.after(next_check, self._validate_browser_state)
+            
+        except Exception as e:
+            # On error, force button to safe state
+            try:
+                self.browser_button.config(text="🌐 Open Browser")
+            except:
+                pass
+    
+    def _close_manual_browser(self):
+        """Close the manual testing browser"""
+        try:
+            if not hasattr(self, 'manual_browser_refs') or not self.manual_browser_refs:
+                self._log("No manual browser to close", "warning")
+                self.browser_button.config(text="🌐 Open Browser")  # Ensure button state is correct
+                return
+            
+            def close_browser_thread():
+                try:
+                    import asyncio
+                    
+                    async def close_async():
+                        success = False
+                        try:
+                            # Close browser components in order
+                            if 'page' in self.manual_browser_refs and self.manual_browser_refs['page']:
+                                try:
+                                    await self.manual_browser_refs['page'].close()
+                                except Exception as e:
+                                    print(f"Page close error: {e}")
+                            
+                            if 'context' in self.manual_browser_refs and self.manual_browser_refs['context']:
+                                try:
+                                    await self.manual_browser_refs['context'].close()
+                                except Exception as e:
+                                    print(f"Context close error: {e}")
+                            
+                            if 'browser' in self.manual_browser_refs and self.manual_browser_refs['browser']:
+                                try:
+                                    await self.manual_browser_refs['browser'].close()
+                                except Exception as e:
+                                    print(f"Browser close error: {e}")
+                            
+                            if 'playwright' in self.manual_browser_refs and self.manual_browser_refs['playwright']:
+                                try:
+                                    await self.manual_browser_refs['playwright'].stop()
+                                except Exception as e:
+                                    print(f"Playwright stop error: {e}")
+                            
+                            success = True
+                            
+                        except Exception as e:
+                            print(f"Browser close async error: {e}")
+                        finally:
+                            # Always clear references
+                            self.manual_browser_refs = {}
+                            
+                            # Force immediate button state update with multiple approaches
+                            def force_button_update():
+                                try:
+                                    self.browser_button.config(text="🌐 Open Browser")
+                                    if success:
+                                        self._log("✅ Manual browser closed successfully", "info")
+                                    else:
+                                        self._log("⚠️ Browser close completed with errors", "warning")
+                                except Exception as e:
+                                    pass  # Silent error handling
+                            
+                            # Schedule immediate update
+                            self.root.after(0, force_button_update)
+                            
+                            # Also schedule a delayed backup update
+                            def backup_update():
+                                try:
+                                    current_text = self.browser_button.config('text')[-1]
+                                    if current_text != "🌐 Open Browser":
+                                        self.browser_button.config(text="🌐 Open Browser")
+                                        self._log("🔧 Browser button state corrected", "info")
+                                except Exception as e:
+                                    pass  # Silent error handling
+                            
+                            self.root.after(1000, backup_update)  # 1 second delay
+                    
+                    # Create event loop for thread
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    try:
+                        loop.run_until_complete(close_async())
+                    finally:
+                        loop.close()
+                    
+                except Exception as e:
+                    # Ensure GUI gets updated even on thread error
+                    def update_gui_thread_error():
+                        try:
+                            self.browser_button.config(text="🌐 Open Browser")  
+                            self._log(f"❌ Browser close thread error: {e}", "error")
+                        except Exception as gui_e:
+                            pass  # Silent error handling
+                    
+                    self.root.after(0, update_gui_thread_error)
+            
+            # Immediately update button to show closing state
+            self.browser_button.config(text="🔄 Closing...")
+            
+            # Start closing thread
+            import threading
+            close_thread = threading.Thread(target=close_browser_thread, daemon=True)
+            close_thread.start()
+            
+            # Immediate feedback
+            self._log("🔄 Closing manual browser...", "info")
+            
+            # Schedule a final safety check after reasonable close time
+            def final_safety_check():
+                try:
+                    current_text = self.browser_button.config('text')[-1]
+                    
+                    # If button still shows closing or close after 3 seconds, force to open state
+                    if current_text in ["🔄 Closing...", "🌐 Close Browser"]:
+                        self.browser_button.config(text="🌐 Open Browser")
+                        self._log("🔧 Browser button state reset by safety check", "info")
+                        
+                        # Also clear any stale references
+                        if hasattr(self, 'manual_browser_refs'):
+                            self.manual_browser_refs = {}
+                except Exception as e:
+                    pass  # Silent error handling
+            
+            # Schedule safety check after 3 seconds
+            self.root.after(3000, final_safety_check)
+            
+        except Exception as e:
+            self._log(f"❌ Error starting browser close: {e}", "error")
+            # Ensure button state is correct even if close fails
+            self.browser_button.config(text="🌐 Open Browser")
 
 def main():
     """Main entry point for GUI"""

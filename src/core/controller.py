@@ -359,6 +359,36 @@ class AutomationController:
         """Check if automation can be stopped"""
         return self.state in [AutomationState.RUNNING, AutomationState.PAUSED]
 
+    def _update_progress(self, current_action: int, total_actions: int, status_message: str = None):
+        """Update automation progress - called by engine during execution"""
+        self.completed_actions = current_action
+        self.total_actions = total_actions
+        
+        # Store progress info for GUI updates
+        if not hasattr(self, 'progress_callbacks'):
+            self.progress_callbacks = []
+        
+        # Call any registered progress callbacks
+        for callback in self.progress_callbacks:
+            try:
+                callback(current_action, total_actions, status_message)
+            except Exception as e:
+                logger.warning(f"Progress callback error: {e}")
+    
+    def register_progress_callback(self, callback: Callable):
+        """Register a callback function for progress updates"""
+        if not hasattr(self, 'progress_callbacks'):
+            self.progress_callbacks = []
+        self.progress_callbacks.append(callback)
+    
+    def unregister_progress_callback(self, callback: Callable):
+        """Unregister a progress callback function"""
+        if hasattr(self, 'progress_callbacks'):
+            try:
+                self.progress_callbacks.remove(callback)
+            except ValueError:
+                pass  # Callback wasn't registered
+
     def __str__(self) -> str:
         """String representation of controller state"""
         return f"AutomationController(state={self.state.value}, progress={self.completed_actions}/{self.total_actions})"

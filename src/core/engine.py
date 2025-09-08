@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 # Import credential manager for secure credential handling
 try:
-    from utils.credential_manager import CredentialManager
+    from utils.credential_manager import get_credential_manager, resolve_credential_path
 
     CREDENTIAL_MANAGER_AVAILABLE = True
 except ImportError:
@@ -649,11 +649,25 @@ class WebAutomationEngine(GenerationDownloadHandlers):
         Resolve credentials from secure storage or fallback to plaintext
         Returns (username, password) tuple
         """
-        # Check for secure credential reference
+        # Check for new Private folder credential system (preferred method)
+        if "credential_file" in login_data and "credential_key" in login_data and CREDENTIAL_MANAGER_AVAILABLE:
+            try:
+                cm = get_credential_manager()
+                # Load credentials using the credential_key
+                creds = cm.get_login_credentials(login_data["credential_key"])
+                if creds and "username" in creds and "password" in creds:
+                    logger.info(f"✅ Using secure credentials from Private/{login_data['credential_file']} -> {login_data['credential_key']}")
+                    return creds["username"], creds["password"]
+                else:
+                    logger.warning(f"⚠️ Incomplete credentials in {login_data['credential_file']} -> {login_data['credential_key']}")
+            except Exception as e:
+                logger.error(f"❌ Error loading secure credentials from Private folder: {e}")
+        
+        # Check for legacy secure credential reference (backward compatibility)
         if "credential_id" in login_data and CREDENTIAL_MANAGER_AVAILABLE:
             try:
-                cm = CredentialManager()
-                creds = cm.get_credential(login_data["credential_id"])
+                cm = get_credential_manager()
+                creds = cm.get_login_credentials(login_data["credential_id"])
                 if creds:
                     logger.info(f"✅ Using secure credentials for: {login_data['credential_id']}")
                     return creds["username"], creds["password"]
@@ -663,12 +677,14 @@ class WebAutomationEngine(GenerationDownloadHandlers):
                     )
             except Exception as e:
                 logger.error(f"❌ Error loading secure credentials: {e}")
+        
         # Fallback to plaintext credentials (with warning)
         if "username" in login_data and "password" in login_data:
             logger.warning("⚠️ SECURITY WARNING: Using plaintext credentials from configuration")
-            logger.warning("   Consider migrating to secure credential storage")
+            logger.warning("   Consider migrating to secure credential storage in Private/ folder")
             return login_data["username"], login_data["password"]
-        # Handle template-style references (${credential_id.field})
+        
+        # Handle template-style references (${credential_id.field}) - legacy support
         username = login_data.get("username", "")
         password = login_data.get("password", "")
         if username.startswith("${") and CREDENTIAL_MANAGER_AVAILABLE:
@@ -677,8 +693,8 @@ class WebAutomationEngine(GenerationDownloadHandlers):
                 cred_ref = username.strip("${}")
                 if "." in cred_ref:
                     cred_id, field = cred_ref.split(".", 1)
-                    cm = CredentialManager()
-                    creds = cm.get_credential(cred_id)
+                    cm = get_credential_manager()
+                    creds = cm.get_login_credentials(cred_id)
                     if creds and field in creds:
                         username = creds[field]
                         logger.info(f"✅ Resolved secure credential reference: {cred_ref}")
@@ -690,16 +706,19 @@ class WebAutomationEngine(GenerationDownloadHandlers):
                 cred_ref = password.strip("${}")
                 if "." in cred_ref:
                     cred_id, field = cred_ref.split(".", 1)
-                    cm = CredentialManager()
-                    creds = cm.get_credential(cred_id)
+                    cm = get_credential_manager()
+                    creds = cm.get_login_credentials(cred_id)
                     if creds and field in creds:
                         password = creds[field]
                         logger.info(f"✅ Resolved secure credential reference: {cred_ref}")
             except Exception as e:
                 logger.warning(f"⚠️ Could not resolve credential reference {password}: {e}")
+        
         if not username or not password:
             raise ValueError(
-                "No valid credentials found. Please configure secure credentials or provide plaintext values."
+                "No valid credentials found. Please check your configuration. "
+                "For secure credentials, use: credential_file: 'credentials.json', credential_key: 'service_name'. "
+                "Or provide plaintext 'username' and 'password' (not recommended)."
             )
         return username, password
 
