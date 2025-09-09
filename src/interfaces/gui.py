@@ -83,8 +83,8 @@ class ModernButton(tk.Button):
             fg_color = settings.get('custom_font') or settings.get('dark_text_bright', '#ffffff')
             self.hover_color = settings.get('dark_surface', '#2d2d30')
         else:
-            bg_color = settings.get('custom_primary') or settings.get('light_accent', '#0078d4')
-            fg_color = settings.get('custom_font') or settings.get('light_text_bright', '#000000')
+            bg_color = settings.get('custom_primary') or settings.get('dark_accent', '#0e639c')
+            fg_color = settings.get('custom_font') or settings.get('dark_text_bright', '#ffffff')
             self.hover_color = '#005a9e'
             
         # Check if this is a stop button (contains "Stop" text)
@@ -93,7 +93,7 @@ class ModernButton(tk.Button):
                 bg_color = settings.get('dark_error', '#f44747')
                 self.hover_color = '#e53e3e'
             else:
-                bg_color = settings.get('light_error', '#d13438')
+                bg_color = settings.get('dark_error', '#f44747')
                 self.hover_color = '#b02a2a'
         
         self.normal_color = bg_color
@@ -102,18 +102,36 @@ class ModernButton(tk.Button):
         padx = max(20, int(button_font_size * 0.8))  # Horizontal padding
         pady = max(10, int(button_font_size * 0.4))  # Vertical padding
         
-        self.configure(bg=bg_color, fg=fg_color, font=('Arial', button_font_size, 'normal'),
-                      padx=padx, pady=pady)
+        # Apply modern styling with subtle borders and enhanced visuals
+        self.configure(
+            bg=bg_color, fg=fg_color, 
+            font=('Segoe UI', button_font_size, 'normal'),
+            padx=padx, pady=pady,
+            relief=tk.FLAT, borderwidth=1,
+            highlightcolor='#454545',
+            highlightbackground='#454545',
+            highlightthickness=0,
+            activebackground=self.hover_color,
+            activeforeground=fg_color
+        )
         
     def _on_enter(self, event):
-        """Handle mouse enter"""
+        """Enhanced hover effect with subtle visual feedback"""
         if hasattr(self, 'hover_color'):
-            self.configure(bg=self.hover_color)
+            self.configure(
+                bg=self.hover_color,
+                relief=tk.RAISED,
+                highlightthickness=1
+            )
             
     def _on_leave(self, event):
-        """Handle mouse leave"""
+        """Return to normal state with smooth transition"""
         if hasattr(self, 'normal_color'):
-            self.configure(bg=self.normal_color)
+            self.configure(
+                bg=self.normal_color,
+                relief=tk.FLAT,
+                highlightthickness=0
+            )
             
     def update_theme(self):
         """Public method to update theme"""
@@ -212,6 +230,12 @@ class AutomationGUI:
                            padding=(entry_padding_x, entry_padding_y))
         self.style.configure('TCheckbutton', font=('Arial', label_size))
         
+        # Radio button styling - CRITICAL FIX for tiny radio buttons
+        radio_size = max(min_font_size, scaled_base)  # At least 20px, respect user setting
+        self.style.configure('TRadiobutton', 
+                           font=('Arial', radio_size, 'normal'),
+                           padding=(8, 4))
+        
         # Configure larger styles for specific dialogs - use even bigger fonts
         large_combo_size = max(min_font_size + 2, scaled_base + 2)  # Larger than normal
         large_check_size = max(min_font_size, scaled_base)          # Same as normal buttons
@@ -262,11 +286,25 @@ class AutomationGUI:
         self.settings_frame = ttk.Frame(self.notebook)
         self.notebook.add(self.settings_frame, text="Settings")
         
+        # Action tab
+        self.action_frame = ttk.Frame(self.notebook)
+        self.notebook.add(self.action_frame, text="Action")
+        
+        # Selector tab
+        self.selector_frame = ttk.Frame(self.notebook)
+        self.notebook.add(self.selector_frame, text="Selector")
+        
         # Setup main automation interface
         self._setup_main_tab()
         
         # Setup settings interface
         self._setup_settings_tab()
+        
+        # Setup action interface
+        self._setup_action_tab()
+        
+        # Setup selector interface
+        self._setup_selector_tab()
         
     def _setup_main_tab(self):
         """Setup the main automation tab"""
@@ -305,15 +343,28 @@ class AutomationGUI:
         appearance_frame = ttk.LabelFrame(settings_container, text="Appearance", padding="15")
         appearance_frame.grid(row=1, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 20))
         
-        # Dark mode toggle
-        ttk.Label(appearance_frame, text="Dark Mode:", style='Heading.TLabel').grid(
+        # Theme selection
+        ttk.Label(appearance_frame, text="Theme:", style='Heading.TLabel').grid(
             row=0, column=0, sticky=tk.W, pady=5)
+            
+        # Create theme selection frame
+        theme_frame = ttk.Frame(appearance_frame)
+        theme_frame.grid(row=0, column=1, sticky=(tk.W, tk.E), pady=5, padx=(10, 0))
         
-        self.dark_mode_var = tk.BooleanVar(value=self.settings.get('dark_mode', False))
-        dark_mode_toggle = ttk.Checkbutton(appearance_frame, text="Enable dark theme", 
-                                          variable=self.dark_mode_var,
-                                          command=self._on_dark_mode_changed)
-        dark_mode_toggle.grid(row=0, column=1, sticky=tk.W, pady=5, padx=(10, 0))
+        # Theme options - Only Dark themes available
+        self.theme_var = tk.StringVar(value=self.settings.get('theme_mode', 'dark'))
+        theme_options = [
+            ('Dark (Almost Black)', 'dark'),
+            ('Dark Gray', 'darker')
+        ]
+        
+        for i, (text, value) in enumerate(theme_options):
+            ttk.Radiobutton(theme_frame, text=text, variable=self.theme_var, 
+                           value=value, command=self._on_theme_changed).grid(
+                row=0, column=i, sticky=tk.W, padx=(0 if i == 0 else 15, 0))
+        
+        # Keep dark_mode_var for backward compatibility - always true now since we only have dark themes
+        self.dark_mode_var = tk.BooleanVar(value=True)
         
         # Font size setting
         ttk.Label(appearance_frame, text="Font Size:", style='Heading.TLabel').grid(
@@ -475,6 +526,341 @@ class AutomationGUI:
         # Save settings button  
         ModernButton(buttons_frame, text="Save Settings", 
                     command=self._save_settings).pack(side=tk.LEFT, padx=5)
+        
+    def _setup_action_tab(self):
+        """Setup the action tab for detailed action building"""
+        # Configure grid weights for action frame
+        self.action_frame.columnconfigure(0, weight=1)
+        self.action_frame.columnconfigure(1, weight=2)
+        self.action_frame.rowconfigure(1, weight=1)
+        
+        # Title
+        title_label = ttk.Label(self.action_frame, text="Action Builder", 
+                               style='Title.TLabel')
+        title_label.grid(row=0, column=0, columnspan=2, pady=(10, 20))
+        
+        # Left panel - Parameter Preview/Edit
+        self._create_action_parameters_panel(self.action_frame)
+        
+        # Right panel - Action Sequence Builder
+        self._create_action_sequence_panel(self.action_frame)
+        
+        # Bottom panel - Log Output for action testing
+        self._create_action_log_panel(self.action_frame)
+        
+    def _setup_selector_tab(self):
+        """Setup the selector tab for element analysis and selector building"""
+        # Configure grid weights for selector frame
+        self.selector_frame.columnconfigure(0, weight=1)
+        self.selector_frame.rowconfigure(1, weight=1)
+        
+        # Title
+        title_label = ttk.Label(self.selector_frame, text="Selector Builder & Analysis", 
+                               style='Title.TLabel')
+        title_label.grid(row=0, column=0, pady=(10, 20))
+        
+        # Main content area
+        self._create_selector_main_panel(self.selector_frame)
+        
+    def _create_action_parameters_panel(self, parent):
+        """Create the action parameters panel for the Action tab"""
+        params_frame = ttk.LabelFrame(parent, text="Action Parameters", padding="10")
+        params_frame.grid(row=1, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), 
+                         padx=(10, 5), pady=(0, 5))
+        
+        # Configure grid weights
+        params_frame.columnconfigure(0, weight=1)
+        params_frame.rowconfigure(6, weight=1)
+        
+        # Action Type selection
+        ttk.Label(params_frame, text="Action Type:", style='Heading.TLabel').grid(
+            row=0, column=0, sticky=tk.W, pady=(0, 5))
+        
+        self.action_type_var = tk.StringVar()
+        action_types = [action_type.value for action_type in ActionType]
+        self.action_type_combo = ttk.Combobox(params_frame, textvariable=self.action_type_var,
+                                             values=action_types, state='readonly', width=30)
+        self.action_type_combo.grid(row=1, column=0, sticky=(tk.W, tk.E), pady=(0, 10))
+        self.action_type_combo.bind('<<ComboboxSelected>>', self._on_action_type_changed)
+        
+        # Selector field
+        ttk.Label(params_frame, text="Selector:", style='Heading.TLabel').grid(
+            row=2, column=0, sticky=tk.W, pady=(0, 5))
+        
+        self.action_selector_var = tk.StringVar()
+        self.action_selector_entry = ttk.Entry(params_frame, textvariable=self.action_selector_var, width=40)
+        self.action_selector_entry.grid(row=3, column=0, sticky=(tk.W, tk.E), pady=(0, 10))
+        
+        # Value field
+        ttk.Label(params_frame, text="Value:", style='Heading.TLabel').grid(
+            row=4, column=0, sticky=tk.W, pady=(0, 5))
+        
+        self.action_value_var = tk.StringVar()
+        self.action_value_entry = ttk.Entry(params_frame, textvariable=self.action_value_var, width=40)
+        self.action_value_entry.grid(row=5, column=0, sticky=(tk.W, tk.E), pady=(0, 10))
+        
+        # Description field (scrollable text area)
+        ttk.Label(params_frame, text="Description:", style='Heading.TLabel').grid(
+            row=6, column=0, sticky=(tk.W, tk.N), pady=(0, 5))
+        
+        desc_frame = ttk.Frame(params_frame)
+        desc_frame.grid(row=7, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(0, 10))
+        desc_frame.columnconfigure(0, weight=1)
+        desc_frame.rowconfigure(0, weight=1)
+        
+        self.action_desc_text = scrolledtext.ScrolledText(desc_frame, height=6, width=40,
+                                                         font=('Arial', self.settings.get('font_size', 20)))
+        self.action_desc_text.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        
+        # Timeout field
+        ttk.Label(params_frame, text="Timeout (ms):", style='Heading.TLabel').grid(
+            row=8, column=0, sticky=tk.W, pady=(10, 5))
+        
+        self.action_timeout_var = tk.StringVar(value="10000")
+        timeout_entry = ttk.Entry(params_frame, textvariable=self.action_timeout_var, width=20)
+        timeout_entry.grid(row=9, column=0, sticky=(tk.W), pady=(0, 10))
+        
+        # Buttons frame
+        buttons_frame = ttk.Frame(params_frame)
+        buttons_frame.grid(row=10, column=0, sticky=(tk.W, tk.E), pady=(10, 0))
+        
+        ModernButton(buttons_frame, text="Apply", 
+                    command=self._apply_action_to_main).pack(side=tk.LEFT, padx=(0, 5))
+        ModernButton(buttons_frame, text="Copy", 
+                    command=self._copy_action_from_main).pack(side=tk.LEFT, padx=5)
+        ModernButton(buttons_frame, text="Clear", 
+                    command=self._clear_action_parameters).pack(side=tk.LEFT, padx=5)
+        
+    def _create_action_sequence_panel(self, parent):
+        """Create the action sequence builder panel"""
+        sequence_frame = ttk.LabelFrame(parent, text="Action Sequence Builder", padding="10")
+        sequence_frame.grid(row=1, column=1, sticky=(tk.W, tk.E, tk.N, tk.S), 
+                           padx=(5, 10), pady=(0, 5))
+        
+        # Configure grid weights
+        sequence_frame.columnconfigure(0, weight=1)
+        sequence_frame.rowconfigure(0, weight=1)
+        
+        # Actions listbox with scrollbar (similar to main tab but for action building)
+        list_frame = ttk.Frame(sequence_frame)
+        list_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(0, 10))
+        list_frame.columnconfigure(0, weight=1)
+        list_frame.rowconfigure(0, weight=1)
+        
+        scrollbar_action = ttk.Scrollbar(list_frame)
+        scrollbar_action.grid(row=0, column=1, sticky=(tk.N, tk.S))
+        
+        self.action_sequence_listbox = tk.Listbox(list_frame, yscrollcommand=scrollbar_action.set,
+                                                 height=20, font=('Arial', self.settings.get('font_size', 20)))
+        self.action_sequence_listbox.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        scrollbar_action.config(command=self.action_sequence_listbox.yview)
+        
+        # Action building buttons
+        action_build_buttons = ttk.Frame(sequence_frame)
+        action_build_buttons.grid(row=1, column=0, sticky=(tk.W, tk.E), pady=(10, 0))
+        
+        # Configure button grid
+        for i in range(3):
+            action_build_buttons.columnconfigure(i, weight=1, uniform="action_button")
+        
+        button_config = {
+            'width': 15,
+            'relief': tk.FLAT,
+            'pady': 8
+        }
+        
+        # Row 1: Add/Edit/Delete
+        ModernButton(action_build_buttons, text="Add Action", 
+                    command=self._add_to_action_sequence, **button_config
+                    ).grid(row=0, column=0, padx=2, pady=2, sticky=(tk.W, tk.E))
+        
+        ModernButton(action_build_buttons, text="Edit Selected", 
+                    command=self._edit_action_sequence, **button_config
+                    ).grid(row=0, column=1, padx=2, pady=2, sticky=(tk.W, tk.E))
+        
+        ModernButton(action_build_buttons, text="Delete", 
+                    command=self._delete_from_action_sequence, **button_config
+                    ).grid(row=0, column=2, padx=2, pady=2, sticky=(tk.W, tk.E))
+        
+        # Row 2: Move/Test/Clear
+        ModernButton(action_build_buttons, text="Move Up", 
+                    command=lambda: self._move_action_sequence(-1), **button_config
+                    ).grid(row=1, column=0, padx=2, pady=2, sticky=(tk.W, tk.E))
+        
+        ModernButton(action_build_buttons, text="Test Action", 
+                    command=self._test_current_action, **button_config
+                    ).grid(row=1, column=1, padx=2, pady=2, sticky=(tk.W, tk.E))
+        
+        ModernButton(action_build_buttons, text="Clear All", 
+                    command=self._clear_action_sequence, **button_config
+                    ).grid(row=1, column=2, padx=2, pady=2, sticky=(tk.W, tk.E))
+        
+    def _create_action_log_panel(self, parent):
+        """Create log output panel for action testing"""
+        log_frame = ttk.LabelFrame(parent, text="Action Test Output", padding="10")
+        log_frame.grid(row=2, column=0, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S),
+                      padx=10, pady=(5, 10))
+        
+        # Configure grid weights
+        log_frame.columnconfigure(0, weight=1)
+        log_frame.rowconfigure(0, weight=1)
+        
+        # Text area with scrollbar
+        self.action_log_text = scrolledtext.ScrolledText(log_frame, height=8, 
+                                                        font=('Courier', self.settings.get('font_size', 20)))
+        self.action_log_text.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        
+    def _create_selector_main_panel(self, parent):
+        """Create the main selector analysis panel"""
+        main_frame = ttk.Frame(parent, padding="10")
+        main_frame.grid(row=1, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), padx=10, pady=(0, 10))
+        
+        # Configure grid weights
+        main_frame.columnconfigure(1, weight=1)
+        main_frame.rowconfigure(2, weight=1)
+        
+        # Left panel - Selector Tools
+        self._create_selector_tools_panel(main_frame)
+        
+        # Right panel - HTML Analysis
+        self._create_html_analysis_panel(main_frame)
+        
+        # Bottom panel - Selector Results
+        self._create_selector_results_panel(main_frame)
+        
+    def _create_selector_tools_panel(self, parent):
+        """Create selector tools and input panel"""
+        tools_frame = ttk.LabelFrame(parent, text="Selector Tools", padding="10")
+        tools_frame.grid(row=0, column=0, rowspan=2, sticky=(tk.W, tk.E, tk.N, tk.S), 
+                        padx=(0, 5), pady=(0, 5))
+        
+        # Configure grid weights
+        tools_frame.columnconfigure(0, weight=1)
+        tools_frame.rowconfigure(8, weight=1)
+        
+        # URL input
+        ttk.Label(tools_frame, text="Page URL:", style='Heading.TLabel').grid(
+            row=0, column=0, sticky=tk.W, pady=(0, 5))
+        
+        self.selector_url_var = tk.StringVar()
+        url_entry = ttk.Entry(tools_frame, textvariable=self.selector_url_var, width=35)
+        url_entry.grid(row=1, column=0, sticky=(tk.W, tk.E), pady=(0, 10))
+        
+        # Element ID/Class input
+        ttk.Label(tools_frame, text="Element Identifier:", style='Heading.TLabel').grid(
+            row=2, column=0, sticky=tk.W, pady=(0, 5))
+        
+        self.selector_element_var = tk.StringVar()
+        element_entry = ttk.Entry(tools_frame, textvariable=self.selector_element_var, width=35)
+        element_entry.grid(row=3, column=0, sticky=(tk.W, tk.E), pady=(0, 10))
+        
+        # Selector strategy selection
+        ttk.Label(tools_frame, text="Strategy:", style='Heading.TLabel').grid(
+            row=4, column=0, sticky=tk.W, pady=(0, 5))
+        
+        self.selector_strategy_var = tk.StringVar(value="all")
+        strategies = ["all", "id", "class", "css", "xpath", "text", "attribute", "dynamic"]
+        strategy_combo = ttk.Combobox(tools_frame, textvariable=self.selector_strategy_var,
+                                     values=strategies, state='readonly', width=32)
+        strategy_combo.grid(row=5, column=0, sticky=(tk.W, tk.E), pady=(0, 10))
+        
+        # Action buttons
+        button_config = {
+            'width': 20,
+            'relief': tk.FLAT,
+            'pady': 6
+        }
+        
+        ModernButton(tools_frame, text="Analyze Page", 
+                    command=self._analyze_page_elements, **button_config
+                    ).grid(row=6, column=0, sticky=(tk.W, tk.E), pady=2)
+        
+        ModernButton(tools_frame, text="Generate Selectors", 
+                    command=self._generate_selectors, **button_config
+                    ).grid(row=7, column=0, sticky=(tk.W, tk.E), pady=2)
+        
+        # Custom selector input area
+        ttk.Label(tools_frame, text="Custom Selector:", style='Heading.TLabel').grid(
+            row=8, column=0, sticky=(tk.W, tk.N), pady=(10, 5))
+        
+        custom_frame = ttk.Frame(tools_frame)
+        custom_frame.grid(row=9, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(0, 10))
+        custom_frame.columnconfigure(0, weight=1)
+        custom_frame.rowconfigure(0, weight=1)
+        
+        self.custom_selector_text = scrolledtext.ScrolledText(custom_frame, height=6, width=35,
+                                                             font=('Arial', self.settings.get('font_size', 20)))
+        self.custom_selector_text.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        
+        # Test custom selector button
+        ModernButton(tools_frame, text="Test Custom Selector", 
+                    command=self._test_custom_selector, **button_config
+                    ).grid(row=10, column=0, sticky=(tk.W, tk.E), pady=(5, 0))
+        
+    def _create_html_analysis_panel(self, parent):
+        """Create HTML element analysis panel"""
+        html_frame = ttk.LabelFrame(parent, text="HTML Element Analysis", padding="10")
+        html_frame.grid(row=0, column=1, sticky=(tk.W, tk.E, tk.N, tk.S), 
+                       padx=(5, 0), pady=(0, 5))
+        
+        # Configure grid weights
+        html_frame.columnconfigure(0, weight=1)
+        html_frame.rowconfigure(0, weight=1)
+        
+        # HTML display area
+        self.html_analysis_text = scrolledtext.ScrolledText(html_frame, height=15,
+                                                           font=('Courier', self.settings.get('font_size', 20)))
+        self.html_analysis_text.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        
+    def _create_selector_results_panel(self, parent):
+        """Create selector recommendations and results panel"""
+        results_frame = ttk.LabelFrame(parent, text="Selector Recommendations & Results", padding="10")
+        results_frame.grid(row=2, column=0, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S),
+                          pady=(5, 0))
+        
+        # Configure grid weights
+        results_frame.columnconfigure(0, weight=1)
+        results_frame.rowconfigure(0, weight=1)
+        
+        # Results display with columns for different selector types
+        columns = ("Type", "Selector", "Reliability", "Dynamic Support", "Matches")
+        self.selector_results_tree = ttk.Treeview(results_frame, columns=columns, show='tree headings', height=10)
+        
+        # Configure column headings and widths
+        self.selector_results_tree.heading('#0', text='#')
+        self.selector_results_tree.column('#0', width=30)
+        
+        for col in columns:
+            self.selector_results_tree.heading(col, text=col)
+            if col == "Selector":
+                self.selector_results_tree.column(col, width=300)
+            elif col == "Type":
+                self.selector_results_tree.column(col, width=80)
+            else:
+                self.selector_results_tree.column(col, width=120)
+        
+        # Scrollbar for results tree
+        results_scrollbar = ttk.Scrollbar(results_frame, orient=tk.VERTICAL, command=self.selector_results_tree.yview)
+        self.selector_results_tree.configure(yscrollcommand=results_scrollbar.set)
+        
+        self.selector_results_tree.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        results_scrollbar.grid(row=0, column=1, sticky=(tk.N, tk.S))
+        
+        # Results action buttons
+        results_buttons = ttk.Frame(results_frame)
+        results_buttons.grid(row=1, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(10, 0))
+        
+        ModernButton(results_buttons, text="Copy Selected", 
+                    command=self._copy_selected_selector).pack(side=tk.LEFT, padx=(0, 5))
+        ModernButton(results_buttons, text="Use in Action Tab", 
+                    command=self._use_selector_in_action).pack(side=tk.LEFT, padx=5)
+        ModernButton(results_buttons, text="Verify Selector", 
+                    command=self._verify_selected_selector).pack(side=tk.LEFT, padx=5)
+        ModernButton(results_buttons, text="Clear Results", 
+                    command=self._clear_selector_results).pack(side=tk.LEFT, padx=5)
+        
+        # Initialize action sequence list for action tab
+        self.action_sequence_list = []
         
     def _create_config_panel(self, parent):
         """Create configuration panel"""
@@ -2379,24 +2765,47 @@ Errors: {len(results.get('errors', []))}
         default_settings = {
             'font_size': 20,
             'dark_mode': False,
+            'theme_mode': 'dark',  # dark, darker (light theme removed)
             'theme': 'clam',
-            # Professional dark theme colors
-            'dark_background': '#1e1e1e',      # VS Code dark background
-            'dark_surface': '#2d2d30',         # Slightly lighter surface
+            # Modern dark theme colors - Professional palette
+            'dark_background': '#1a1a1a',      # Deep charcoal background
+            'dark_surface': '#2d2d30',         # Elevated surfaces  
+            'dark_surface_alt': '#252526',     # Alternative surface
             'dark_input': '#3c3c3c',           # Input field background
-            'dark_accent': '#007acc',          # VS Code blue accent
-            'dark_text': '#cccccc',            # Light grey text
-            'dark_text_bright': '#ffffff',     # White for important text
-            'dark_success': '#4ec9b0',         # Teal green for success
-            'dark_warning': '#dcdcaa',         # Light yellow for warnings
-            'dark_error': '#f44747',           # Red for errors
-            # Light theme colors
-            'light_background': '#ffffff',
-            'light_surface': '#f8f8f8',
-            'light_input': '#ffffff',
-            'light_accent': '#0078d4',
-            'light_text': '#323130',
-            'light_text_bright': '#000000',
+            'dark_input_focused': '#404040',   # Focused input state
+            'dark_accent': '#0e639c',          # Modern blue accent
+            'dark_accent_hover': '#1177bb',    # Hover state for accent
+            'dark_text': '#cccccc',            # Primary text
+            'dark_text_bright': '#ffffff',     # High contrast text
+            'dark_text_muted': '#969696',      # Secondary/muted text
+            'dark_border': '#454545',          # Border color
+            'dark_border_focused': '#0e639c',  # Focused border
+            'dark_success': '#4ec9b0',         # Success green
+            'dark_warning': '#dcdcaa',         # Warning yellow
+            'dark_error': '#f44747',           # Error red
+            'dark_info': '#75beff',            # Info blue
+            
+            # Dark theme variants
+            'darker_background': '#0d0d0d',    # Even darker background
+            'darker_surface': '#1c1c1c',       # Darker surfaces
+            'darker_input': '#2a2a2a',         # Darker inputs
+            # Modern light theme colors - Clean palette
+            'light_background': '#ffffff',     # Pure white background
+            'light_surface': '#f8f8f8',        # Light surface
+            'light_surface_alt': '#f0f0f0',    # Alternative light surface
+            'light_input': '#ffffff',          # Input background
+            'light_input_focused': '#f9f9f9',  # Focused input state
+            'light_accent': '#0078d4',         # Microsoft blue
+            'light_accent_hover': '#106ebe',   # Hover state
+            'light_text': '#323130',           # Primary dark text
+            'light_text_bright': '#000000',    # High contrast text
+            'light_text_muted': '#605e5c',     # Secondary text
+            'light_border': '#d0d0d0',         # Border color
+            'light_border_focused': '#0078d4', # Focused border
+            'light_success': '#107c10',        # Success green
+            'light_warning': '#d83b01',        # Warning orange
+            'light_error': '#d13438',          # Error red
+            'light_info': '#0078d4',           # Info blue
             'light_success': '#107c10',
             'light_warning': '#f7630c',
             'light_error': '#d13438',
@@ -2440,9 +2849,12 @@ Errors: {len(results.get('errors', []))}
             with open(self.settings_file, 'w') as f:
                 json.dump(self.settings, f, indent=2)
                 
-            messagebox.showinfo("Settings Saved", "Settings have been saved successfully!")
+            # PERFORMANCE FIX: Remove blocking popup that causes 30-second delay
+            # Just log success instead
+            self._log("Settings saved successfully!", "success")
             
         except IOError as e:
+            # Keep error popup for actual errors
             messagebox.showerror("Save Error", f"Failed to save settings: {e}")
             
     def _apply_settings(self):
@@ -2453,167 +2865,578 @@ Errors: {len(results.get('errors', []))}
         # Update ALL ttk styles with new font size
         self._configure_ttk_fonts(font_size)
         
-        # Apply dark mode if enabled
-        if self.settings.get('dark_mode', False):
+        # Apply selected theme - only dark themes available
+        theme_mode = self.settings.get('theme_mode', 'dark')
+        if theme_mode == 'dark':
             self._apply_dark_theme()
+        elif theme_mode == 'darker':
+            self._apply_darker_theme()
         else:
-            self._apply_light_theme()
+            # Fallback for any invalid settings - default to dark
+            self._apply_dark_theme()
             
         # Apply saved resolution
         self._apply_saved_resolution()
             
     def _apply_dark_theme(self):
-        """Apply professional dark theme colors"""
-        # Get colors with custom overrides
-        bg_main = self.settings.get('custom_background') or self.settings.get('dark_background', '#1e1e1e')
+        """Apply modern dark theme with enhanced visual hierarchy"""
+        # Get enhanced color palette with custom overrides
+        bg_main = self.settings.get('custom_background') or self.settings.get('dark_background', '#1a1a1a')
         bg_surface = self.settings.get('dark_surface', '#2d2d30')
+        bg_surface_alt = self.settings.get('dark_surface_alt', '#252526')
         bg_input = self.settings.get('dark_input', '#3c3c3c')
-        accent_color = self.settings.get('custom_primary') or self.settings.get('dark_accent', '#007acc')
+        bg_input_focused = self.settings.get('dark_input_focused', '#404040')
+        accent_color = self.settings.get('custom_primary') or self.settings.get('dark_accent', '#0e639c')
+        accent_hover = self.settings.get('dark_accent_hover', '#1177bb')
         text_color = self.settings.get('custom_font') or self.settings.get('dark_text', '#cccccc')
         text_bright = self.settings.get('dark_text_bright', '#ffffff')
+        text_muted = self.settings.get('dark_text_muted', '#969696')
+        border_color = self.settings.get('dark_border', '#454545')
+        border_focused = self.settings.get('dark_border_focused', '#0e639c')
         success_color = self.settings.get('dark_success', '#4ec9b0')
+        warning_color = self.settings.get('dark_warning', '#dcdcaa')
+        error_color = self.settings.get('dark_error', '#f44747')
+        info_color = self.settings.get('dark_info', '#75beff')
         
         self.root.configure(bg=bg_main)
         
-        # Configure ttk styles for professional dark theme - preserving fonts
+        # Configure ttk styles for modern dark theme - preserving fonts
         font_size = self.settings.get('font_size', 20)
         
         # Re-apply font configurations first
         self._configure_ttk_fonts(font_size)
         
-        # Then apply color configurations
-        self.style.configure('TFrame', background=bg_main)
-        self.style.configure('TLabel', background=bg_main, foreground=text_color)
-        self.style.configure('TLabelFrame', background=bg_main, foreground=text_bright, 
-                            borderwidth=1, relief='solid')
-        self.style.configure('TLabelFrame.Label', background=bg_main, foreground=text_bright)
+        # Enhanced component styling
+        self.style.configure('TFrame', 
+                           background=bg_main, 
+                           borderwidth=0)
+                           
+        self.style.configure('TLabel', 
+                           background=bg_main, 
+                           foreground=text_color)
+                           
+        self.style.configure('TLabelFrame', 
+                           background=bg_main, 
+                           foreground=text_bright,
+                           bordercolor=border_color,
+                           darkcolor=bg_surface,
+                           lightcolor=bg_surface,
+                           borderwidth=1, 
+                           relief='solid')
+                           
+        self.style.configure('TLabelFrame.Label', 
+                           background=bg_main, 
+                           foreground=text_bright)
         
-        # Improved button styling
-        self.style.configure('TButton', background=bg_surface, foreground=text_color,
-                           borderwidth=1, relief='solid')
+        # Modern button styling with enhanced visual feedback
+        self.style.configure('TButton', 
+                           background=bg_surface, 
+                           foreground=text_color,
+                           bordercolor=border_color,
+                           lightcolor=bg_surface,
+                           darkcolor=bg_surface_alt,
+                           borderwidth=1, 
+                           relief='solid',
+                           focuscolor=border_focused)
+                           
         self.style.map('TButton', 
-                      background=[('active', accent_color), ('pressed', bg_input)])
+                      background=[('active', accent_hover), 
+                                ('pressed', bg_input_focused),
+                                ('focus', bg_surface_alt)],
+                      bordercolor=[('active', border_focused),
+                                 ('focus', border_focused)])
         
-        # Better input field contrast with grey-teal color like highlighted selection
-        input_bg = '#4a5c5a'  # Grey-teal color similar to highlighted combobox
-        input_fg = '#ffffff'  # White text for maximum contrast
-        
+        # Enhanced input field styling with modern contrast and focus states
         self.style.configure('TEntry', 
-                           background=input_bg, foreground=input_fg,
-                           borderwidth=1, relief='solid', insertcolor=input_fg,
-                           fieldbackground=input_bg, selectbackground='#6b7d7b',
-                           selectforeground='#ffffff')
+                           background=bg_input, 
+                           foreground=text_bright,
+                           bordercolor=border_color,
+                           lightcolor=bg_input,
+                           darkcolor=bg_input,
+                           borderwidth=1, 
+                           relief='solid', 
+                           insertcolor=text_bright,
+                           fieldbackground=bg_input, 
+                           selectbackground=accent_color,
+                           selectforeground=text_bright)
+                           
+        self.style.map('TEntry',
+                      bordercolor=[('focus', border_focused)],
+                      fieldbackground=[('focus', bg_input_focused)])
         
+        # Enhanced combobox styling
         self.style.configure('TCombobox', 
-                           background=input_bg, foreground=input_fg,
-                           borderwidth=1, relief='solid',
-                           fieldbackground=input_bg, selectbackground='#6b7d7b',
-                           selectforeground='#ffffff', arrowcolor=input_fg)
+                           background=bg_input, 
+                           foreground=text_bright,
+                           bordercolor=border_color,
+                           lightcolor=bg_input,
+                           darkcolor=bg_input,
+                           borderwidth=1, 
+                           relief='solid',
+                           fieldbackground=bg_input, 
+                           selectbackground=accent_color,
+                           selectforeground=text_bright, 
+                           arrowcolor=text_color)
         
-        # Configure combobox dropdown appearance
+        # Enhanced combobox dropdown styling
         self.style.map('TCombobox',
-                      background=[('readonly', input_bg), ('active', '#5a6c6a')],
-                      foreground=[('readonly', input_fg)],
-                      fieldbackground=[('readonly', input_bg), ('active', '#5a6c6a')],
-                      selectbackground=[('readonly', '#6b7d7b')],
-                      selectforeground=[('readonly', '#ffffff')])
+                      background=[('readonly', bg_input), 
+                                ('active', bg_input_focused),
+                                ('focus', bg_input_focused)],
+                      bordercolor=[('focus', border_focused),
+                                 ('active', border_focused)],
+                      foreground=[('readonly', text_bright)],
+                      fieldbackground=[('readonly', bg_input), 
+                                     ('active', bg_input_focused),
+                                     ('focus', bg_input_focused)],
+                      selectbackground=[('readonly', accent_color)],
+                      selectforeground=[('readonly', text_bright)])
         
-        self.style.configure('TCheckbutton', background=bg_main, foreground=text_color,
-                           font=('Arial', max(20, font_size - 2)))
-        self.style.configure('TScale', background=bg_main, troughcolor=bg_input)
+        # Enhanced control styling
+        self.style.configure('TCheckbutton', 
+                           background=bg_main, 
+                           foreground=text_color,
+                           focuscolor=border_focused,
+                           font=('Segoe UI', max(20, font_size - 2)))
+                           
+        # Radio button styling - CRITICAL FIX for tiny radio buttons  
+        self.style.configure('TRadiobutton', 
+                           background=bg_main, 
+                           foreground=text_color,
+                           focuscolor=border_focused,
+                           font=('Segoe UI', max(20, font_size)))
+                           
+        self.style.configure('TScale', 
+                           background=bg_main, 
+                           troughcolor=bg_input,
+                           bordercolor=border_color,
+                           lightcolor=accent_color,
+                           darkcolor=accent_color)
         
-        # Notebook styling
-        self.style.configure('TNotebook', background=bg_main, borderwidth=0)
-        self.style.configure('TNotebook.Tab', background=bg_surface, foreground=text_color,
-                           padding=[12, 8], borderwidth=1, relief='solid')
+        # Modern notebook/tab styling
+        self.style.configure('TNotebook', 
+                           background=bg_main, 
+                           borderwidth=0)
+                           
+        self.style.configure('TNotebook.Tab', 
+                           background=bg_surface, 
+                           foreground=text_color,
+                           bordercolor=border_color,
+                           lightcolor=bg_surface,
+                           darkcolor=bg_surface_alt,
+                           padding=[15, 10], 
+                           borderwidth=1, 
+                           relief='solid')
+                           
         self.style.map('TNotebook.Tab',
-                      background=[('selected', accent_color), ('active', bg_input)])
+                      background=[('selected', accent_color), 
+                                ('active', bg_surface_alt)],
+                      foreground=[('selected', text_bright)],
+                      bordercolor=[('selected', border_focused)])
         
-        # Update tk.Scale widget if it exists
+        # TreeView styling for dark theme
+        self.style.configure('Treeview', 
+                           background=bg_input, 
+                           foreground=text_bright,
+                           fieldbackground=bg_input,      # CRITICAL FIX: Ensure data area is dark
+                           selectbackground=bg_surface,   # CRITICAL FIX: Selection background
+                           selectforeground=text_bright,  # CRITICAL FIX: Selection text
+                           bordercolor=border_color,
+                           lightcolor=bg_input,
+                           darkcolor=bg_input,
+                           borderwidth=1, 
+                           relief='solid',
+                           font=('Segoe UI', max(20, font_size)))
+                           
+        self.style.configure('Treeview.Heading',
+                           background=bg_surface, 
+                           foreground=text_bright,
+                           bordercolor=border_color,
+                           lightcolor=bg_surface,
+                           darkcolor=bg_surface_alt,
+                           borderwidth=1, 
+                           relief='solid')
+        
+        # Update tk.Scale widget with modern styling
         if hasattr(self, 'font_slider'):
-            self.font_slider.config(bg=bg_surface, fg=text_color, troughcolor=input_bg,
-                                   activebackground=accent_color)
+            self.font_slider.config(
+                bg=bg_surface, 
+                fg=text_color, 
+                troughcolor=bg_input,
+                activebackground=accent_color,
+                highlightbackground=bg_main,
+                highlightcolor=border_focused
+            )
             
-        # Update all tkinter widgets that don't use ttk styles
-        self._update_tkinter_widgets_theme(bg_main, bg_surface, input_bg, text_color, input_fg)
+        # Update all tkinter widgets with enhanced theme
+        self._update_tkinter_widgets_theme(bg_main, bg_surface, bg_input, text_color, text_bright)
         
         # Update preview colors
         self._update_theme_preview()
         
     def _apply_light_theme(self):
-        """Apply professional light theme colors"""
-        # Get colors with custom overrides
+        """REMOVED: Light theme functionality removed - redirecting to dark theme"""
+        print("⚠️  Light theme was removed. Switching to dark theme instead.")
+        self._apply_dark_theme()
+        return
+        
+    def _apply_light_theme_REMOVED(self):
+        """Apply modern light theme with clean aesthetics"""
+        # Get enhanced color palette with custom overrides
         bg_main = self.settings.get('custom_background') or self.settings.get('light_background', '#ffffff')
         bg_surface = self.settings.get('light_surface', '#f8f8f8')
+        bg_surface_alt = self.settings.get('light_surface_alt', '#f0f0f0')
         bg_input = self.settings.get('light_input', '#ffffff')
+        bg_input_focused = self.settings.get('light_input_focused', '#f9f9f9')
         accent_color = self.settings.get('custom_primary') or self.settings.get('light_accent', '#0078d4')
+        accent_hover = self.settings.get('light_accent_hover', '#106ebe')
         text_color = self.settings.get('custom_font') or self.settings.get('light_text', '#323130')
         text_bright = self.settings.get('light_text_bright', '#000000')
+        text_muted = self.settings.get('light_text_muted', '#605e5c')
+        border_color = self.settings.get('light_border', '#d0d0d0')
+        border_focused = self.settings.get('light_border_focused', '#0078d4')
+        success_color = self.settings.get('light_success', '#107c10')
+        warning_color = self.settings.get('light_warning', '#d83b01')
+        error_color = self.settings.get('light_error', '#d13438')
+        info_color = self.settings.get('light_info', '#0078d4')
         
         self.root.configure(bg=bg_main)
         
-        # Configure ttk styles for professional light theme - preserving fonts
+        # Configure ttk styles for modern light theme - preserving fonts
         font_size = self.settings.get('font_size', 20)
         
         # Re-apply font configurations first
         self._configure_ttk_fonts(font_size)
         
-        # Then apply color configurations
-        self.style.configure('TFrame', background=bg_main)
-        self.style.configure('TLabel', background=bg_main, foreground=text_color)
-        self.style.configure('TLabelFrame', background=bg_main, foreground=text_bright,
-                           borderwidth=1, relief='solid')
-        self.style.configure('TLabelFrame.Label', background=bg_main, foreground=text_bright)
-        
-        # Improved button styling
-        self.style.configure('TButton', background=bg_surface, foreground=text_color,
-                           borderwidth=1, relief='solid')
-        self.style.map('TButton',
-                      background=[('active', accent_color), ('pressed', '#e1e1e1')])
-        
-        # Better input field contrast for light theme
-        light_input_bg = '#f0f0f0'  # Light grey for better contrast
-        light_input_fg = '#000000'  # Black text for maximum contrast
-        
-        self.style.configure('TEntry', 
-                           background=light_input_bg, foreground=light_input_fg,
-                           borderwidth=1, relief='solid', insertcolor=light_input_fg,
+        # Enhanced component styling
+        self.style.configure('TFrame', 
+                           background=bg_main, 
+                           borderwidth=0)
                            
-                           fieldbackground=light_input_bg, selectbackground='#0078d4',
+        self.style.configure('TLabel', 
+                           background=bg_main, 
+                           foreground=text_color)
+                           
+        self.style.configure('TLabelFrame', 
+                           background=bg_main, 
+                           foreground=text_bright,
+                           bordercolor=border_color,
+                           darkcolor=bg_surface,
+                           lightcolor=bg_surface,
+                           borderwidth=1, 
+                           relief='solid')
+                           
+        self.style.configure('TLabelFrame.Label', 
+                           background=bg_main, 
+                           foreground=text_bright)
+        
+        # Modern button styling with enhanced visual feedback
+        self.style.configure('TButton', 
+                           background=bg_surface, 
+                           foreground=text_color,
+                           bordercolor=border_color,
+                           lightcolor=bg_surface,
+                           darkcolor=bg_surface_alt,
+                           borderwidth=1, 
+                           relief='solid',
+                           focuscolor=border_focused)
+                           
+        self.style.map('TButton',
+                      background=[('active', accent_hover), 
+                                ('pressed', bg_input_focused),
+                                ('focus', bg_surface_alt)],
+                      bordercolor=[('active', border_focused),
+                                 ('focus', border_focused)])
+        
+        # Enhanced input field styling with clean contrast and focus states
+        self.style.configure('TEntry', 
+                           background=bg_input, 
+                           foreground=text_bright,
+                           bordercolor=border_color,
+                           lightcolor=bg_input,
+                           darkcolor=bg_input,
+                           borderwidth=1, 
+                           relief='solid', 
+                           insertcolor=text_bright,
+                           fieldbackground=bg_input, 
+                           selectbackground=accent_color,
                            selectforeground='#ffffff')
                            
-        self.style.configure('TCombobox', 
-                           background=light_input_bg, foreground=light_input_fg,
-                           borderwidth=1, relief='solid',
-                           fieldbackground=light_input_bg, selectbackground='#0078d4',
-                           selectforeground='#ffffff', arrowcolor=light_input_fg)
+        self.style.map('TEntry',
+                      bordercolor=[('focus', border_focused)],
+                      fieldbackground=[('focus', bg_input_focused)])
         
-        # Configure combobox dropdown appearance for light theme
+        # Enhanced combobox styling
+        self.style.configure('TCombobox', 
+                           background=bg_input, 
+                           foreground=text_bright,
+                           bordercolor=border_color,
+                           lightcolor=bg_input,
+                           darkcolor=bg_input,
+                           borderwidth=1, 
+                           relief='solid',
+                           fieldbackground=bg_input, 
+                           selectbackground=accent_color,
+                           selectforeground='#ffffff', 
+                           arrowcolor=text_color)
+        
+        # Enhanced combobox dropdown styling
         self.style.map('TCombobox',
-                      background=[('readonly', light_input_bg), ('active', '#e8e8e8')],
-                      foreground=[('readonly', light_input_fg)],
-                      fieldbackground=[('readonly', light_input_bg), ('active', '#e8e8e8')],
-                      selectbackground=[('readonly', '#0078d4')],
+                      background=[('readonly', bg_input), 
+                                ('active', bg_input_focused),
+                                ('focus', bg_input_focused)],
+                      bordercolor=[('focus', border_focused),
+                                 ('active', border_focused)],
+                      foreground=[('readonly', text_bright)],
+                      fieldbackground=[('readonly', bg_input), 
+                                     ('active', bg_input_focused),
+                                     ('focus', bg_input_focused)],
+                      selectbackground=[('readonly', accent_color)],
                       selectforeground=[('readonly', '#ffffff')])
         
-        self.style.configure('TCheckbutton', background=bg_main, foreground=text_color,
-                           font=('Arial', max(20, font_size - 2)))
-        self.style.configure('TScale', background=bg_main, troughcolor=bg_surface)
+        # Enhanced control styling
+        self.style.configure('TCheckbutton', 
+                           background=bg_main, 
+                           foreground=text_color,
+                           focuscolor=border_focused,
+                           font=('Segoe UI', max(20, font_size - 2)))
+                           
+        self.style.configure('TScale', 
+                           background=bg_main, 
+                           troughcolor=bg_input,
+                           bordercolor=border_color,
+                           lightcolor=accent_color,
+                           darkcolor=accent_color)
         
-        # Notebook styling
-        self.style.configure('TNotebook', background=bg_main, borderwidth=0)
-        self.style.configure('TNotebook.Tab', background=bg_surface, foreground=text_color,
-                           padding=[12, 8], borderwidth=1, relief='solid')
+        # Modern notebook/tab styling
+        self.style.configure('TNotebook', 
+                           background=bg_main, 
+                           borderwidth=0)
+                           
+        self.style.configure('TNotebook.Tab', 
+                           background=bg_surface, 
+                           foreground=text_color,
+                           bordercolor=border_color,
+                           lightcolor=bg_surface,
+                           darkcolor=bg_surface_alt,
+                           padding=[15, 10], 
+                           borderwidth=1, 
+                           relief='solid')
+                           
         self.style.map('TNotebook.Tab',
-                      background=[('selected', accent_color), ('active', '#e1e1e1')])
+                      background=[('selected', accent_color), 
+                                ('active', bg_surface_alt)],
+                      foreground=[('selected', '#ffffff')],
+                      bordercolor=[('selected', border_focused)])
         
-        # Update tk.Scale widget if it exists
+        # Update tk.Scale widget with modern styling
         if hasattr(self, 'font_slider'):
-            self.font_slider.config(bg=bg_surface, fg=text_color, troughcolor=light_input_bg,
-                                   activebackground=accent_color)
+            self.font_slider.config(
+                bg=bg_surface, 
+                fg=text_color, 
+                troughcolor=bg_input,
+                activebackground=accent_color,
+                highlightbackground=bg_main,
+                highlightcolor=border_focused
+            )
             
-        # Update all tkinter widgets that don't use ttk styles
-        self._update_tkinter_widgets_theme(bg_main, bg_surface, light_input_bg, text_color, light_input_fg)
+        # Update all tkinter widgets with enhanced theme
+        self._update_tkinter_widgets_theme(bg_main, bg_surface, bg_input, text_color, text_bright)
+        
+        # Update preview colors
+        self._update_theme_preview()
+        
+    def _apply_darker_theme(self):
+        """Apply dark gray theme with lighter gray tones (more gray, less black)"""
+        # Get darker (gray) theme colors - MORE GRAY, LESS BLACK for real difference
+        bg_main = self.settings.get('custom_background') or self.settings.get('darker_background', '#404040')  # Much grayer main bg
+        bg_surface = self.settings.get('darker_surface', '#4a4a4a')  # Lighter gray surface  
+        bg_surface_alt = self.settings.get('dark_surface_alt', '#505050')  # Even lighter alt
+        bg_input = self.settings.get('darker_input', '#555555')  # Much lighter gray inputs
+        bg_input_focused = self.settings.get('dark_input_focused', '#606060')  # Lighter focused state
+        accent_color = self.settings.get('custom_primary') or self.settings.get('dark_accent', '#0e639c')
+        accent_hover = self.settings.get('dark_accent_hover', '#1177bb')
+        text_color = self.settings.get('custom_font') or self.settings.get('dark_text', '#cccccc')
+        text_bright = self.settings.get('dark_text_bright', '#ffffff')
+        text_muted = self.settings.get('dark_text_muted', '#969696')
+        border_color = self.settings.get('dark_border', '#454545')
+        border_focused = self.settings.get('dark_border_focused', '#0e639c')
+        success_color = self.settings.get('dark_success', '#4ec9b0')
+        warning_color = self.settings.get('dark_warning', '#dcdcaa')
+        error_color = self.settings.get('dark_error', '#f44747')
+        info_color = self.settings.get('dark_info', '#75beff')
+        
+        self.root.configure(bg=bg_main)
+        
+        # Configure ttk styles for ultra-dark theme - preserving fonts
+        font_size = self.settings.get('font_size', 20)
+        
+        # Re-apply font configurations first
+        self._configure_ttk_fonts(font_size)
+        
+        # Ultra-dark component styling
+        self.style.configure('TFrame', 
+                           background=bg_main, 
+                           borderwidth=0)
+                           
+        self.style.configure('TLabel', 
+                           background=bg_main, 
+                           foreground=text_color)
+                           
+        self.style.configure('TLabelFrame', 
+                           background=bg_main, 
+                           foreground=text_bright,
+                           bordercolor=border_color,
+                           darkcolor=bg_surface,
+                           lightcolor=bg_surface,
+                           borderwidth=1, 
+                           relief='solid')
+                           
+        self.style.configure('TLabelFrame.Label', 
+                           background=bg_main, 
+                           foreground=text_bright)
+        
+        # Ultra-dark button styling with high contrast
+        self.style.configure('TButton', 
+                           background=bg_surface, 
+                           foreground=text_bright,
+                           bordercolor=border_color,
+                           lightcolor=bg_surface,
+                           darkcolor=bg_surface_alt,
+                           borderwidth=1, 
+                           relief='solid',
+                           focuscolor=border_focused)
+                           
+        self.style.map('TButton', 
+                      background=[('active', accent_hover), 
+                                ('pressed', bg_input_focused),
+                                ('focus', bg_surface_alt)],
+                      bordercolor=[('active', border_focused),
+                                 ('focus', border_focused)])
+        
+        # Ultra-dark input styling with maximum contrast
+        self.style.configure('TEntry', 
+                           background=bg_input, 
+                           foreground=text_bright,
+                           bordercolor=border_color,
+                           lightcolor=bg_input,
+                           darkcolor=bg_input,
+                           borderwidth=1, 
+                           relief='solid', 
+                           insertcolor=text_bright,
+                           fieldbackground=bg_input, 
+                           selectbackground=accent_color,
+                           selectforeground=text_bright)
+                           
+        self.style.map('TEntry',
+                      bordercolor=[('focus', border_focused)],
+                      fieldbackground=[('focus', bg_input_focused)])
+        
+        # Ultra-dark combobox styling
+        self.style.configure('TCombobox', 
+                           background=bg_input, 
+                           foreground=text_bright,
+                           bordercolor=border_color,
+                           lightcolor=bg_input,
+                           darkcolor=bg_input,
+                           borderwidth=1, 
+                           relief='solid',
+                           fieldbackground=bg_input, 
+                           selectbackground=accent_color,
+                           selectforeground=text_bright, 
+                           arrowcolor=text_color)
+        
+        self.style.map('TCombobox',
+                      background=[('readonly', bg_input), 
+                                ('active', bg_input_focused),
+                                ('focus', bg_input_focused)],
+                      bordercolor=[('focus', border_focused),
+                                 ('active', border_focused)],
+                      foreground=[('readonly', text_bright)],
+                      fieldbackground=[('readonly', bg_input), 
+                                     ('active', bg_input_focused),
+                                     ('focus', bg_input_focused)],
+                      selectbackground=[('readonly', accent_color)],
+                      selectforeground=[('readonly', text_bright)])
+        
+        # Ultra-dark control styling
+        self.style.configure('TCheckbutton', 
+                           background=bg_main, 
+                           foreground=text_color,
+                           focuscolor=border_focused,
+                           font=('Segoe UI', max(20, font_size - 2)))
+                           
+        # Radio button styling - CRITICAL FIX for tiny radio buttons  
+        self.style.configure('TRadiobutton', 
+                           background=bg_main, 
+                           foreground=text_color,
+                           focuscolor=border_focused,
+                           font=('Segoe UI', max(20, font_size)))
+                           
+        self.style.configure('TScale', 
+                           background=bg_main, 
+                           troughcolor=bg_input,
+                           bordercolor=border_color,
+                           lightcolor=accent_color,
+                           darkcolor=accent_color)
+        
+        # Ultra-dark notebook/tab styling
+        self.style.configure('TNotebook', 
+                           background=bg_main, 
+                           borderwidth=0)
+                           
+        self.style.configure('TNotebook.Tab', 
+                           background=bg_surface, 
+                           foreground=text_color,
+                           bordercolor=border_color,
+                           lightcolor=bg_surface,
+                           darkcolor=bg_surface_alt,
+                           padding=[15, 10], 
+                           borderwidth=1, 
+                           relief='solid')
+                           
+        self.style.map('TNotebook.Tab',
+                      background=[('selected', accent_color), 
+                                ('active', bg_surface_alt)],
+                      foreground=[('selected', text_bright)],
+                      bordercolor=[('selected', border_focused)])
+        
+        # TreeView styling for dark gray theme  
+        self.style.configure('Treeview', 
+                           background=bg_input, 
+                           foreground=text_bright,
+                           fieldbackground=bg_input,      # CRITICAL FIX: Ensure data area is dark
+                           selectbackground=bg_surface,   # CRITICAL FIX: Selection background
+                           selectforeground=text_bright,  # CRITICAL FIX: Selection text
+                           bordercolor=border_color,
+                           lightcolor=bg_input,
+                           darkcolor=bg_input,
+                           borderwidth=1, 
+                           relief='solid',
+                           font=('Segoe UI', max(20, font_size)))
+                           
+        self.style.configure('Treeview.Heading',
+                           background=bg_surface, 
+                           foreground=text_bright,
+                           bordercolor=border_color,
+                           lightcolor=bg_surface,
+                           darkcolor=bg_surface_alt,
+                           borderwidth=1, 
+                           relief='solid')
+        
+        # Update tk.Scale widget with ultra-dark styling
+        if hasattr(self, 'font_slider'):
+            self.font_slider.config(
+                bg=bg_surface, 
+                fg=text_color, 
+                troughcolor=bg_input,
+                activebackground=accent_color,
+                highlightbackground=bg_main,
+                highlightcolor=border_focused
+            )
+            
+        # Update all tkinter widgets with ultra-dark theme
+        self._update_tkinter_widgets_theme(bg_main, bg_surface, bg_input, text_color, text_bright)
         
         # Update preview colors
         self._update_theme_preview()
@@ -2623,6 +3446,16 @@ Errors: {len(results.get('errors', []))}
         # Update actions listbox
         if hasattr(self, 'actions_listbox'):
             self.actions_listbox.config(
+                bg=bg_input,
+                fg=text_bright,
+                selectbackground=bg_surface,
+                selectforeground=text_bright,
+                font=('Arial', max(20, self.settings.get('font_size', 20) - 2))
+            )
+            
+        # CRITICAL FIX: Update action sequence listbox (was missing!)
+        if hasattr(self, 'action_sequence_listbox'):
+            self.action_sequence_listbox.config(
                 bg=bg_input,
                 fg=text_bright,
                 selectbackground=bg_surface,
@@ -2640,9 +3473,9 @@ Errors: {len(results.get('errors', []))}
             )
             # Update log text tags for colored output
             self.log_text.tag_config('info', foreground=text_color)
-            self.log_text.tag_config('success', foreground=self.settings.get('dark_success' if self.dark_mode_var.get() else 'light_success', '#4ec9b0'))
-            self.log_text.tag_config('error', foreground=self.settings.get('dark_error' if self.dark_mode_var.get() else 'light_error', '#f44747'))
-            self.log_text.tag_config('warning', foreground=self.settings.get('dark_warning' if self.dark_mode_var.get() else 'light_warning', '#dcdcaa'))
+            self.log_text.tag_config('success', foreground=self.settings.get('dark_success', '#4ec9b0'))
+            self.log_text.tag_config('error', foreground=self.settings.get('dark_error', '#f44747'))
+            self.log_text.tag_config('warning', foreground=self.settings.get('dark_warning', '#dcdcaa'))
             
         # Update stats text area  
         if hasattr(self, 'stats_text'):
@@ -2652,6 +3485,22 @@ Errors: {len(results.get('errors', []))}
                 insertbackground=text_bright,
                 font=('Courier', max(9, self.settings.get('font_size', 20) - 6))
             )
+            
+        # CRITICAL FIX: Update ALL ScrolledText widgets that were missing
+        scrolled_text_widgets = [
+            'action_desc_text', 'action_log_text', 'custom_selector_text', 'html_analysis_text'
+        ]
+        for widget_name in scrolled_text_widgets:
+            if hasattr(self, widget_name):
+                widget = getattr(self, widget_name)
+                widget.config(
+                    bg=bg_input,
+                    fg=text_bright,
+                    insertbackground=text_bright,
+                    selectbackground=bg_surface,
+                    selectforeground=text_bright,
+                    font=('Consolas', max(10, self.settings.get('font_size', 20) - 8))
+                )
             
         # Update Name and URL text entries
         if hasattr(self, 'name_entry'):
@@ -2712,6 +3561,9 @@ Errors: {len(results.get('errors', []))}
         try:
             if hasattr(self, 'actions_listbox'):
                 self.actions_listbox.config(font=('Arial', max(20, font_size - 2)))
+            # CRITICAL FIX: Add missing action_sequence_listbox font update
+            if hasattr(self, 'action_sequence_listbox'):
+                self.action_sequence_listbox.config(font=('Arial', max(20, font_size - 2)))
             if hasattr(self, 'log_text'):
                 self.log_text.config(font=('Courier', max(9, font_size - 6)))
             if hasattr(self, 'stats_text'):
@@ -2803,29 +3655,70 @@ Errors: {len(results.get('errors', []))}
         except:
             pass  # Ignore any errors during update
             
+    def _on_theme_changed(self):
+        """Handle theme selection change"""
+        theme_mode = self.theme_var.get()
+        
+        # Force only dark themes - redirect any invalid theme to dark
+        if theme_mode not in ['dark', 'darker']:
+            print(f"Warning: Invalid theme '{theme_mode}' requested, defaulting to 'dark'")
+            theme_mode = 'dark'
+            self.theme_var.set('dark')
+        
+        self.settings['theme_mode'] = theme_mode
+        
+        # Update dark_mode_var for backward compatibility - always true now
+        self.dark_mode_var.set(True)
+        self.settings['dark_mode'] = True
+        
+        # REMOVED AUTO-SAVE: Only save when user clicks Save Settings button
+        # self._save_settings()  # <-- REMOVED to fix auto-save popup issue
+        
+        # Apply the selected theme - only dark themes available
+        if theme_mode == 'darker':
+            self._apply_darker_theme()
+        else:
+            # Default to dark theme (including 'dark' and any invalid values)
+            self._apply_dark_theme()
+            
+        # Apply theme to all ModernButton instances 
+        # (ModernButton instances update automatically through their theme detection)
+        
+        # Update color preview defaults when theme changes
+        self._update_color_previews()
+        
     def _on_dark_mode_changed(self):
-        """Handle dark mode toggle change"""
+        """Handle dark mode toggle (backward compatibility)"""
+        # Update theme_var based on dark_mode_var
+        if self.dark_mode_var.get():
+            self.theme_var.set('dark')
+        else:
+            self.theme_var.set('dark')
+        self._on_theme_changed()
+        
+    def _update_color_previews(self):
+        """Update color preview widgets based on current theme"""
+        theme_mode = getattr(self, 'theme_var', tk.StringVar()).get()
+        # Always dark themes now
+        
         # Update color preview defaults when theme changes
         if hasattr(self, 'bg_color_preview'):
-            default_bg = '#1e1e1e' if self.dark_mode_var.get() else '#ffffff'
+            if theme_mode == 'darker':
+                default_bg = '#0d0d0d'
+            else:
+                default_bg = '#1a1a1a'  # Dark theme background
             if not self.custom_bg_var.get():
                 self.bg_color_preview.config(bg=default_bg)
                 
         if hasattr(self, 'primary_color_preview'):
-            default_primary = '#007acc' if self.dark_mode_var.get() else '#0078d4'
+            default_primary = '#0e639c'  # Always use dark theme primary color
             if not self.custom_primary_var.get():
                 self.primary_color_preview.config(bg=default_primary)
                 
         if hasattr(self, 'font_color_preview'):
-            default_font = '#cccccc' if self.dark_mode_var.get() else '#323130'
+            default_font = '#cccccc'  # Always use dark theme font color
             if not self.custom_font_var.get():
                 self.font_color_preview.config(bg=default_font)
-        
-        # Apply the appropriate theme
-        if self.dark_mode_var.get():
-            self._apply_dark_theme()
-        else:
-            self._apply_light_theme()
             
     def _reset_settings(self):
         """Reset settings to defaults"""
@@ -2855,6 +3748,7 @@ Errors: {len(results.get('errors', []))}
             self.settings = {
                 'font_size': 20,
                 'dark_mode': False,
+                'theme_mode': 'light',
                 'theme': 'clam',
                 'custom_background': None,
                 'custom_primary': None,
@@ -2905,10 +3799,10 @@ Errors: {len(results.get('errors', []))}
                 self.settings['custom_font'] = hex_color
                 
             # Apply the theme with new colors
-            if self.dark_mode_var.get():
-                self._apply_dark_theme()
+            if self.theme_var.get() == 'darker':
+                self._apply_darker_theme()
             else:
-                self._apply_light_theme()
+                self._apply_dark_theme()
                 
     def _reset_color(self, color_type):
         """Reset color to default"""
@@ -2929,24 +3823,26 @@ Errors: {len(results.get('errors', []))}
             self.font_color_preview.config(bg=default_color)
             
         # Apply the theme with reset colors
-        if self.dark_mode_var.get():
-            self._apply_dark_theme()
+        if self.theme_var.get() == 'darker':
+            self._apply_darker_theme()
         else:
-            self._apply_light_theme()
+            self._apply_dark_theme()
             
     def _update_theme_preview(self):
-        """Update the theme preview section"""
+        """Update the theme preview section based on current theme"""
         if not hasattr(self, 'theme_preview_frame'):
             return
             
-        if self.dark_mode_var.get():
-            bg_color = self.settings.get('custom_background') or self.settings.get('dark_background', '#1e1e1e')
+        theme_mode = getattr(self, 'theme_var', tk.StringVar()).get() or 'dark'
+        
+        if theme_mode == 'darker':
+            bg_color = self.settings.get('custom_background') or self.settings.get('darker_background', '#0d0d0d')
             text_color = self.settings.get('custom_font') or self.settings.get('dark_text', '#cccccc')
             title_color = self.settings.get('dark_text_bright', '#ffffff')
-        else:
-            bg_color = self.settings.get('custom_background') or self.settings.get('light_background', '#ffffff')
-            text_color = self.settings.get('custom_font') or self.settings.get('light_text', '#323130')
-            title_color = self.settings.get('light_text_bright', '#000000')
+        else:  # dark theme
+            bg_color = self.settings.get('custom_background') or self.settings.get('dark_background', '#1a1a1a')
+            text_color = self.settings.get('custom_font') or self.settings.get('dark_text', '#cccccc')
+            title_color = self.settings.get('dark_text_bright', '#ffffff')
             
         self.theme_preview_frame.config(bg=bg_color)
         self.preview_title.config(bg=bg_color, fg=title_color)
@@ -2958,8 +3854,8 @@ Errors: {len(results.get('errors', []))}
             bg_main = self.settings.get('custom_background') or self.settings.get('dark_background', '#1e1e1e')
             text_color = self.settings.get('custom_font') or self.settings.get('dark_text', '#cccccc')
         else:
-            bg_main = self.settings.get('custom_background') or self.settings.get('light_background', '#ffffff')
-            text_color = self.settings.get('custom_font') or self.settings.get('light_text', '#323130')
+            bg_main = self.settings.get('custom_background') or self.settings.get('dark_background', '#1a1a1a')
+            text_color = self.settings.get('custom_font') or self.settings.get('dark_text', '#cccccc')
             
         dialog.configure(bg=bg_main)
         
@@ -3355,6 +4251,426 @@ Errors: {len(results.get('errors', []))}
             self._log(f"❌ Error starting browser close: {e}", "error")
             # Ensure button state is correct even if close fails
             self.browser_button.config(text="🌐 Open Browser")
+
+    # Action Tab Callback Methods
+    
+    def _on_action_type_changed(self, event=None):
+        """Handle action type selection changes"""
+        action_type = self.action_type_var.get()
+        
+        # Enable/disable fields based on action type
+        actions_requiring_selector = [
+            'input_text', 'click_button', 'upload_image', 'toggle_setting',
+            'check_element', 'check_queue', 'wait_for_element', 'download_file'
+        ]
+        
+        actions_requiring_value = [
+            'input_text', 'upload_image', 'wait', 'set_variable', 
+            'increment_variable', 'log_message'
+        ]
+        
+        # Enable/disable selector field
+        if action_type in actions_requiring_selector:
+            self.action_selector_entry.config(state='normal')
+        else:
+            self.action_selector_entry.config(state='disabled')
+            
+        # Enable/disable value field
+        if action_type in actions_requiring_value:
+            self.action_value_entry.config(state='normal')
+        else:
+            self.action_value_entry.config(state='disabled')
+        
+        self._log_to_action_tab(f"Action type changed to: {action_type}")
+    
+    def _apply_action_to_main(self):
+        """Apply current action parameters to main automation tab"""
+        try:
+            # Create action from current parameters
+            action_type_str = self.action_type_var.get()
+            if not action_type_str:
+                messagebox.showwarning("Warning", "Please select an action type")
+                return
+                
+            # Find the ActionType enum value
+            action_type = None
+            for at in ActionType:
+                if at.value == action_type_str:
+                    action_type = at
+                    break
+                    
+            if not action_type:
+                messagebox.showerror("Error", f"Invalid action type: {action_type_str}")
+                return
+            
+            # Create action
+            action = Action(
+                type=action_type,
+                selector=self.action_selector_var.get() or None,
+                value=self.action_value_var.get() or None,
+                timeout=int(self.action_timeout_var.get()) if self.action_timeout_var.get() else 10000,
+                description=self.action_desc_text.get('1.0', tk.END).strip() or None
+            )
+            
+            # Add to main actions list
+            if not hasattr(self, 'actions'):
+                self.actions = []
+            
+            self.actions.append(action)
+            self._update_actions_display()
+            
+            messagebox.showinfo("Success", "Action applied to main automation sequence")
+            self._log_to_action_tab("Action applied to main automation tab")
+            
+        except ValueError as e:
+            messagebox.showerror("Error", f"Invalid timeout value: {e}")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to apply action: {e}")
+            
+    def _copy_action_from_main(self):
+        """Copy selected action from main tab to action parameters"""
+        try:
+            selection = self.actions_listbox.curselection()
+            if not selection:
+                messagebox.showwarning("Warning", "Please select an action from the main tab")
+                return
+                
+            index = selection[0]
+            if not hasattr(self, 'actions') or index >= len(self.actions):
+                messagebox.showwarning("Warning", "No action found at selected index")
+                return
+                
+            action = self.actions[index]
+            
+            # Populate action parameters
+            self.action_type_var.set(action.type.value)
+            self.action_selector_var.set(action.selector or "")
+            self.action_value_var.set(str(action.value) if action.value is not None else "")
+            self.action_timeout_var.set(str(action.timeout))
+            
+            # Clear and set description
+            self.action_desc_text.delete('1.0', tk.END)
+            if action.description:
+                self.action_desc_text.insert('1.0', action.description)
+                
+            # Trigger field state updates
+            self._on_action_type_changed()
+            
+            messagebox.showinfo("Success", "Action copied from main tab")
+            self._log_to_action_tab(f"Action copied from main tab: {action.type.value}")
+            
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to copy action: {e}")
+            
+    def _clear_action_parameters(self):
+        """Clear all action parameter fields"""
+        self.action_type_var.set("")
+        self.action_selector_var.set("")
+        self.action_value_var.set("")
+        self.action_timeout_var.set("10000")
+        self.action_desc_text.delete('1.0', tk.END)
+        
+        # Reset field states
+        self.action_selector_entry.config(state='normal')
+        self.action_value_entry.config(state='normal')
+        
+        self._log_to_action_tab("Action parameters cleared")
+    
+    def _add_to_action_sequence(self):
+        """Add current action parameters to action sequence"""
+        try:
+            action_type_str = self.action_type_var.get()
+            if not action_type_str:
+                messagebox.showwarning("Warning", "Please select an action type")
+                return
+                
+            # Find the ActionType enum value
+            action_type = None
+            for at in ActionType:
+                if at.value == action_type_str:
+                    action_type = at
+                    break
+                    
+            if not action_type:
+                messagebox.showerror("Error", f"Invalid action type: {action_type_str}")
+                return
+            
+            # Create action
+            action = Action(
+                type=action_type,
+                selector=self.action_selector_var.get() or None,
+                value=self.action_value_var.get() or None,
+                timeout=int(self.action_timeout_var.get()) if self.action_timeout_var.get() else 10000,
+                description=self.action_desc_text.get('1.0', tk.END).strip() or None
+            )
+            
+            # Add to sequence list
+            self.action_sequence_list.append(action)
+            self._update_action_sequence_display()
+            
+            self._log_to_action_tab(f"Action added to sequence: {action.type.value}")
+            
+        except ValueError as e:
+            messagebox.showerror("Error", f"Invalid timeout value: {e}")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to add action: {e}")
+            
+    def _edit_action_sequence(self):
+        """Edit selected action in sequence"""
+        try:
+            selection = self.action_sequence_listbox.curselection()
+            if not selection:
+                messagebox.showwarning("Warning", "Please select an action to edit")
+                return
+                
+            index = selection[0]
+            if index >= len(self.action_sequence_list):
+                messagebox.showwarning("Warning", "No action found at selected index")
+                return
+                
+            action = self.action_sequence_list[index]
+            
+            # Populate fields with selected action
+            self.action_type_var.set(action.type.value)
+            self.action_selector_var.set(action.selector or "")
+            self.action_value_var.set(str(action.value) if action.value is not None else "")
+            self.action_timeout_var.set(str(action.timeout))
+            
+            # Clear and set description
+            self.action_desc_text.delete('1.0', tk.END)
+            if action.description:
+                self.action_desc_text.insert('1.0', action.description)
+                
+            # Trigger field state updates
+            self._on_action_type_changed()
+            
+            self._log_to_action_tab(f"Action loaded for editing: {action.type.value}")
+            
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to edit action: {e}")
+    
+    def _delete_from_action_sequence(self):
+        """Delete selected action from sequence"""
+        try:
+            selection = self.action_sequence_listbox.curselection()
+            if not selection:
+                messagebox.showwarning("Warning", "Please select an action to delete")
+                return
+                
+            index = selection[0]
+            if index >= len(self.action_sequence_list):
+                messagebox.showwarning("Warning", "No action found at selected index")
+                return
+                
+            # Confirm deletion
+            action = self.action_sequence_list[index]
+            if messagebox.askyesno("Confirm Delete", f"Delete action: {action.type.value}?"):
+                del self.action_sequence_list[index]
+                self._update_action_sequence_display()
+                self._log_to_action_tab(f"Action deleted: {action.type.value}")
+                
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to delete action: {e}")
+    
+    def _move_action_sequence(self, direction):
+        """Move selected action up or down in sequence"""
+        try:
+            selection = self.action_sequence_listbox.curselection()
+            if not selection:
+                messagebox.showwarning("Warning", "Please select an action to move")
+                return
+                
+            index = selection[0]
+            new_index = index + direction
+            
+            if new_index < 0 or new_index >= len(self.action_sequence_list):
+                return  # Can't move beyond boundaries
+                
+            # Swap actions
+            self.action_sequence_list[index], self.action_sequence_list[new_index] = \
+                self.action_sequence_list[new_index], self.action_sequence_list[index]
+                
+            self._update_action_sequence_display()
+            self.action_sequence_listbox.selection_set(new_index)
+            
+            direction_text = "up" if direction < 0 else "down"
+            self._log_to_action_tab(f"Action moved {direction_text}")
+            
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to move action: {e}")
+    
+    def _test_current_action(self):
+        """Test the currently selected or configured action"""
+        # This would require browser integration - placeholder for now
+        self._log_to_action_tab("Action testing requires browser integration (feature placeholder)")
+        messagebox.showinfo("Info", "Action testing feature coming soon!")
+    
+    def _clear_action_sequence(self):
+        """Clear all actions from sequence"""
+        if messagebox.askyesno("Confirm Clear", "Clear all actions from sequence?"):
+            self.action_sequence_list.clear()
+            self._update_action_sequence_display()
+            self._log_to_action_tab("Action sequence cleared")
+    
+    def _update_action_sequence_display(self):
+        """Update the action sequence listbox display"""
+        self.action_sequence_listbox.delete(0, tk.END)
+        
+        for i, action in enumerate(self.action_sequence_list):
+            display_text = f"{i+1}. {action.type.value}"
+            if action.selector:
+                display_text += f" -> {action.selector[:30]}..."
+            if action.value:
+                display_text += f" = {str(action.value)[:20]}..."
+            
+            self.action_sequence_listbox.insert(tk.END, display_text)
+    
+    def _log_to_action_tab(self, message, level="info"):
+        """Log message to action tab output"""
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        formatted_msg = f"[{timestamp}] {message}\n"
+        
+        self.action_log_text.insert(tk.END, formatted_msg)
+        self.action_log_text.see(tk.END)
+    
+    # Selector Tab Callback Methods
+    
+    def _analyze_page_elements(self):
+        """Analyze page elements for selector generation"""
+        url = self.selector_url_var.get()
+        if not url:
+            messagebox.showwarning("Warning", "Please enter a URL to analyze")
+            return
+            
+        # Clear previous results
+        self.html_analysis_text.delete('1.0', tk.END)
+        self._clear_selector_results()
+        
+        # This would require browser automation - placeholder implementation
+        self.html_analysis_text.insert('1.0', f"Analyzing page: {url}\n\n")
+        self.html_analysis_text.insert(tk.END, "HTML element analysis requires browser integration.\n")
+        self.html_analysis_text.insert(tk.END, "This feature will connect to a live page and extract:\n\n")
+        self.html_analysis_text.insert(tk.END, "• Element structure and hierarchy\n")
+        self.html_analysis_text.insert(tk.END, "• ID and class attributes\n") 
+        self.html_analysis_text.insert(tk.END, "• Text content and labels\n")
+        self.html_analysis_text.insert(tk.END, "• Dynamic content patterns\n")
+        self.html_analysis_text.insert(tk.END, "• Form elements and inputs\n\n")
+        self.html_analysis_text.insert(tk.END, "Implementation coming soon!")
+        
+        messagebox.showinfo("Info", "Page analysis feature requires browser integration (coming soon)")
+    
+    def _generate_selectors(self):
+        """Generate selector recommendations"""
+        element_identifier = self.selector_element_var.get()
+        strategy = self.selector_strategy_var.get()
+        
+        if not element_identifier:
+            messagebox.showwarning("Warning", "Please enter an element identifier")
+            return
+            
+        # Clear previous results
+        self._clear_selector_results()
+        
+        # Generate sample selector recommendations based on strategy
+        selectors = self._get_sample_selectors(element_identifier, strategy)
+        
+        for i, (sel_type, selector, reliability, dynamic, matches) in enumerate(selectors):
+            self.selector_results_tree.insert('', 'end', text=str(i+1), 
+                                            values=(sel_type, selector, reliability, dynamic, matches))
+    
+    def _get_sample_selectors(self, identifier, strategy):
+        """Generate sample selector recommendations"""
+        selectors = []
+        
+        if strategy in ['all', 'id']:
+            selectors.append(('ID', f'#{identifier}', 'High', 'Low', '1'))
+            selectors.append(('ID', f'[id="{identifier}"]', 'High', 'Low', '1'))
+        
+        if strategy in ['all', 'class']:
+            selectors.append(('Class', f'.{identifier}', 'Medium', 'Medium', '?'))
+            selectors.append(('Class', f'[class*="{identifier}"]', 'Medium', 'Medium', '?'))
+        
+        if strategy in ['all', 'css']:
+            selectors.append(('CSS', f'div[data-id="{identifier}"]', 'Medium', 'High', '?'))
+            selectors.append(('CSS', f'*[id*="{identifier}"]', 'Low', 'High', '?'))
+        
+        if strategy in ['all', 'xpath']:
+            selectors.append(('XPath', f'//*[@id="{identifier}"]', 'High', 'Low', '1'))
+            selectors.append(('XPath', f'//*[contains(@class, "{identifier}")]', 'Medium', 'Medium', '?'))
+        
+        if strategy in ['all', 'text']:
+            selectors.append(('Text', f'text="{identifier}"', 'Low', 'Very High', '?'))
+            selectors.append(('Text', f'text*="{identifier}"', 'Low', 'Very High', '?'))
+        
+        if strategy in ['all', 'attribute']:
+            selectors.append(('Attr', f'[data-testid="{identifier}"]', 'High', 'High', '?'))
+            selectors.append(('Attr', f'[aria-label*="{identifier}"]', 'Medium', 'High', '?'))
+        
+        if strategy in ['all', 'dynamic']:
+            selectors.append(('Dynamic', f'div[id*="{identifier}"]', 'Medium', 'Very High', '?'))
+            selectors.append(('Dynamic', f'*:has-text("{identifier}")', 'Low', 'Very High', '?'))
+        
+        return selectors
+    
+    def _test_custom_selector(self):
+        """Test custom selector input"""
+        custom_selector = self.custom_selector_text.get('1.0', tk.END).strip()
+        if not custom_selector:
+            messagebox.showwarning("Warning", "Please enter a custom selector to test")
+            return
+            
+        # This would require browser integration - placeholder
+        messagebox.showinfo("Info", f"Testing selector: {custom_selector}\n\nBrowser integration required for live testing.")
+    
+    def _copy_selected_selector(self):
+        """Copy selected selector to clipboard"""
+        selection = self.selector_results_tree.selection()
+        if not selection:
+            messagebox.showwarning("Warning", "Please select a selector to copy")
+            return
+            
+        item = self.selector_results_tree.item(selection[0])
+        selector = item['values'][1]  # Selector column
+        
+        # Copy to clipboard
+        self.root.clipboard_clear()
+        self.root.clipboard_append(selector)
+        
+        messagebox.showinfo("Success", f"Selector copied to clipboard:\n{selector}")
+    
+    def _use_selector_in_action(self):
+        """Use selected selector in Action tab"""
+        selection = self.selector_results_tree.selection()
+        if not selection:
+            messagebox.showwarning("Warning", "Please select a selector to use")
+            return
+            
+        item = self.selector_results_tree.item(selection[0])
+        selector = item['values'][1]  # Selector column
+        
+        # Switch to Action tab and populate selector field
+        self.notebook.select(self.action_frame)
+        self.action_selector_var.set(selector)
+        
+        messagebox.showinfo("Success", f"Selector applied to Action tab:\n{selector}")
+    
+    def _verify_selected_selector(self):
+        """Verify selected selector on live page"""
+        selection = self.selector_results_tree.selection()
+        if not selection:
+            messagebox.showwarning("Warning", "Please select a selector to verify")
+            return
+            
+        item = self.selector_results_tree.item(selection[0])
+        selector = item['values'][1]  # Selector column
+        
+        # This would require browser integration - placeholder
+        messagebox.showinfo("Info", f"Verifying selector: {selector}\n\nBrowser integration required for live verification.")
+    
+    def _clear_selector_results(self):
+        """Clear all selector results"""
+        for item in self.selector_results_tree.get_children():
+            self.selector_results_tree.delete(item)
 
 def main():
     """Main entry point for GUI"""

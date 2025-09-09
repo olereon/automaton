@@ -20,12 +20,21 @@ logger = logging.getLogger(__name__)
 
 # Import credential manager for secure credential handling
 try:
-    from utils.credential_manager import get_credential_manager, resolve_credential_path
-
+    from ..utils.credential_manager import get_credential_manager, resolve_credential_path
     CREDENTIAL_MANAGER_AVAILABLE = True
 except ImportError:
-    CREDENTIAL_MANAGER_AVAILABLE = False
-    logger.warning("Credential manager not available. Using plaintext credentials (SECURITY RISK)")
+    try:
+        # Fallback for different import contexts
+        from src.utils.credential_manager import get_credential_manager, resolve_credential_path
+        CREDENTIAL_MANAGER_AVAILABLE = True
+    except ImportError:
+        try:
+            # Another fallback
+            from utils.credential_manager import get_credential_manager, resolve_credential_path
+            CREDENTIAL_MANAGER_AVAILABLE = True
+        except ImportError:
+            CREDENTIAL_MANAGER_AVAILABLE = False
+            logger.warning("Credential manager not available. Using plaintext credentials (SECURITY RISK)")
 
 # Import performance monitoring
 try:
