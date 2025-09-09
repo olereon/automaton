@@ -142,7 +142,15 @@ automaton/
 - Browser window opens to configured URL or Google.com for testing
 - Independent operation from automation browser
 
-### 10. **Scheduler Integration** ✅
+### 10. **Professional Actions Panel UI** ✅ **NEW (September 2025)**
+- Professional 3x2 grid layout for all action buttons
+- Uniform button sizing and consistent spacing
+- Complete Move Up, Move Down, and Mute functionality
+- Visual indicators for muted actions (🔇 icon, dark gray styling)
+- Muted actions automatically skipped during automation execution
+- Responsive design that scales with window size
+
+### 11. **Scheduler Integration** ✅
 - Datetime-based scheduling
 - Timezone support
 - Start-from parameter

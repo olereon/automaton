@@ -140,6 +140,7 @@ class AutomationGUI:
         self.controller = None  # Controller for automation control
         self.stop_requested = False  # Flag for stopping automation
         self.is_running = False  # Track automation state
+        self.muted_actions = set()  # Track muted action indices
         
         # Settings
         self.settings_file = Path.home() / ".automaton_settings.json"
@@ -583,20 +584,46 @@ class AutomationGUI:
         self.actions_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.config(command=self.actions_listbox.yview)
         
-        # Action buttons
+        # Action buttons - Professional grid layout for consistent sizing
         action_buttons = ttk.Frame(actions_frame)
-        action_buttons.grid(row=1, column=0, columnspan=2, pady=10)
+        action_buttons.grid(row=1, column=0, columnspan=2, pady=(10, 0), sticky=(tk.W, tk.E))
         
-        ModernButton(action_buttons, text="Add Action", 
-                    command=self._show_add_action_dialog).pack(side=tk.LEFT, padx=2)
-        ModernButton(action_buttons, text="Edit Action", 
-                    command=self._edit_action).pack(side=tk.LEFT, padx=2)
-        ModernButton(action_buttons, text="Delete Action", 
-                    command=self._delete_action).pack(side=tk.LEFT, padx=2)
+        # Configure button frame grid for uniform distribution (3 columns, 2 rows)
+        for i in range(3):  # 3 columns for 3x2 button layout
+            action_buttons.columnconfigure(i, weight=1, uniform="button")
+        
+        # Standard button configuration for consistent appearance
+        button_config = {
+            'width': 12,  # Fixed width for consistency
+            'relief': tk.FLAT,
+            'pady': 8
+        }
+        
+        # Row 1: Primary action buttons (3 buttons)
+        ModernButton(action_buttons, text="Add", 
+                    command=self._show_add_action_dialog, **button_config
+                    ).grid(row=0, column=0, padx=2, pady=2, sticky=(tk.W, tk.E))
+        
+        ModernButton(action_buttons, text="Edit", 
+                    command=self._edit_action, **button_config
+                    ).grid(row=0, column=1, padx=2, pady=2, sticky=(tk.W, tk.E))
+        
+        ModernButton(action_buttons, text="Delete", 
+                    command=self._delete_action, **button_config
+                    ).grid(row=0, column=2, padx=2, pady=2, sticky=(tk.W, tk.E))
+        
+        # Row 2: Secondary action buttons (3 buttons)  
         ModernButton(action_buttons, text="Move Up", 
-                    command=lambda: self._move_action(-1)).pack(side=tk.LEFT, padx=2)
+                    command=lambda: self._move_action(-1), **button_config
+                    ).grid(row=1, column=0, padx=2, pady=2, sticky=(tk.W, tk.E))
+        
         ModernButton(action_buttons, text="Move Down", 
-                    command=lambda: self._move_action(1)).pack(side=tk.LEFT, padx=2)
+                    command=lambda: self._move_action(1), **button_config
+                    ).grid(row=1, column=1, padx=2, pady=2, sticky=(tk.W, tk.E))
+        
+        ModernButton(action_buttons, text="Mute", 
+                    command=self._toggle_mute_action, **button_config
+                    ).grid(row=1, column=2, padx=2, pady=2, sticky=(tk.W, tk.E))
         
         # Configure grid weights
         actions_frame.columnconfigure(0, weight=1)
@@ -1040,12 +1067,13 @@ class AutomationGUI:
                     display_text += f" ({username})"
             if action_data.get('description'):
                 display_text += f" - {action_data['description']}"
-            self.actions_listbox.insert(tk.END, display_text)
-            
             # Store action data
             if not hasattr(self, 'actions_data'):
                 self.actions_data = []
             self.actions_data.append(action_data)
+            
+            # Refresh display to show with proper styling
+            self._refresh_action_list_display()
             
             dialog.destroy()
             
@@ -1389,10 +1417,8 @@ class AutomationGUI:
         if action_data.get('description'):
             display_text += f" - {action_data['description']}"
         
-        # Update the listbox
-        self.actions_listbox.delete(index)
-        self.actions_listbox.insert(index, display_text)
-        self.actions_listbox.selection_set(index)
+        # Refresh display to maintain mute styling
+        self._refresh_action_list_display()
     
     def _create_action_fields(self, parent, action_type, field_vars, action_data=None):
         """Create form fields based on action type for add/edit dialogs"""
@@ -1815,9 +1841,23 @@ class AutomationGUI:
             
         if messagebox.askyesno("Confirm Delete", "Delete selected action?"):
             index = selection[0]
-            self.actions_listbox.delete(index)
             if hasattr(self, 'actions_data'):
                 self.actions_data.pop(index)
+                
+            # Update muted actions indices after deletion
+            if index in self.muted_actions:
+                self.muted_actions.remove(index)
+            # Adjust indices for actions after the deleted one
+            updated_muted = set()
+            for muted_idx in self.muted_actions:
+                if muted_idx > index:
+                    updated_muted.add(muted_idx - 1)
+                else:
+                    updated_muted.add(muted_idx)
+            self.muted_actions = updated_muted
+            
+            # Refresh display
+            self._refresh_action_list_display()
                 
     def _move_action(self, direction):
         """Move selected action up or down"""
@@ -1840,6 +1880,74 @@ class AutomationGUI:
                 self.actions_data[index], self.actions_data[new_index] = \
                     self.actions_data[new_index], self.actions_data[index]
                     
+            # Update muted actions indices
+            if index in self.muted_actions:
+                self.muted_actions.remove(index)
+                self.muted_actions.add(new_index)
+            if new_index in self.muted_actions:
+                self.muted_actions.remove(new_index)
+                self.muted_actions.add(index)
+                
+            self._refresh_action_list_display()
+                    
+    def _toggle_mute_action(self):
+        """Toggle mute state of selected action"""
+        selection = self.actions_listbox.curselection()
+        if not selection:
+            messagebox.showinfo("No Selection", "Please select an action to mute/unmute")
+            return
+            
+        index = selection[0]
+        
+        if index in self.muted_actions:
+            # Unmute action
+            self.muted_actions.remove(index)
+            messagebox.showinfo("Action Unmuted", f"Action {index + 1} has been unmuted")
+        else:
+            # Mute action
+            self.muted_actions.add(index)
+            messagebox.showinfo("Action Muted", f"Action {index + 1} has been muted and will be skipped during automation")
+            
+        self._refresh_action_list_display()
+        
+    def _refresh_action_list_display(self):
+        """Refresh the action list display to show muted actions with visual indicators"""
+        if not hasattr(self, 'actions_data') or not self.actions_data:
+            return
+            
+        # Store current selection
+        current_selection = self.actions_listbox.curselection()
+        
+        # Clear and repopulate listbox
+        self.actions_listbox.delete(0, tk.END)
+        
+        for i, action_data in enumerate(self.actions_data):
+            action_type = action_data.get('type', '')
+            action_value = action_data.get('value', '')
+            
+            # Format display text
+            display_text = f"{action_type}"
+            if action_value and str(action_value) != "None":
+                if len(str(action_value)) > 50:
+                    display_text += f": {str(action_value)[:47]}..."
+                else:
+                    display_text += f": {action_value}"
+            
+            # Add mute indicator
+            if i in self.muted_actions:
+                display_text = f"🔇 {display_text} [MUTED]"
+                
+            self.actions_listbox.insert(tk.END, display_text)
+            
+            # Apply visual styling for muted actions
+            if i in self.muted_actions:
+                self.actions_listbox.itemconfig(i, 
+                                              {'bg': '#6d6d6d', 'fg': '#a0a0a0', 'selectbackground': '#4a4a4a'})
+        
+        # Restore selection if valid
+        if current_selection and current_selection[0] < self.actions_listbox.size():
+            self.actions_listbox.selection_set(current_selection[0])
+    
     def _load_config(self):
         """Load configuration from file"""
         filename = filedialog.askopenfilename(
@@ -1941,7 +2049,11 @@ class AutomationGUI:
         )
         
         if hasattr(self, 'actions_data'):
-            for action_data in self.actions_data:
+            for i, action_data in enumerate(self.actions_data):
+                # Skip muted actions during automation execution
+                if i in self.muted_actions:
+                    continue
+                    
                 action = Action(
                     type=action_data['type'],
                     selector=action_data.get('selector'),
