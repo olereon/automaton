@@ -247,15 +247,20 @@ async def run_direct_test(test_script: Path) -> Tuple[bool, str]:
     logger.info(f"Running {test_script.name}...")
     
     try:
-        process = await asyncio.create_subprocess_exec(
-            sys.executable, str(test_script),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT
+        # Use subprocess.run instead of asyncio.create_subprocess_exec
+        # This avoids creating a nested event loop for async tests
+        result = subprocess.run(
+            [sys.executable, str(test_script)],
+            capture_output=True,
+            text=True,
+            cwd=Path(__file__).parent.parent
         )
         
-        stdout, _ = await process.communicate()
-        output = stdout.decode('utf-8')
-        success = process.returncode == 0
+        output = result.stdout
+        if result.stderr:
+            output += "\nSTDERR:\n" + result.stderr
+            
+        success = result.returncode == 0
         
         return success, output
         

@@ -7,12 +7,16 @@ import time
 from pathlib import Path
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass
-from enum import Enum
 import logging
 
 from playwright.async_api import async_playwright, Page, Browser, ElementHandle
 import re
 import os
+
+# Import new modular components
+from .action_types import ActionType, Action, AutomationConfig
+from .execution_context import ExecutionContext, BlockInfo
+from .browser_manager import BrowserManager, BrowserConfig
 
 # Configure logging first
 logging.basicConfig(level=logging.INFO)
@@ -60,171 +64,6 @@ class SecurityError(Exception):
     pass
 
 
-class BlockInfo:
-    """Information about a control block"""
-
-    def __init__(self, block_type: str, start_index: int, condition: str = None, condition_met: bool = False):
-        self.type = block_type  # "if", "while", "else", "elif"
-        self.start_index = start_index
-        self.end_index = None
-        self.condition = condition
-        self.condition_result = condition_met
-        self.condition_met = condition_met  # For compatibility
-        self.has_executed = False  # For IF blocks
-        self.iteration_count = 0  # For WHILE loops
-
-
-class ExecutionContext:
-    """Context for block-based execution"""
-
-    def __init__(self):
-        self.instruction_pointer = 0
-        self.block_stack = []  # Stack of active blocks
-        self.last_check_result = None
-        self.should_increment = True
-        self.break_flag = False
-        self.continue_flag = False
-        self.continue_on_error = True
-        self.variables = {}  # For future variable support
-
-    def push_block(self, block_type: str, start_index: int) -> BlockInfo:
-        """Push a new block onto the stack"""
-        block = BlockInfo(type=block_type, start_index=start_index)
-        self.block_stack.append(block)
-        return block
-
-    def pop_block(self) -> BlockInfo:
-        """Pop the top block from the stack"""
-        if self.block_stack:
-            return self.block_stack.pop()
-        return None
-
-    def current_block(self) -> BlockInfo:
-        """Get the current block without popping"""
-        if self.block_stack:
-            return self.block_stack[-1]
-        return None
-
-    def find_block_end(self, actions: list, start_index: int, block_type: str) -> int:
-        """Find the matching end for a block"""
-        depth = 1
-        current = start_index + 1
-        begin_types = {"if": ActionType.IF_BEGIN, "while": ActionType.WHILE_BEGIN}
-        end_types = {"if": ActionType.IF_END, "while": ActionType.WHILE_END}
-        begin_type = begin_types.get(block_type)
-        end_type = end_types.get(block_type)
-        while current < len(actions) and depth > 0:
-            action = actions[current]
-            if action.type == begin_type:
-                depth += 1
-            elif action.type == end_type:
-                depth -= 1
-                if depth == 0:
-                    return current
-            current += 1
-        return len(actions)  # If no matching end found
-
-
-def evaluate_condition(check_result: dict, condition_config: dict) -> bool:
-    """Evaluate a condition based on check result"""
-    if not check_result:
-        return False
-    condition = condition_config.get("condition", "check_passed")
-    if condition == "check_passed":
-        return check_result.get("success", False)
-    elif condition == "check_failed":
-        return not check_result.get("success", True)
-    elif condition == "value_equals":
-        expected = condition_config.get("expected_value", "")
-        actual = check_result.get("actual_value", "")
-        return str(actual) == str(expected)
-    elif condition == "value_not_equals":
-        expected = condition_config.get("expected_value", "")
-        actual = check_result.get("actual_value", "")
-        return str(actual) != str(expected)
-    elif condition == "value_greater":
-        expected = condition_config.get("expected_value", "0")
-        actual = check_result.get("actual_value", "0")
-        try:
-            return float(actual) > float(expected)
-        except (ValueError, TypeError):
-            return False
-    elif condition == "value_less":
-        expected = condition_config.get("expected_value", "0")
-        actual = check_result.get("actual_value", "0")
-        try:
-            return float(actual) < float(expected)
-        except (ValueError, TypeError):
-            return False
-    return False
-
-
-class ActionType(Enum):
-    """Enumeration of supported action types"""
-
-    LOGIN = "login"
-    EXPAND_DIALOG = "expand_dialog"
-    INPUT_TEXT = "input_text"
-    UPLOAD_IMAGE = "upload_image"
-    TOGGLE_SETTING = "toggle_setting"
-    CLICK_BUTTON = "click_button"
-    CHECK_QUEUE = "check_queue"
-    CHECK_ELEMENT = "check_element"  # Check element value/attribute
-    CONDITIONAL_WAIT = "conditional_wait"  # Wait and retry based on condition
-    SKIP_IF = "skip_if"  # Skip next actions if condition met
-    # Programming-like conditional blocks
-    IF_BEGIN = "if_begin"  # Start IF block
-    ELIF = "elif"  # ELIF condition
-    ELSE = "else"  # ELSE block
-    IF_END = "if_end"  # End IF block
-    WHILE_BEGIN = "while_begin"  # Start WHILE loop
-    WHILE_END = "while_end"  # End WHILE loop
-    BREAK = "break"  # Break from loop
-    CONTINUE = "continue"  # Continue loop
-    STOP_AUTOMATION = "stop_automation"  # Stop entire automation run
-    # Regular actions
-    DOWNLOAD_FILE = "download_file"
-    REFRESH_PAGE = "refresh_page"
-    SWITCH_PANEL = "switch_panel"
-    WAIT = "wait"
-    WAIT_FOR_ELEMENT = "wait_for_element"
-    # Variable and flow control
-    SET_VARIABLE = "set_variable"
-    INCREMENT_VARIABLE = "increment_variable"
-    LOG_MESSAGE = "log_message"
-    # Generation download actions
-    START_GENERATION_DOWNLOADS = "start_generation_downloads"
-    STOP_GENERATION_DOWNLOADS = "stop_generation_downloads"
-    CHECK_GENERATION_STATUS = "check_generation_status"
-
-
-@dataclass
-class Action:
-    """Represents a single automation action"""
-
-    type: ActionType
-    selector: Optional[str] = None
-    value: Optional[Any] = None
-    timeout: int = 10000  # milliseconds - reduced from 30s to 10s for better performance
-    description: Optional[str] = None
-
-
-@dataclass
-class AutomationConfig:
-    """Configuration for automation sequence"""
-
-    name: str
-    url: str
-    actions: List[Action]
-    headless: bool = True
-    viewport: Dict[str, int] = None
-    keep_browser_open: bool = True  # Keep browser open after automation by default
-
-    def __post_init__(self):
-        if self.viewport is None:
-            self.viewport = {"width": 1600, "height": 1000}  # Updated default to match GUI default
-
-
 # Import generation download handlers
 try:
     from .generation_download_handlers import GenerationDownloadHandlers
@@ -260,9 +99,6 @@ class WebAutomationEngine(GenerationDownloadHandlers):
         super().__init__()
         
         self.config = config
-        self.browser: Optional[Browser] = None
-        self.page: Optional[Page] = None
-        self.context = None
         self.keep_browser_open = getattr(
             config, "keep_browser_open", True
         )  # Default to keeping browser open
@@ -273,6 +109,14 @@ class WebAutomationEngine(GenerationDownloadHandlers):
         
         # Control system integration
         self.controller = controller
+        
+        # Initialize browser manager
+        browser_config = BrowserConfig(
+            headless=config.headless,
+            viewport=config.viewport,
+            keep_browser_open=self.keep_browser_open
+        )
+        self.browser_manager = BrowserManager(browser_config)
         
         # Initialize download manager
         self.download_manager = None
@@ -324,191 +168,24 @@ class WebAutomationEngine(GenerationDownloadHandlers):
         return re.sub(r'\$\{([^}]+)\}', replace_var, value)
 
     async def initialize(self):
-        """Initialize browser and page - reuse existing if available"""
-        try:
-            # Check if we already have a browser and it's still connected
-            if self.browser and self.browser.is_connected():
-                logger.info("Reusing existing browser window")
-                # Check if page is still valid
-                if self.page and not self.page.is_closed():
-                    logger.info("Reusing existing page")
-                    # Wait for page to be ready
-                    try:
-                        await self.page.wait_for_load_state("domcontentloaded", timeout=3000)
-                    except:
-                        pass  # Page might already be loaded
-                    # Just navigate to the new URL if needed
-                    current_url = self.page.url
-                    if current_url != self.config.url:
-                        logger.info(f"Navigating from {current_url} to {self.config.url}")
-                        await self.page.goto(self.config.url, wait_until="domcontentloaded", timeout=60000)
-                    else:
-                        logger.info(f"Already on {self.config.url}, performing page state reset...")
-                        # Reset page state for reused pages to ensure clean automation
-                        await self._reset_page_state()
-                        logger.info("Page state reset completed for reused page")
-                else:
-                    # Page was closed, create a new one in existing context
-                    logger.info("Creating new page in existing browser")
-                    if not self.context or self.context._impl_obj._is_closed:
-                        self.context = await self.browser.new_context(
-                            viewport=self.config.viewport, accept_downloads=True
-                        )
-                    self.page = await self.context.new_page()
-                    # Navigate to the target URL for the new page
-                    await self.page.goto(self.config.url, wait_until="domcontentloaded", timeout=60000)
-            else:
-                # No browser or browser was closed, create new one
-                await self._create_new_browser()
-        except Exception as e:
-            logger.warning(f"Error reusing browser: {e}. Creating new browser instance.")
-            # If anything fails, create a fresh browser
-            await self._create_new_browser()
+        """Initialize browser and page using BrowserManager"""
+        logger.info("=== INITIALIZING BROWSER ===")
+        
+        # Initialize browser manager
+        await self.browser_manager.initialize()
+        self.browser = self.browser_manager.browser
+        self.page = self.browser_manager.page
+        self.context = self.browser_manager.context
+        logger.info("Browser manager initialized successfully")
 
     async def _create_new_browser(self):
-        """Create a new browser instance"""
-        logger.info("Creating new browser instance")
-        playwright = await async_playwright().start()
-        
-        # Chrome/Chromium launch arguments to disable download notifications and pop-ups
-        launch_args = [
-            "--disable-dev-shm-usage",
-            "--disable-extensions",
-            "--disable-download-notification",  # Disable download notification popup
-            "--disable-notifications",          # Disable all notifications
-            "--disable-popup-blocking",         # Allow downloads without popup interference
-            "--disable-web-security",           # Reduce security restrictions for automation
-            "--disable-features=VizDisplayCompositor",  # Reduce visual interference
-            "--disable-features=DownloadBubble,DownloadBubbleV2",  # Disable download bubble UI
-            "--disable-features=DownloadShelf",         # CRITICAL: Disable download shelf
-            "--disable-features=DownloadBubbleV2UI",    # Disable new download UI
-            "--disable-features=DownloadUIV2",          # Disable download UI v2
-            "--disable-features=DownloadNotification",  # Disable download notifications
-            "--disable-features=DownloadService",       # Disable download service
-            "--disable-background-timer-throttling",    # Prevent timing issues
-            "--disable-backgrounding-occluded-windows", # Keep windows active
-            "--disable-renderer-backgrounding",         # Keep renderer active
-            "--disable-infobars",                       # Disable info bars
-            "--disable-translate",                      # Disable translation bar
-            "--no-first-run",                           # Skip first run experience
-            "--disable-default-apps",                   # Disable default apps
-            "--disable-component-update",               # Disable component updates
-            "--disable-hang-monitor",                   # Disable hang monitoring
-            "--disable-prompt-on-repost",               # Disable repost prompts
-            "--silent"                                   # Run in silent mode
-        ]
-        
-        # Additional arguments to suppress download shelf and popups
-        launch_args.extend([
-            "--disable-features=DownloadShelf",         # Disable download shelf at bottom
-            "--disable-download-notification",          # CRITICAL: Disable download notifications completely
-            "--disable-print-preview",                  # Disable print preview that can interfere
-            "--disable-features=PrintPreview",          # Disable print preview feature
-            "--enable-features=DownloadBubbleUpdate",   # Use newer download UI (less intrusive)
-            "--download-whole-document",                # Download without showing UI
-            "--silent-launch"                           # Silent browser launch
-        ])
-        
-        # Enhanced window configuration for better popup placement
-        if not self.config.headless:
-            launch_args.extend([
-                "--window-size=2560,1080",             # Set window size for consistent display
-                "--window-position=0,0",               # Position window at top-left
-                "--force-device-scale-factor=1",       # Ensure consistent scaling
-                "--disable-features=MediaRouter",      # Disable media router popup
-                "--disable-features=Translate"         # Disable translate popup
-            ])
-        
-        self.browser = await playwright.chromium.launch(
-            headless=self.config.headless, 
-            args=launch_args,
-            downloads_path=str(Path.home() / "Downloads")  # Set explicit download path
-        )
-        
-        # Browser context with enhanced configuration for DevTools and download handling
-        context_options = {
-            "accept_downloads": True,
-            "extra_http_headers": {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-            }
-        }
-        
-        # Set viewport configuration
-        if not self.config.headless:
-            # Use full viewport for visible browser mode
-            context_options["viewport"] = {"width": 2560, "height": 1080}  # Use full window space
-            logger.info("🔧 Browser configured for full viewport display")
-        else:
-            # Use configured viewport for headless mode
-            context_options["viewport"] = self.config.viewport
-        
-        self.context = await self.browser.new_context(**context_options)
-        self.page = await self.context.new_page()
-        
-        # Browser session configured for non-headless mode
-        if not self.config.headless:
-            logger.info("✅ Browser session established with full viewport")
-        
-        # Try to use Chrome DevTools Protocol to disable download shelf
-        try:
-            client = await self.page.context.new_cdp_session(self.page)
-            # Disable download UI elements
-            await client.send("Browser.setDownloadBehavior", {
-                "behavior": "allowAndName",
-                "downloadPath": str(Path.home() / "Downloads"),
-                "eventsEnabled": False
-            })
-            # Set Chrome preferences for downloads
-            await client.send("Page.addScriptToEvaluateOnNewDocument", {
-                "source": """
-                    // Disable download shelf and notifications
-                    if (window.chrome && window.chrome.downloads) {
-                        Object.defineProperty(window.chrome.downloads, 'showDefaultFolder', {
-                            value: function() { return false; },
-                            writable: false
-                        });
-                        Object.defineProperty(window.chrome.downloads, 'openWhenComplete', {
-                            value: false,
-                            writable: false
-                        });
-                    }
-                """
-            })
-        except Exception as e:
-            logger.debug(f"CDP session setup failed (normal for non-Chrome): {e}")
-        
-        # Configure Chrome download preferences to hide download UI
-        await self.page.add_init_script("""
-            // Override download notification and UI settings
-            Object.defineProperty(window.navigator, 'serviceWorker', {
-                value: undefined,
-                writable: false
-            });
-            
-            // Disable download progress notifications
-            if (window.chrome && window.chrome.downloads) {
-                window.chrome.downloads = undefined;
-            }
-            
-            // Suppress download-related dialogs and notifications
-            const originalAlert = window.alert;
-            const originalConfirm = window.confirm;
-            const originalPrompt = window.prompt;
-            
-            window.alert = function() { return true; };
-            window.confirm = function() { return true; };
-            window.prompt = function() { return ''; };
-            
-            // Try to hide download shelf using Chrome-specific APIs
-            if (window.chrome && window.chrome.runtime) {
-                // Override chrome.downloads.setShelfEnabled if available
-                try {
-                    chrome.downloads.setShelfEnabled = function(enabled) { 
-                        return false; 
-                    };
-                } catch(e) {}
-            }
-        """)
+        """Create a new browser instance using BrowserManager"""
+        logger.info("Creating new browser instance using BrowserManager")
+        await self.browser_manager.create_new_browser()
+        self.browser = self.browser_manager.browser
+        self.page = self.browser_manager.page
+        self.context = self.browser_manager.context
+        logger.info("Browser instance created successfully")
 
     async def _reset_page_state(self):
         """Reset page state for reused pages to ensure clean automation"""
@@ -630,24 +307,16 @@ class WebAutomationEngine(GenerationDownloadHandlers):
         raise Exception(f"Element not found with any strategy: {selector}")
 
     async def cleanup(self, close_browser=True):
-        """Clean up browser resources
+        """Clean up browser resources using BrowserManager
         Args:
             close_browser: If False, keeps browser and page open after automation
         """
-        if close_browser:
-            if self.page:
-                await self.page.close()
-            if self.context:
-                await self.context.close()
-            if self.browser:
-                await self.browser.close()
-        else:
-            logger.info("Browser and page kept open after automation completion")
+        await self.browser_manager.cleanup(close_browser=close_browser)
 
     async def close_browser(self):
-        """Manually close the browser and clean up resources"""
+        """Manually close the browser and clean up resources using BrowserManager"""
         logger.info("Manually closing browser...")
-        await self.cleanup(close_browser=True)
+        await self.browser_manager.close_browser()
         # Clear references so next run creates new browser
         self.browser = None
         self.page = None

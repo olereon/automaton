@@ -285,6 +285,30 @@ python3.11 -m pytest tests/ --cov=src --cov-report=html
 
 ## 📚 Documentation
 
+### 📖 Comprehensive Documentation Series
+
+Our documentation is organized into a comprehensive series of guides, each focusing on a specific aspect of Automaton. For a complete overview of all available documentation, see the [Documentation Index](docs/README.md).
+
+#### Getting Started
+- [Project Overview](docs/1_overview_project.md) - Introduction, purpose, features, and architecture
+- [Installation & Setup](docs/2_installation_setup.md) - Prerequisites, installation steps, and configuration
+- [Core Concepts](docs/3_core_concepts.md) - Key terminology, fundamental principles, and mental models
+- [Quick Start Guide](docs/12_quick_start.md) - Fast-track guide to get you running in minutes
+
+#### Using Automaton
+- [User Guide](docs/4_user_guide.md) - Basic usage, common tasks, and workflows
+- [API Reference](docs/5_api_reference.md) - Endpoints, methods, parameters, and responses
+- [Component Reference](docs/6_components_reference.md) - Individual components, props, and methods
+
+#### Advanced Topics
+- [Advanced Usage](docs/7_advanced_usage.md) - Advanced features, customization, and optimization
+- [Troubleshooting Guide](docs/8_troubleshooting_guide.md) - Common issues, solutions, and debugging
+- [Best Practices](docs/11_best_practices.md) - Recommended patterns and techniques
+
+#### Development & Deployment
+- [Contributing Guide](docs/9_contributing_guide.md) - Development setup, coding standards, and PR process
+- [Deployment Guide](docs/10_deployment_guide.md) - Deployment options, environments, and CI/CD
+
 ### Essential Guides
 - [Stop Functionality Guide](docs/STOP_FUNCTIONALITY_GUIDE.md) - Stop mechanism implementation
 - [Generation Download Guide](docs/GENERATION_DOWNLOAD_GUIDE.md) - Automated downloads
@@ -294,7 +318,9 @@ python3.11 -m pytest tests/ --cov=src --cov-report=html
 - [Selector Guide](docs/selector_guide.md) - CSS selector strategies
 
 ### API Documentation
-- [ActionType Reference](src/core/engine.py) - All action types
+- [ActionType Reference](src/core/action_types.py) - All action types and validation
+- [Browser Manager](src/core/browser_manager.py) - Browser lifecycle management
+- [Execution Context](src/core/execution_context.py) - Execution state and control flow
 - [Controller API](src/core/controller.py) - Control signals
 - [GUI Components](src/interfaces/gui.py) - Interface elements
 - [CLI Commands](src/interfaces/cli.py) - Command reference
@@ -305,6 +331,9 @@ python3.11 -m pytest tests/ --cov=src --cov-report=html
 automaton/
 ├── src/
 │   ├── core/
+│   │   ├── action_types.py           # Action type definitions and validation
+│   │   ├── browser_manager.py        # Browser lifecycle management
+│   │   ├── execution_context.py     # Execution state and control flow
 │   │   ├── engine.py                 # Main automation engine
 │   │   ├── controller.py             # State management
 │   │   ├── keyboard_handler.py       # Keyboard control
@@ -447,4 +476,4 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 **Automaton** - Making web automation simple, powerful, and reliable 🚀
 
-*Last Updated: August 2024 | Version: 2.0.0*
+*Last Updated: September 2024 | Version: 2.2.0*

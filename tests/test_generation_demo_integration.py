@@ -20,6 +20,7 @@ import signal
 import time
 from pathlib import Path
 from unittest.mock import Mock, AsyncMock, patch
+import pytest
 
 # Add the parent directory to Python path for imports
 parent_dir = Path(__file__).parent.parent
@@ -41,7 +42,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-class TestGenerationDemoIntegration(unittest.IsolatedAsyncioTestCase):
+class TestGenerationDemoIntegration:
     """Test the actual demo script integration"""
     
     def setUp(self):

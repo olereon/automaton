@@ -5,6 +5,40 @@ All notable changes to the Automaton Web Automation Tool will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.0] - 2025-09-11
+
+### 🎉 Major Features Added
+- **New Core Module Architecture**: Added dedicated modules for action types, browser management, and execution context
+- **Enhanced Documentation Structure**: Comprehensive reorganization with phased documentation implementation
+- **Agent Guidelines**: Added comprehensive AGENTS.md with development guidelines and file path reminders
+- **Product Requirements**: Complete PRODUCT_REQUIREMENTS.md with detailed feature planning and user personas
+
+### 🔧 Critical Fixes
+- **GUI Path Corrections**: Fixed critical path references to GUI components
+- **Module Organization**: Restructured core modules for better separation of concerns
+- **Documentation Consistency**: Standardized formatting and structure across all documentation
+
+### ✨ New Core Modules
+- **action_types.py**: Centralized action type definitions with validation and helper functions
+- **browser_manager.py**: Complete browser lifecycle management with async operations
+- **execution_context.py**: Enhanced execution context with variable management and control flow
+
+### 🛠️ Improvements
+- **Documentation Standards**: Implemented consistent formatting, style guidelines, and cross-references
+- **Code Organization**: Better separation of concerns with dedicated modules for specific functionality
+- **Development Guidelines**: Comprehensive agent rules and development standards
+- **Project Planning**: Detailed product requirements and development roadmap
+
+### 📚 Documentation
+- **Phased Documentation Structure**: Implemented numbered documentation series (1_overview_project.md, etc.)
+- **Comprehensive Guides**: Added guides for installation, core concepts, user guide, API reference, etc.
+- **Agent Guidelines**: Complete development guidelines for agents working with the codebase
+- **Product Requirements**: Detailed PRD with user personas, technical architecture, and future considerations
+
+### 🧪 Testing
+- **Test Organization**: Improved test file organization and structure
+- **Documentation Validation**: Added validation checks for documentation completeness and accuracy
+
 ## [2.1.0] - 2025-08-16
 
 ### 🎉 Major Features Added

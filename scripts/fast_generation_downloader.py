@@ -198,10 +198,18 @@ class FastGenerationDownloader:
         # Convert to AutomationConfig
         actions = []
         for action_data in config_data['actions']:
+            action_type = ActionType(action_data['type'])
+            action_value = action_data.get('value')
+            
+            # Handle actions that require a value but might not have one in the config
+            if action_type in [ActionType.CHECK_GENERATION_STATUS] and action_value is None:
+                print(f"⚠️ Warning: Action {action_type.value} requires a value but none was provided. Using empty dict as default.")
+                action_value = {}
+            
             action = Action(
-                type=ActionType(action_data['type']),
+                type=action_type,
                 selector=action_data.get('selector'),
-                value=action_data.get('value'),
+                value=action_value,
                 timeout=action_data.get('timeout', 10000),
                 description=action_data.get('description')
             )

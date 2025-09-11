@@ -123,6 +123,7 @@ app_logs/
 *.log.backup
 
 # Temporary files
+0_refs/
 tmp/
 temp/
 *.tmp

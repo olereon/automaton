@@ -25,6 +25,7 @@ import json
 from pathlib import Path
 from unittest.mock import Mock, AsyncMock, patch, MagicMock
 import time
+import pytest
 
 # Add the src directory to Python path for imports
 parent_dir = Path(__file__).parent.parent
@@ -54,7 +55,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-class TestFixedAutomationSequence(unittest.IsolatedAsyncioTestCase):
+class TestFixedAutomationSequence:
     """Test the corrected automation sequence timing"""
     
     async def test_date_extraction_timing_after_thumbnail_selection(self):
@@ -127,7 +128,7 @@ class TestFixedAutomationSequence(unittest.IsolatedAsyncioTestCase):
         logger.info("✅ Landmark strategy integration test passed")
 
 
-class TestDownloadButtonSequence(unittest.IsolatedAsyncioTestCase):
+class TestDownloadButtonSequence:
     """Test the fixed download button sequence (SVG → watermark)"""
     
     async def test_svg_icon_click_before_watermark(self):
@@ -192,7 +193,7 @@ class TestDownloadButtonSequence(unittest.IsolatedAsyncioTestCase):
         logger.info("✅ Multiple watermark strategies test passed")
 
 
-class TestThumbnailClickingLogic(unittest.IsolatedAsyncioTestCase):
+class TestThumbnailClickingLogic:
     """Test enhanced thumbnail clicking for multiple thumbnails"""
     
     async def test_thumbnail_clicking_multiple_items(self):
@@ -258,7 +259,7 @@ class TestThumbnailClickingLogic(unittest.IsolatedAsyncioTestCase):
         logger.info("✅ Thumbnail visibility checks test passed")
 
 
-class TestMetadataExtraction(unittest.IsolatedAsyncioTestCase):
+class TestMetadataExtraction:
     """Test file naming and metadata accuracy improvements"""
     
     async def test_enhanced_file_naming(self):
@@ -348,7 +349,7 @@ class TestMetadataExtraction(unittest.IsolatedAsyncioTestCase):
         logger.info("✅ Metadata extraction accuracy test passed")
 
 
-class TestPerformanceAndReliability(unittest.IsolatedAsyncioTestCase):
+class TestPerformanceAndReliability:
     """Test performance and reliability enhancements"""
     
     async def test_timeout_handling(self):
@@ -444,7 +445,7 @@ class TestPerformanceAndReliability(unittest.IsolatedAsyncioTestCase):
         logger.info("✅ Memory management test passed")
 
 
-class TestCompleteWorkflow(unittest.IsolatedAsyncioTestCase):
+class TestCompleteWorkflow:
     """Test complete end-to-end workflow"""
     
     async def test_complete_automation_workflow(self):
