@@ -1,197 +1,171 @@
 # Automaton Project Overview
 
+## Table of Contents
+- [Introduction](#introduction)
+- [Key Features](#key-features)
+- [Architecture Overview](#architecture-overview)
+- [Use Cases](#use-cases)
+- [Project Goals](#project-goals)
+- [Getting Started](#getting-started)
+
 ## Introduction
 
-Automaton is a powerful, lightweight web automation framework designed to simplify browser automation tasks. Built with Python and Playwright, it provides both GUI and CLI interfaces for creating and running automation sequences with advanced flow control, queue management, and intelligent download handling.
+Automaton is an AI-powered web automation framework designed to simplify and streamline browser-based automation tasks. Built with Python and leveraging modern web technologies, Automaton provides both GUI and CLI interfaces to accommodate different user preferences and workflows.
 
-This document provides a comprehensive overview of the project, its architecture, and key features to help you understand what Automaton can do and how it's structured.
-
-## Project Purpose
-
-Automaton was created to address the need for a flexible, reliable web automation framework that:
-
-- Simplifies complex web interactions through an intuitive interface
-- Provides both visual (GUI) and programmatic (CLI) access
-- Handles real-world web scenarios like queues, dynamic content, and downloads
-- Offers advanced control flow for complex automation scenarios
-- Maintains reliability through robust error handling and recovery mechanisms
+The framework is built around a modular architecture that separates concerns into distinct components, making it extensible, maintainable, and easy to understand. Whether you're automating repetitive web tasks, testing web applications, or extracting data from websites, Automaton provides the tools and flexibility needed to get the job done efficiently.
 
 ## Key Features
 
-### Core Capabilities
+### Core Automation Capabilities
+- **Web Browser Automation**: Automate interactions with web pages using Playwright for reliable cross-browser support
+- **Modular Action System**: Extensible action types for different automation tasks
+- **Conditional Flow Control**: Support for IF/ELSE statements, WHILE loops, BREAK, and CONTINUE statements
+- **Variable Substitution**: Dynamic value substitution using `${variable}` syntax
+- **Error Handling**: Comprehensive error handling and recovery mechanisms
 
-- **Dual Interface**: Modern GUI with Tkinter or powerful CLI for automation
-- **30+ Action Types**: Comprehensive set of web interaction actions
-- **Flow Control**: Advanced IF/ELIF/ELSE and WHILE loop support
-- **Queue Management**: Intelligent queue detection and capacity management
-- **Variable System**: Dynamic variables with substitution support
-- **Stop Functionality**: Graceful termination with controller integration
-- **Download Automation**: Advanced file download with metadata tracking
-- **Scheduler Support**: Datetime-based scheduling with timezone support
+### User Interfaces
+- **Modern GUI Interface**: Built with Tkinter and enhanced with a modern design system
+- **Command Line Interface**: Full-featured CLI for automation scripting and batch processing
+- **Interactive Controls**: Pause, resume, and stop automation with real-time feedback
 
-### Technical Features
+### Advanced Features
+- **Enhanced Metadata Extraction**: Landmark-based extraction system with quality assessment
+- **Download Management**: Automated file downloads with path validation and security checks
+- **Performance Monitoring**: Built-in performance tracking and optimization
+- **Secure Credential Management**: Encrypted credential storage with secure access patterns
 
-- **Async Execution**: Fast and efficient browser automation
-- **Cross-Platform**: Works on Windows, macOS, and Linux
-- **Headless/Headed Mode**: Run with or without browser UI
-- **Detailed Logging**: Comprehensive logging for debugging
-- **Error Recovery**: Automatic retry mechanisms and error handling
-- **Browser Persistence**: Keep browser open for debugging
-- **Security Features**: Credential management and input validation
+### Developer Experience
+- **Builder Pattern**: Fluent API for creating automation sequences
+- **Configuration Management**: Flexible configuration system with JSON support
+- **Extensibility**: Plugin architecture for custom actions and components
+- **Testing Framework**: Comprehensive testing infrastructure with pytest
 
 ## Architecture Overview
 
 Automaton follows a modular architecture with clear separation of concerns:
 
-```
-automaton/
-├── src/
-│   ├── core/                 # Core automation engine
-│   ├── interfaces/           # User interfaces (GUI/CLI)
-│   └── utils/                # Utility modules
-├── tests/                    # Test suite
-├── docs/                     # Documentation
-├── examples/                 # Example scripts
-├── scripts/                  # Utility scripts
-├── configs/                  # Configuration files
-└── workflows/                # Saved workflows
-```
-
 ### Core Components
 
-#### 1. Automation Engine
-The heart of Automaton, responsible for:
-- Executing automation sequences
-- Managing browser interactions
-- Handling flow control (loops, conditionals)
-- Error detection and recovery
+#### Engine Layer
+- **WebAutomationEngine**: The main automation engine that orchestrates all automation tasks
+- **BrowserManager**: Handles browser lifecycle, context management, and page interactions
+- **ExecutionContext**: Manages the execution context for block-based control flow
 
-#### 2. Controller System
-Provides centralized control over automation execution:
-- Start/stop/pause functionality
-- State management
-- Signal propagation between components
+#### Action System
+- **Action Types**: Enumerated types for all supported automation actions
+- **Action Execution**: Modular action execution with error handling
+- **Flow Control**: Implementation of conditional logic and loop structures
 
-#### 3. Action System
-Modular action framework supporting:
-- Basic web interactions (click, type, wait)
-- Advanced operations (downloads, queue management)
-- Flow control (conditionals, loops)
-- Custom action extensibility
+#### Interface Layer
+- **GUI Interface**: Modern Tkinter-based graphical user interface
+- **CLI Interface**: Command-line interface for scripting and automation
+- **Design System**: Consistent styling and component library for the GUI
 
-#### 4. Interface Layer
-User-facing components:
-- **GUI**: Tkinter-based graphical interface
-- **CLI**: Command-line interface for programmatic access
-- **API**: Programmatic interface for integration
+#### Utility Layer
+- **Enhanced Metadata Extractor**: Advanced extraction system with quality assessment
+- **Download Manager**: Secure file download management
+- **Credential Manager**: Secure storage and retrieval of sensitive information
+- **Performance Monitor**: Performance tracking and optimization
 
-#### 5. Utility Modules
-Supporting functionality:
-- Download management
-- Performance monitoring
-- Credential management
-- Element selection and visualization
+### Data Flow
 
-## Supported Action Types
+1. **Configuration Loading**: Automation sequences are loaded from JSON configuration files
+2. **Engine Initialization**: The WebAutomationEngine initializes the browser and execution context
+3. **Action Execution**: Actions are executed sequentially with support for conditional flow control
+4. **Browser Interaction**: The BrowserManager handles all browser interactions through Playwright
+5. **Result Collection**: Results are collected and returned to the user interface
 
-Automaton supports over 30 action types organized into categories:
+### Component Relationships
 
-### Basic Actions
-- `INPUT_TEXT`: Fill text fields
-- `CLICK_BUTTON`: Click elements
-- `UPLOAD_IMAGE`: Upload files
-- `TOGGLE_SETTING`: Check/uncheck boxes
-- `WAIT`: Pause execution
-- `WAIT_FOR_ELEMENT`: Wait for element
-- `REFRESH_PAGE`: Reload page
-- `EXPAND_DIALOG`: Expand dialogs
-- `SWITCH_PANEL`: Switch panels
-
-### Advanced Actions
-- `CHECK_ELEMENT`: Validate content
-- `CHECK_QUEUE`: Monitor queues
-- `SET_VARIABLE`: Store values
-- `INCREMENT_VARIABLE`: Increment numbers
-- `LOG_MESSAGE`: Record progress
-- `LOGIN`: Automated login
-- `DOWNLOAD_FILE`: Download files
-
-### Flow Control
-- `IF_BEGIN`/`IF_END`: Conditional blocks
-- `ELIF`/`ELSE`: Conditional branches
-- `WHILE_BEGIN`/`WHILE_END`: Loop blocks
-- `BREAK`/`CONTINUE`: Loop control
-- `CONDITIONAL_WAIT`: Retry with backoff
-- `SKIP_IF`: Conditional skip
-- `STOP_AUTOMATION`: Terminate
-
-### Generation Downloads (Enhanced)
-- `START_GENERATION_DOWNLOADS`: Begin downloads
-- `STOP_GENERATION_DOWNLOADS`: Stop downloads
-- `CHECK_GENERATION_STATUS`: Check progress
-
-## Technology Stack
-
-### Core Technologies
-- **Python 3.11+**: Primary programming language
-- **Playwright**: Browser automation library
-- **Tkinter**: GUI framework
-- **AsyncIO**: Asynchronous execution
-
-### Supporting Libraries
-- **pytest**: Testing framework
-- **Black**: Code formatter
-- **flake8**: Linter
-- **mypy**: Type checker
+```
+┌─────────────────────────────────────────────────────────┐
+│                    User Interface                        │
+├─────────────────────┬───────────────────────────────────┤
+│      GUI (Tkinter)    │          CLI (Click)              │
+└─────────────────────┴───────────────────────────────────┘
+                                │
+                                ▼
+┌─────────────────────────────────────────────────────────┐
+│                WebAutomationEngine                       │
+├─────────────────────┬───────────────────────────────────┤
+│   ExecutionContext  │        BrowserManager             │
+└─────────────────────┴───────────────────────────────────┘
+                                │
+                                ▼
+┌─────────────────────────────────────────────────────────┐
+│                    Action System                         │
+├─────────────────────┬───────────────────────────────────┤
+│    Action Types     │     Flow Control                  │
+└─────────────────────┴───────────────────────────────────┘
+                                │
+                                ▼
+┌─────────────────────────────────────────────────────────┐
+│                    Utilities                             │
+├─────────────────────┬───────────────────────────────────┤
+│ Metadata Extractor  │  Download Manager │ Credential Mgr │
+└─────────────────────┴───────────────────────────────────┘
+```
 
 ## Use Cases
 
-Automaton is designed for a wide range of web automation scenarios:
-
 ### Web Testing
-- Automated form testing
-- UI validation
-- Regression testing
-- Performance monitoring
+- Automated testing of web applications
+- Regression testing suites
+- Cross-browser compatibility testing
+- Performance testing
 
 ### Data Extraction
-- Web scraping
-- Content aggregation
-- Data collection for analysis
-- Price monitoring
+- Web scraping for data collection
+- Metadata extraction from generated content
+- Automated report generation
+- Data migration tasks
 
 ### Workflow Automation
-- Account creation and management
-- Content publishing
-- Report generation
-- System administration
+- Automated form filling and submission
+- Repetitive task automation
+- Scheduled web interactions
+- Multi-step process automation
 
-### Download Management
-- Batch file downloads
-- Media collection
-- Archive creation
-- Content synchronization
+### Content Generation
+- Automated content generation workflows
+- Batch processing of generated content
+- Quality assurance for generated content
+- Automated download and organization
 
-## Next Steps
+## Project Goals
 
-After reviewing this overview, you may want to:
+### Short-term Goals
+- Provide a stable, reliable automation framework
+- Support common web automation tasks out of the box
+- Offer both GUI and CLI interfaces for different user needs
+- Ensure security best practices are followed
 
-1. [Read the Installation & Setup Guide](2_installation_setup.md) to get Automaton running
-2. [Explore Core Concepts](3_core_concepts.md) to understand key terminology
-3. [Check the User Guide](4_user_guide.md) for basic usage instructions
-4. [Browse API Reference](5_api_reference.md) for technical details
+### Long-term Goals
+- Expand support for additional browsers and platforms
+- Develop a plugin ecosystem for specialized automation tasks
+- Create a community-driven knowledge base and example library
+- Integrate with other automation and testing tools
 
-## Version Information
+### Quality Goals
+- Maintain high code quality with comprehensive testing
+- Provide clear, comprehensive documentation
+- Ensure backward compatibility when possible
+- Respond quickly to bug reports and security issues
 
-- **Current Version**: 2.0.0
-- **Last Updated**: August 2024
-- **Python Requirement**: 3.11+
-- **License**: MIT (see [LICENSE](../LICENSE))
+## Getting Started
 
-## Contributing
+To get started with Automaton, see the [Installation & Setup Guide](2_installation_setup.md). For basic usage instructions, refer to the [User Guide](4_user_guide.md).
 
-We welcome contributions! Please see the [Contributing Guide](9_contributing_guide.md) for guidelines on how to participate in the project's development.
+### Quick Start
 
----
+1. Install Automaton using the installation guide
+2. Launch the GUI interface with `automaton-gui` or use the CLI with `automaton-cli`
+3. Create your first automation sequence using the builder pattern or JSON configuration
+4. Run your automation and monitor the results
 
-*This document is part of the Automaton documentation series. For a complete list of documentation, see the [main README](../README.md).*
+### Next Steps
+
+- Explore the [Core Concepts](3_core_concepts.md) to understand the fundamental principles
+- Check the [API Reference](5_api_reference.md) for detailed technical information
+- Review the [Component Documentation](6_components_reference.md) for information on specific components
+- Learn about [Advanced Usage](7_advanced_usage.md) for more complex scenarios

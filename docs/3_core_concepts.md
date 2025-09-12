@@ -1,26 +1,26 @@
-# Automaton Core Concepts
+# Core Concepts
+
+## Table of Contents
+- [Introduction](#introduction)
+- [Automation Sequences](#automation-sequences)
+- [Actions and Selectors](#actions-and-selectors)
+- [Variables and Substitution](#variables-and-substitution)
+- [Flow Control](#flow-control)
+- [Browser Context Management](#browser-context-management)
+- [Execution Context](#execution-context)
+- [Error Handling](#error-handling)
 
 ## Introduction
 
-This document explains the fundamental concepts and terminology used in Automaton. Understanding these core concepts is essential for effectively using the framework and creating powerful automation sequences.
+This document explains the core concepts and fundamental principles that underpin the Automaton web automation framework. Understanding these concepts is essential for creating effective and reliable automation sequences.
 
-## Table of Contents
-
-1. [Automation Sequences](#automation-sequences)
-2. [Actions](#actions)
-3. [Selectors](#selectors)
-4. [Variables](#variables)
-5. [Flow Control](#flow-control)
-6. [Controller System](#controller-system)
-7. [Browser Context](#browser-context)
-8. [Error Handling](#error-handling)
-9. [Logging](#logging)
+Automaton is built around a modular architecture that separates concerns into distinct components. At its heart, the framework is designed to be intuitive while providing powerful capabilities for complex automation scenarios.
 
 ## Automation Sequences
 
-An automation sequence is the fundamental unit of work in Automaton. It represents a series of actions to be performed on a web page, along with configuration and metadata.
+An automation sequence is a series of actions that Automaton executes to accomplish a specific task. Sequences are typically defined in JSON format and can be created either programmatically using the builder pattern or manually as JSON files.
 
-### Sequence Structure
+### Structure of an Automation Sequence
 
 ```json
 {
@@ -31,367 +31,636 @@ An automation sequence is the fundamental unit of work in Automaton. It represen
     "width": 1280,
     "height": 720
   },
+  "keep_browser_open": true,
   "actions": [
     {
-      "type": "wait_for_element",
-      "selector": "#main-content"
+      "type": "WAIT_FOR_ELEMENT",
+      "selector": "h1",
+      "timeout": 10000,
+      "description": "Wait for page title"
     },
     {
-      "type": "click_button",
-      "selector": "#submit-button"
+      "type": "CLICK_BUTTON",
+      "selector": "#submit-button",
+      "description": "Click submit button"
     }
   ]
 }
 ```
 
-### Key Components
+### Sequence Configuration
 
-- **name**: Human-readable name for the automation
-- **url**: Starting URL for the automation
-- **headless**: Whether to run browser without visible UI
-- **viewport**: Browser window dimensions
-- **actions**: Array of action objects to execute
+| Property | Type | Required | Description |
+|----------|------|----------|-------------|
+| `name` | string | Yes | Name of the automation sequence |
+| `url` | string | Yes | Starting URL for the automation |
+| `headless` | boolean | No | Run browser in headless mode (default: false) |
+| `viewport` | object | No | Browser viewport dimensions (default: 1280x720) |
+| `keep_browser_open` | boolean | No | Keep browser open after completion (default: true) |
+| `actions` | array | Yes | Array of actions to execute |
 
-## Actions
+### Creating Sequences with the Builder Pattern
 
-Actions are individual operations that Automaton performs. There are over 30 action types organized into categories.
+The builder pattern provides a fluent, programmatic way to create automation sequences:
+
+```python
+from src.core.engine import AutomationSequenceBuilder
+
+# Create a new automation sequence
+builder = AutomationSequenceBuilder(
+    name="Example Automation",
+    url="https://example.com",
+    keep_browser_open=True
+)
+
+# Add actions to the sequence
+sequence = (
+    builder
+    .add_wait_for_element("h1", description="Wait for page title")
+    .add_click_button("#submit-button", description="Click submit button")
+    .add_wait(5000, description="Wait for 5 seconds")
+    .build()
+)
+
+# Save the sequence to a file
+builder.save_to_file("example_automation.json")
+```
+
+## Actions and Selectors
+
+Actions are the individual operations that make up an automation sequence. Each action has a specific type and associated parameters that define its behavior.
+
+### Action Types
+
+Automaton supports a wide variety of action types:
+
+| Action Type | Description |
+|-------------|-------------|
+| `LOGIN` | Authenticate with username and password |
+| `INPUT_TEXT` | Enter text into an input field |
+| `CLICK_BUTTON` | Click a button or clickable element |
+| `UPLOAD_IMAGE` | Upload an image file |
+| `TOGGLE_SETTING` | Toggle a checkbox or switch setting |
+| `CHECK_ELEMENT` | Verify an element's state or content |
+| `WAIT_FOR_ELEMENT` | Wait for an element to appear on the page |
+| `WAIT` | Pause execution for a specified time |
+| `DOWNLOAD_FILE` | Download a file from a link |
+| `REFRESH_PAGE` | Refresh the current page |
+| `SWITCH_PANEL` | Switch to a different panel or tab |
+| `SET_VARIABLE` | Set a variable value |
+| `INCREMENT_VARIABLE` | Increment a variable value |
+| `LOG_MESSAGE` | Write a message to a log file |
 
 ### Action Structure
 
-Every action follows this basic structure:
+All actions share a common structure:
 
 ```json
 {
-  "type": "action_type",
-  "selector": "css_selector",
-  "value": "action_value"
+  "type": "ACTION_TYPE",
+  "selector": "css-selector",
+  "value": "action-value",
+  "timeout": 10000,
+  "description": "Action description"
 }
 ```
 
-### Action Categories
+### Selectors
 
-#### Basic Actions
-- `INPUT_TEXT`: Fill text fields
-- `CLICK_BUTTON`: Click elements
-- `UPLOAD_IMAGE`: Upload files
-- `TOGGLE_SETTING`: Check/uncheck boxes
-- `WAIT`: Pause execution
-- `WAIT_FOR_ELEMENT`: Wait for element
-- `REFRESH_PAGE`: Reload page
+Selectors are used to identify elements on a web page. Automaton primarily uses CSS selectors, which are patterns used to select elements based on their attributes, classes, IDs, and relationships with other elements.
 
-#### Advanced Actions
-- `CHECK_ELEMENT`: Validate content
-- `CHECK_QUEUE`: Monitor queues
-- `SET_VARIABLE`: Store values
-- `INCREMENT_VARIABLE`: Increment numbers
-- `LOG_MESSAGE`: Record progress
-- `LOGIN`: Automated login
-- `DOWNLOAD_FILE`: Download files
+#### Common Selector Patterns
 
-#### Flow Control Actions
-- `IF_BEGIN`/`IF_END`: Conditional blocks
-- `ELIF`/`ELSE`: Conditional branches
-- `WHILE_BEGIN`/`WHILE_END`: Loop blocks
-- `BREAK`/`CONTINUE`: Loop control
-- `CONDITIONAL_WAIT`: Retry with backoff
-- `SKIP_IF`: Conditional skip
-- `STOP_AUTOMATION`: Terminate
+| Pattern | Description | Example |
+|---------|-------------|---------|
+| `#id` | Element with specific ID | `#submit-button` |
+| `.class` | Elements with specific class | `.menu-item` |
+| `element` | Elements of a specific type | `button` |
+| `[attribute]` | Elements with specific attribute | `[data-test-id="submit"]` |
+| `parent child` | Child elements of a parent | `div.menu a` |
+| `:nth-child(n)` | Nth child of a parent | `li:nth-child(2)` |
 
-## Selectors
+#### Selector Best Practices
 
-Selectors are CSS expressions used to locate elements on a web page. Automaton primarily uses CSS selectors, but also supports text-based detection for enhanced reliability.
+1. **Be Specific**: Use IDs and unique attributes when possible
+2. **Avoid Brittle Selectors**: Don't rely on auto-generated IDs or complex nested structures
+3. **Use Test Attributes**: Prefer `data-test-*` attributes for testing selectors
+4. **Keep It Simple**: Simple selectors are more maintainable and less likely to break
 
-### CSS Selectors
+#### Example Selectors
 
 ```json
 {
-  "type": "click_button",
-  "selector": "#submit-button"
+  "type": "CLICK_BUTTON",
+  "selector": "#submit-button",  // ID selector
+  "description": "Click submit button"
 }
 ```
 
-### Text-Based Detection
-
-For enhanced reliability, some actions support text-based detection:
+```json
+{
+  "type": "INPUT_TEXT",
+  "selector": "input[name='username']",  // Attribute selector
+  "value": "testuser",
+  "description": "Enter username"
+}
+```
 
 ```json
 {
-  "type": "start_generation_downloads",
+  "type": "CLICK_BUTTON",
+  "selector": ".btn-primary",  // Class selector
+  "description": "Click primary button"
+}
+```
+
+## Variables and Substitution
+
+Variables allow you to store and reuse values throughout your automation sequences. This is particularly useful for dynamic data, such as usernames, passwords, or other values that might change between runs.
+
+### Setting Variables
+
+Use the `SET_VARIABLE` action to set a variable:
+
+```json
+{
+  "type": "SET_VARIABLE",
   "value": {
-    "image_to_video_text": "Image to video",
-    "download_no_watermark_text": "Download without Watermark"
-  }
+    "variable": "username",
+    "value": "testuser"
+  },
+  "description": "Set username variable"
 }
 ```
 
-### Selector Strategies
+### Incrementing Variables
 
-| Strategy | Description | Example |
-|----------|-------------|---------|
-| ID Selectors | Select by element ID | `#submit-button` |
-| Class Selectors | Select by element class | `.button.primary` |
-| Attribute Selectors | Select by attribute value | `[data-testid="submit"]` |
-| Hierarchical Selectors | Select by DOM hierarchy | `div.container > button#submit` |
-| Text-Based | Select by visible text | Used in generation downloads |
+Use the `INCREMENT_VARIABLE` action to increment a numeric variable:
 
-## Variables
-
-Variables allow you to store and reuse values throughout an automation sequence. They support dynamic substitution and can be manipulated during execution.
-
-### Variable Types
-
-- **String Variables**: Text values
-- **Number Variables**: Numeric values
-- **Boolean Variables**: True/false values
-- **System Variables**: Pre-defined variables (e.g., `${timestamp}`)
+```json
+{
+  "type": "INCREMENT_VARIABLE",
+  "value": {
+    "variable": "counter",
+    "amount": 1
+  },
+  "description": "Increment counter"
+}
+```
 
 ### Variable Substitution
 
-Variables can be referenced using the `${variable_name}` syntax:
+Variables can be referenced in other actions using the `${variable}` syntax:
 
 ```json
 {
-  "type": "set_variable",
-  "value": {
-    "name": "username",
-    "value": "john_doe"
-  }
-},
-{
-  "type": "input_text",
-  "selector": "#username-field",
-  "value": "${username}"
+  "type": "INPUT_TEXT",
+  "selector": "input[name='username']",
+  "value": "${username}",
+  "description": "Enter username from variable"
 }
 ```
 
-### Variable Manipulation
+### Variable Scope
+
+Variables are scoped to the current automation sequence and persist for the duration of the sequence execution. They are reset each time the sequence is run.
+
+### Example Variable Usage
 
 ```json
 {
-  "type": "set_variable",
-  "value": {
-    "name": "counter",
-    "value": "0"
-  }
-},
-{
-  "type": "increment_variable",
-  "value": {
-    "name": "counter",
-    "increment": "1"
-  }
+  "name": "Variable Example",
+  "url": "https://example.com",
+  "actions": [
+    {
+      "type": "SET_VARIABLE",
+      "value": {
+        "variable": "username",
+        "value": "testuser"
+      },
+      "description": "Set username"
+    },
+    {
+      "type": "SET_VARIABLE",
+      "value": {
+        "variable": "counter",
+        "value": "1"
+      },
+      "description": "Set counter to 1"
+    },
+    {
+      "type": "INPUT_TEXT",
+      "selector": "input[name='username']",
+      "value": "${username}",
+      "description": "Enter username"
+    },
+    {
+      "type": "INPUT_TEXT",
+      "selector": "input[name='counter']",
+      "value": "${counter}",
+      "description": "Enter counter value"
+    },
+    {
+      "type": "INCREMENT_VARIABLE",
+      "value": {
+        "variable": "counter",
+        "amount": 1
+      },
+      "description": "Increment counter"
+    }
+  ]
 }
 ```
 
 ## Flow Control
 
-Flow control structures allow you to create conditional logic and loops in your automations.
+Flow control actions allow you to create conditional logic and loops in your automation sequences. This enables more complex and dynamic automation scenarios.
 
-### Conditional Execution
+### Conditional Logic
+
+Automaton supports IF/ELSE conditional logic:
 
 ```json
 {
-  "type": "if_begin",
-  "condition": "check_result == true"
-},
+  "type": "IF_BEGIN",
+  "value": {
+    "condition": "check_passed"
+  },
+  "description": "Begin IF block"
+}
+```
+
+```json
 {
-  "type": "click_button",
-  "selector": "#submit-button"
-},
+  "type": "ELIF",
+  "value": {
+    "condition": "value_equals",
+    "expected_value": "expected"
+  },
+  "description": "ELIF condition"
+}
+```
+
+```json
 {
-  "type": "else"
-},
+  "type": "ELSE",
+  "value": {},
+  "description": "ELSE block"
+}
+```
+
+```json
 {
-  "type": "log_message",
-  "value": "Form not ready for submission"
-},
-{
-  "type": "if_end"
+  "type": "IF_END",
+  "value": {},
+  "description": "End IF block"
 }
 ```
 
 ### Loops
 
+Automaton supports WHILE loops for repetitive tasks:
+
 ```json
 {
-  "type": "while_begin",
-  "condition": "check_result == true"
-},
+  "type": "WHILE_BEGIN",
+  "value": {
+    "condition": "check_failed"
+  },
+  "description": "Begin WHILE loop"
+}
+```
+
+```json
 {
-  "type": "click_button",
-  "selector": "#load-more"
-},
-{
-  "type": "wait",
-  "value": 1000
-},
-{
-  "type": "while_end"
+  "type": "WHILE_END",
+  "value": {},
+  "description": "End WHILE loop"
 }
 ```
 
 ### Loop Control
 
+You can control loop execution with BREAK and CONTINUE statements:
+
 ```json
 {
-  "type": "while_begin",
-  "condition": "check_result == true"
-},
-{
-  "type": "check_element",
-  "selector": ".error-message",
-  "operator": "not_exists"
-},
-{
-  "type": "if_begin",
-  "condition": "check_result == false"
-},
-{
-  "type": "break"
-},
-{
-  "type": "if_end"
-},
-{
-  "type": "while_end"
+  "type": "BREAK",
+  "value": {},
+  "description": "Break out of loop"
 }
 ```
 
-## Controller System
-
-The controller system provides centralized management of automation execution, including start, stop, and pause functionality.
-
-### Controller Components
-
-- **Controller**: Central management object
-- **Control Signals**: Messages passed between components
-- **State Management**: Tracking execution state
-
-### Control Flow
-
-1. Controller receives start signal
-2. Controller initializes automation engine
-3. Engine executes actions, checking for control signals
-4. Controller processes stop signals and terminates gracefully
-
-### Stop Functionality
-
-The controller system enables graceful termination of automations:
-
 ```json
 {
-  "type": "stop_automation",
-  "value": "User requested stop"
+  "type": "CONTINUE",
+  "value": {},
+  "description": "Continue to next iteration"
 }
 ```
 
-## Browser Context
+### Condition Types
 
-Browser context refers to the state and environment of the browser during automation execution.
+| Condition | Description |
+|-----------|-------------|
+| `check_passed` | True if the last CHECK_ELEMENT action passed |
+| `check_failed` | True if the last CHECK_ELEMENT action failed |
+| `value_equals` | True if the actual value equals the expected value |
+| `value_not_equals` | True if the actual value does not equal the expected value |
 
-### Context Components
-
-- **Browser Instance**: The Chromium browser controlled by Playwright
-- **Page**: The current web page being automated
-- **Viewport**: Browser window dimensions
-- **Cookies**: Session cookies and storage
-- **LocalStorage**: Browser local storage
-
-### Context Management
+### Example Flow Control
 
 ```json
 {
-  "name": "Example Automation",
+  "name": "Flow Control Example",
+  "url": "https://example.com",
+  "actions": [
+    {
+      "type": "CHECK_ELEMENT",
+      "selector": ".notification",
+      "value": {
+        "check": "contains",
+        "value": "Success",
+        "attribute": "text"
+      },
+      "description": "Check for success notification"
+    },
+    {
+      "type": "IF_BEGIN",
+      "value": {
+        "condition": "check_passed"
+      },
+      "description": "If success notification found"
+    },
+    {
+      "type": "LOG_MESSAGE",
+      "value": {
+        "message": "Success notification found"
+      },
+      "description": "Log success"
+    },
+    {
+      "type": "IF_END",
+      "value": {},
+      "description": "End IF block"
+    },
+    {
+      "type": "WHILE_BEGIN",
+      "value": {
+        "condition": "check_failed"
+      },
+      "description": "While no success notification"
+    },
+    {
+      "type": "CLICK_BUTTON",
+      "selector": "#retry-button",
+      "description": "Click retry button"
+    },
+    {
+      "type": "WAIT",
+      "value": 2000,
+      "description": "Wait 2 seconds"
+    },
+    {
+      "type": "CHECK_ELEMENT",
+      "selector": ".notification",
+      "value": {
+        "check": "contains",
+        "value": "Success",
+        "attribute": "text"
+      },
+      "description": "Check for success notification"
+    },
+    {
+      "type": "WHILE_END",
+      "value": {},
+      "description": "End WHILE loop"
+    }
+  ]
+}
+```
+
+## Browser Context Management
+
+Browser context management is a crucial aspect of web automation. Automaton provides robust tools for managing browser instances, pages, and contexts.
+
+### Browser Lifecycle
+
+Automaton manages the entire browser lifecycle:
+
+1. **Initialization**: Creates a new browser instance with the specified configuration
+2. **Context Creation**: Creates a browser context for isolation
+3. **Page Creation**: Creates a new page/tab within the context
+4. **Navigation**: Navigates to the specified URL
+5. **Execution**: Executes the automation sequence
+6. **Cleanup**: Cleans up resources based on configuration
+
+### Browser Configuration
+
+Browser behavior can be configured through several options:
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `headless` | boolean | false | Run browser without visible UI |
+| `viewport` | object | {width: 1280, height: 720} | Browser viewport dimensions |
+| `keep_browser_open` | boolean | true | Keep browser open after automation completes |
+
+### Context Isolation
+
+Browser contexts provide isolation between automation runs:
+
+- **Cookies**: Each context has its own cookie jar
+- **LocalStorage**: Each context has isolated local storage
+- **SessionStorage**: Each context has isolated session storage
+- **Cache**: Each context has its own cache
+
+### Page Management
+
+Automaton can manage multiple pages within a single browser context:
+
+- **Navigation**: Navigate to different URLs
+- **Switching**: Switch between open pages/tabs
+- **Creation**: Open new pages/tabs as needed
+- **Closure**: Close pages when no longer needed
+
+### Example Browser Configuration
+
+```json
+{
+  "name": "Browser Configuration Example",
   "url": "https://example.com",
   "headless": false,
   "viewport": {
-    "width": 1600,
-    "height": 1000
+    "width": 1920,
+    "height": 1080
   },
-  "keep_browser_open": true
+  "keep_browser_open": true,
+  "actions": [
+    {
+      "type": "SWITCH_PANEL",
+      "selector": "#new-tab-button",
+      "description": "Open new tab"
+    },
+    {
+      "type": "WAIT_FOR_ELEMENT",
+      "selector": "h1",
+      "timeout": 10000,
+      "description": "Wait for page to load"
+    }
+  ]
 }
 ```
+
+## Execution Context
+
+The execution context is the internal state that Automaton maintains while running an automation sequence. It includes information about variables, loop states, conditional states, and more.
+
+### Context Components
+
+The execution context consists of several key components:
+
+1. **Variables**: A dictionary of variable names and values
+2. **Loop Stack**: A stack of active loops and their states
+3. **Conditional Stack**: A stack of active conditional blocks
+4. **Instruction Pointer**: The current position in the action sequence
+5. **Last Check Result**: The result of the last CHECK_ELEMENT action
+
+### State Management
+
+Automaton carefully manages state throughout execution:
+
+- **Variables**: Persist for the duration of the sequence
+- **Loop State**: Each loop maintains its own iteration count and condition state
+- **Conditional State**: Each conditional block maintains its execution state
+- **Error State**: Tracks errors and determines whether to continue execution
+
+### Execution Flow
+
+The execution context controls the flow of execution:
+
+1. **Sequential Execution**: Actions are executed in order by default
+2. **Conditional Execution**: Actions may be skipped based on conditional state
+3. **Loop Execution**: Actions may be repeated based on loop conditions
+4. **Error Recovery**: Execution may continue or halt based on error state
+
+### Context Persistence
+
+The execution context persists for the duration of a single automation sequence:
+
+- **Sequence Start**: Context is initialized with default values
+- **Sequence Execution**: Context is updated as actions are executed
+- **Sequence End**: Context is discarded (variables are not persisted between runs)
 
 ## Error Handling
 
-Automaton includes robust error handling mechanisms to manage failures and retries.
+Robust error handling is essential for reliable automation. Automaton provides comprehensive error handling and recovery mechanisms.
 
 ### Error Types
 
-- **Element Not Found**: Target element not located on page
-- **Timeout**: Action took longer than allowed time
-- **Network Error**: Network-related failure
-- **Authentication Error**: Login or permission failure
-- **Validation Error**: Content validation failed
+Automaton can encounter several types of errors:
 
-### Retry Mechanisms
-
-```json
-{
-  "type": "conditional_wait",
-  "value": {
-    "selector": "#dynamic-content",
-    "timeout": 30000,
-    "interval": 1000
-  }
-}
-```
+1. **Selector Errors**: Elements cannot be found with the provided selector
+2. **Timeout Errors**: Actions take longer than the specified timeout
+3. **Navigation Errors**: Page navigation fails or times out
+4. **Authentication Errors**: Login actions fail due to invalid credentials
+5. **Network Errors**: Network connectivity issues prevent action completion
+6. **Browser Errors**: Browser crashes or becomes unresponsive
 
 ### Error Recovery
 
-```json
-{
-  "type": "if_begin",
-  "condition": "error_occurred == true"
-},
-{
-  "type": "refresh_page"
-},
-{
-  "type": "wait",
-  "value": 2000
-},
-{
-  "type": "if_end"
-}
-```
+Automaton includes several error recovery strategies:
 
-## Logging
+1. **Retry Mechanisms**: Automatically retry failed actions with exponential backoff
+2. **Fallback Selectors**: Try alternative selectors if the primary one fails
+3. **Smart Waiting**: Wait for page stability before proceeding
+4. **State Reset**: Reset page state between actions to ensure clean execution
 
-Automaton provides comprehensive logging to track execution progress and debug issues.
+### Error Logging
 
-### Log Levels
-
-- **DEBUG**: Detailed diagnostic information
-- **INFO**: General information about execution
-- **WARNING**: Potential issues that don't stop execution
-- **ERROR**: Serious errors that may stop execution
-- **CRITICAL**: Critical errors that stop execution
-
-### Log Actions
+Automaton provides detailed error logging:
 
 ```json
 {
-  "type": "log_message",
-  "value": "Starting form submission process"
+  "success": false,
+  "actions_completed": 3,
+  "total_actions": 5,
+  "errors": [
+    {
+      "action_index": 3,
+      "action_type": "CLICK_BUTTON",
+      "action_description": "Click submit button",
+      "selector": "#submit-button",
+      "error": "Element not found: #submit-button",
+      "error_type": "SelectorError",
+      "page_url": "https://example.com/form",
+      "page_title": "Example Form"
+    }
+  ]
 }
 ```
 
-### Log Configuration
+### Error Handling Strategies
 
-```bash
-export AUTOMATON_LOG_LEVEL=DEBUG
+1. **Preventive**: Use robust selectors and appropriate timeouts
+2. **Detective**: Check for error conditions and handle them gracefully
+3. **Corrective**: Implement retry logic and fallback mechanisms
+4. **Adaptive**: Learn from errors and adjust future behavior
+
+### Example Error Handling
+
+```json
+{
+  "name": "Error Handling Example",
+  "url": "https://example.com",
+  "actions": [
+    {
+      "type": "WAIT_FOR_ELEMENT",
+      "selector": "#submit-button",
+      "timeout": 10000,
+      "description": "Wait for submit button"
+    },
+    {
+      "type": "CHECK_ELEMENT",
+      "selector": "#submit-button",
+      "value": {
+        "check": "not_zero",
+        "attribute": "text"
+      },
+      "description": "Check if button exists"
+    },
+    {
+      "type": "IF_BEGIN",
+      "value": {
+        "condition": "check_passed"
+      },
+      "description": "If button exists"
+    },
+    {
+      "type": "CLICK_BUTTON",
+      "selector": "#submit-button",
+      "description": "Click submit button"
+    },
+    {
+      "type": "IF_END",
+      "value": {},
+      "description": "End IF block"
+    },
+    {
+      "type": "LOG_MESSAGE",
+      "value": {
+        "message": "Submit button not found, using alternative approach"
+      },
+      "description": "Log error message"
+    }
+  ]
+}
 ```
 
 ## Next Steps
 
-With these core concepts understood, you can:
+Now that you understand the core concepts of Automaton, you can:
 
-1. [Read the User Guide](4_user_guide.md) for practical usage examples
-2. [Explore the API Reference](5_api_reference.md) for technical details
-3. [Check Component Documentation](6_components_reference.md) for implementation specifics
-4. [Review Advanced Usage](7_advanced_usage.md) for complex scenarios
-
----
-
-*This document is part of the Automaton documentation series. For a complete list of documentation, see the [main README](../README.md).*
+1. Follow the [User Guide](4_user_guide.md) to create your first automation
+2. Explore the [API Reference](5_api_reference.md) for detailed technical information
+3. Learn about [Advanced Usage](7_advanced_usage.md) for more complex scenarios
+4. Check the [Troubleshooting Guide](8_troubleshooting_guide.md) for help with common issues

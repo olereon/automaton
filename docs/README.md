@@ -14,7 +14,7 @@ Our documentation is organized into a comprehensive series of guides, each focus
 - [Project Overview](1_overview_project.md) - Introduction, purpose, features, and architecture
 - [Installation & Setup](2_installation_setup.md) - Prerequisites, installation steps, and configuration
 - [Core Concepts](3_core_concepts.md) - Key terminology, fundamental principles, and mental models
-- [Quick Start Guide](12_quick_start.md) - Fast-track guide to get you running in minutes
+- [Quick Start Guide](18_quick_start.md) - Fast-track guide to get you running in minutes
 
 #### Using Automaton
 - [User Guide](4_user_guide.md) - Basic usage, common tasks, and workflows
@@ -25,10 +25,19 @@ Our documentation is organized into a comprehensive series of guides, each focus
 - [Advanced Usage](7_advanced_usage.md) - Advanced features, customization, and optimization
 - [Troubleshooting Guide](8_troubleshooting_guide.md) - Common issues, solutions, and debugging
 - [Best Practices](11_best_practices.md) - Recommended patterns and techniques
+- [Essential Guides](16_essential_guides.md) - Collection of focused guides for specific features
+- [Design System Guide](20_design_system_guide.md) - UI components and design patterns
+- [Modern Components Guide](22_modern_components_guide.md) - Modern component architecture and usage
+- [Documentation Improvement Plan](23_documentation_improvement_plan.md) - Plan for enhancing documentation quality
 
 #### Development & Deployment
 - [Contributing Guide](9_contributing_guide.md) - Development setup, coding standards, and PR process
 - [Deployment Guide](10_deployment_guide.md) - Deployment options, environments, and CI/CD
+
+#### References & Resources
+- [API Documentation](17_api_documentation.md) - Comprehensive API reference with endpoints and methods
+- [Configuration Reference](19_configuration_reference.md) - Complete configuration options and examples
+- [Examples and Tutorials](21_examples_and_tutorials.md) - Practical examples and step-by-step tutorials
 
 ### Essential Guides
 - [Stop Functionality Guide](STOP_FUNCTIONALITY_GUIDE.md) - Stop mechanism implementation
@@ -59,7 +68,7 @@ These modules provide better separation of concerns and make the codebase more m
 ## Recommended Reading Path
 
 ### For New Users
-1. Start with the [Quick Start Guide](12_quick_start.md) to get up and running quickly
+1. Start with the [Quick Start Guide](18_quick_start.md) to get up and running quickly
 2. Read the [Project Overview](1_overview_project.md) to understand what Automaton can do
 3. Follow the [Installation & Setup](2_installation_setup.md) guide to configure your environment
 4. Review [Core Concepts](3_core_concepts.md) to understand the fundamentals
@@ -70,11 +79,18 @@ These modules provide better separation of concerns and make the codebase more m
 2. Explore [Advanced Usage](7_advanced_usage.md) for complex scenarios
 3. Consult the [API Reference](5_api_reference.md) for technical details
 4. Check the [Troubleshooting Guide](8_troubleshooting_guide.md) for common issues
+5. Reference the [Essential Guides](16_essential_guides.md) for specific feature documentation
+6. Explore the [Design System Guide](20_design_system_guide.md) for UI components
+7. Check the [Configuration Reference](19_configuration_reference.md) for detailed configuration options
+8. Review the [Examples and Tutorials](21_examples_and_tutorials.md) for practical implementations
 
 ### For Developers
 1. Start with the [Contributing Guide](9_contributing_guide.md) for development setup
 2. Review the [Component Reference](6_components_reference.md) for implementation details
 3. Check the [Deployment Guide](10_deployment_guide.md) for deployment options
+4. Consult the [API Documentation](17_api_documentation.md) for detailed API information
+5. Review the [Configuration Reference](19_configuration_reference.md) for configuration options
+6. Explore the [Examples and Tutorials](21_examples_and_tutorials.md) for implementation patterns
 
 ## Documentation Conventions
 

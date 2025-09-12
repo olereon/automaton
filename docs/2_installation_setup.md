@@ -1,271 +1,332 @@
-# Installing and Setting Up Automaton
-
-## Introduction
-
-This guide provides step-by-step instructions for installing and setting up Automaton on your system. Follow these instructions carefully to ensure a successful installation and optimal performance.
+# Installation and Setup Guide
 
 ## Table of Contents
+- [System Requirements](#system-requirements)
+- [Installation Methods](#installation-methods)
+- [Configuration](#configuration)
+- [Verification](#verification)
+- [Troubleshooting Installation](#troubleshooting-installation)
 
-1. [Prerequisites](#prerequisites)
-2. [Installation Steps](#installation-steps)
-3. [Verification](#verification)
-4. [Configuration](#configuration)
-5. [Troubleshooting](#troubleshooting)
-6. [Next Steps](#next-steps)
+## System Requirements
 
-## Prerequisites
-
-Before installing Automaton, ensure your system meets the following requirements:
-
-### System Requirements
-- **Operating System**: Windows 10+, macOS 10.14+, or Linux (Ubuntu 18.04+ recommended)
-- **RAM**: Minimum 4GB, 8GB recommended
-- **Storage**: Minimum 1GB free space
-- **Network**: Internet connection for downloading dependencies
+### Hardware Requirements
+- **RAM**: 4GB minimum, 8GB recommended
+- **Storage**: 500MB minimum for installation, plus additional space for browser data
+- **Processor**: Any modern CPU (2015 or newer)
 
 ### Software Requirements
-- **Python**: Version 3.11 or higher
-- **pip**: Python package manager (included with Python)
-- **Chrome/Chromium**: Browser for automation (Chrome recommended)
+- **Operating System**: 
+  - Windows 10 or later
+  - macOS 10.14 or later
+  - Linux (Ubuntu 18.04+, Debian 10+, or equivalent)
+- **Python**: 3.8 or later (3.11 recommended for full compatibility)
+- **Web Browser**: Chrome, Firefox, Safari, or Edge (latest stable version)
 
-### Checking Python Version
-To verify your Python version, open a terminal or command prompt and run:
+### Python Dependencies
+Automaton requires several Python packages that will be automatically installed:
+- `playwright` for browser automation
+- `asyncio` for asynchronous operations
+- `tkinter` for the GUI interface (usually included with Python)
+- Additional dependencies as listed in `requirements.txt`
 
-```bash
-python3 --version
-```
+## Installation Methods
 
-or
+### Method 1: Using pip (Recommended)
 
-```bash
-python --version
-```
+1. **Install Python 3.11** (if not already installed):
+   - **Windows**: Download from [python.org](https://python.org)
+   - **macOS**: Use Homebrew: `brew install python@3.11`
+   - **Linux**: Use your package manager, e.g., `sudo apt install python3.11`
 
-The output should show Python 3.11 or higher. If you have an older version, please upgrade Python before proceeding.
+2. **Install Automaton**:
+   ```bash
+   pip install automaton
+   ```
 
-## Installation Steps
+3. **Install Playwright browsers**:
+   ```bash
+   python3.11 -m playwright install
+   ```
 
-### Step 1: Clone the Repository
+### Method 2: From Source
 
-First, clone the Automaton repository from GitHub:
+1. **Clone the repository**:
+   ```bash
+   git clone https://github.com/yourusername/automaton.git
+   cd automaton
+   ```
 
-```bash
-git clone https://github.com/yourusername/automaton.git
-cd automaton
-```
+2. **Install dependencies**:
+   ```bash
+   pip install -r requirements.txt
+   ```
 
-### Step 2: Create a Virtual Environment
+3. **Install the package in development mode**:
+   ```bash
+   pip install -e .
+   ```
 
-Using a virtual environment is highly recommended to isolate dependencies:
+4. **Install Playwright browsers**:
+   ```bash
+   python3.11 -m playwright install
+   ```
 
-```bash
-python3.11 -m venv venv
-```
+### Method 3: Using the Makefile (Linux/macOS)
 
-#### Activate the Virtual Environment
+1. **Clone the repository**:
+   ```bash
+   git clone https://github.com/yourusername/automaton.git
+   cd automaton
+   ```
 
-- **On Windows**:
-  ```bash
-  venv\Scripts\activate
-  ```
+2. **Run the setup command**:
+   ```bash
+   make setup
+   ```
 
-- **On macOS/Linux**:
-  ```bash
-  source venv/bin/activate
-  ```
-
-After activation, your command prompt should show the virtual environment name, like `(venv)`.
-
-### Step 3: Install Dependencies
-
-Install the required Python packages using pip:
-
-```bash
-pip install -r requirements.txt
-```
-
-This will install all necessary dependencies including Playwright, which is used for browser automation.
-
-### Step 4: Install Playwright Browsers
-
-Playwright requires browser binaries to function. Install them with:
-
-```bash
-playwright install chromium
-```
-
-This downloads and installs the Chromium browser that Playwright will control.
-
-### Step 5: Verify Installation
-
-Confirm that the installation was successful by testing the imports:
-
-```bash
-python3.11 -c "import playwright; print('✅ Playwright installation successful!')"
-python3.11 -c "import src.core.engine; print('✅ Automaton installation successful!')"
-```
-
-If both commands print success messages, your installation is complete.
+   This command will:
+   - Install Python dependencies
+   - Install the package in development mode
+   - Install Playwright browsers
+   - Run code formatting and linting checks
 
 ## Configuration
 
+### Initial Configuration
+
+1. **Create a configuration directory**:
+   ```bash
+   mkdir -p ~/.config/automaton
+   ```
+
+2. **Create a basic configuration file**:
+   ```bash
+   touch ~/.config/automaton/config.json
+   ```
+
+3. **Edit the configuration file** with your preferred settings:
+   ```json
+   {
+     "default_browser": "chromium",
+     "headless": false,
+     "viewport": {
+       "width": 1280,
+       "height": 720
+     },
+     "timeout": 10000,
+     "downloads_directory": "~/Downloads/automaton"
+   }
+   ```
+
+### Configuration Options
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `default_browser` | string | "chromium" | Default browser to use ("chromium", "firefox", "webkit") |
+| `headless` | boolean | false | Run browser in headless mode (no visible UI) |
+| `viewport.width` | integer | 1280 | Default browser viewport width |
+| `viewport.height` | integer | 720 | Default browser viewport height |
+| `timeout` | integer | 10000 | Default timeout for actions in milliseconds |
+| `downloads_directory` | string | "~/Downloads/automaton" | Directory for downloaded files |
+| `keep_browser_open` | boolean | true | Keep browser open after automation completes |
+| `log_level` | string | "INFO" | Logging level ("DEBUG", "INFO", "WARNING", "ERROR") |
+
 ### Environment Variables
 
-Automaton can be configured using environment variables. These are optional but recommended for customization:
+You can also configure Automaton using environment variables:
 
 ```bash
-# Optional configuration
-export AUTOMATON_HEADLESS=true
-export AUTOMATON_BROWSER_PATH=/path/to/chrome
-export AUTOMATON_DOWNLOAD_DIR=/path/to/downloads
-export AUTOMATON_LOG_LEVEL=DEBUG
+export AUTOMATON_BROWSER=chromium
+export AUTOMATON_HEADLESS=false
+export AUTOMATON_VIEWPORT_WIDTH=1280
+export AUTOMATON_VIEWPORT_HEIGHT=720
+export AUTOMATON_TIMEOUT=10000
+export AUTOMATON_DOWNLOADS_DIR=~/Downloads/automaton
 ```
 
-#### Common Environment Variables
+### Credential Management
 
-| Variable | Description | Default Value |
-|----------|-------------|---------------|
-| `AUTOMATON_HEADLESS` | Run browser in headless mode | `false` |
-| `AUTOMATON_BROWSER_PATH` | Path to browser executable | Auto-detected |
-| `AUTOMATON_DOWNLOAD_DIR` | Directory for downloaded files | `./downloads` |
-| `AUTOMATON_LOG_LEVEL` | Logging verbosity level | `INFO` |
+For secure handling of credentials (usernames, passwords, API keys), Automaton supports encrypted credential storage:
 
-### Configuration File
+1. **Create a credentials directory**:
+   ```bash
+   mkdir -p ~/.config/automaton/credentials
+   ```
 
-For more complex configurations, you can use a JSON configuration file:
+2. **Create a credentials file**:
+   ```bash
+   touch ~/.config/automaton/credentials/my_service.json
+   ```
 
-```json
-{
-  "name": "My Automation",
-  "url": "https://example.com",
-  "headless": false,
-  "viewport": {
-    "width": 1600,
-    "height": 1000
-  },
-  "keep_browser_open": true,
-  "actions": []
-}
-```
+3. **Add your credentials** (the file will be encrypted when first used):
+   ```json
+   {
+     "username": "your_username",
+     "password": "your_password"
+   }
+   ```
 
-#### Configuration File Options
-
-| Option | Type | Description | Default |
-|--------|------|-------------|---------|
-| `name` | String | Name of the automation | Required |
-| `url` | String | Starting URL for the automation | Required |
-| `headless` | Boolean | Run browser without UI | `false` |
-| `viewport` | Object | Browser viewport dimensions | `{"width": 1280, "height": 720}` |
-| `keep_browser_open` | Boolean | Keep browser open after completion | `false` |
-| `actions` | Array | List of automation actions | `[]` |
+4. **Reference credentials in your automation configurations**:
+   ```json
+   {
+     "credential_file": "my_service.json",
+     "credential_key": "my_service"
+   }
+   ```
 
 ## Verification
 
-### Testing the GUI Interface
+### Verify Installation
 
-Launch the graphical interface to verify it works correctly:
-
-```bash
-python3.11 automaton-gui.py
-```
-
-A window should appear with the Automaton GUI. You can:
-1. Enter an automation name and URL
-2. Add actions using the interface
-3. Save and run automations
-
-### Testing the CLI Interface
-
-Test the command-line interface:
-
-```bash
-# List available actions
-python3.11 automaton-cli.py list-actions
-
-# Create a simple test automation
-python3.11 automaton-cli.py create -n "Test" -u "https://example.com" -o test.json
-
-# Run the test automation
-python3.11 automaton-cli.py run -c test.json --show-browser
-```
-
-If all commands execute without errors, your installation is working correctly.
-
-## Troubleshooting
-
-### Common Installation Issues
-
-#### Python Version Incompatible
-**Problem**: Automaton requires Python 3.11+, but you have an older version.
-
-**Solution**: Upgrade Python:
-- **Ubuntu/Debian**: Use `deadsnakes` PPA or compile from source
-- **macOS**: Use Homebrew: `brew install python@3.11`
-- **Windows**: Download from python.org
-
-#### Playwright Installation Fails
-**Problem**: `playwright install chromium` fails with network errors.
-
-**Solution**:
-1. Check your internet connection
-2. Try again: `playwright install chromium`
-3. If behind a proxy, configure proxy settings:
+1. **Check if Automaton is installed correctly**:
    ```bash
-   export HTTPS_PROXY=http://your-proxy:port
-   playwright install chromium
+   automaton --version
    ```
 
-#### Import Errors
-**Problem**: `ImportError: No module named 'src'` when running Automaton.
-
-**Solution**: Ensure you're in the project root directory and the virtual environment is activated:
-```bash
-cd /path/to/automaton
-source venv/bin/activate  # or venv\Scripts\activate on Windows
-```
-
-#### Browser Not Found
-**Problem**: Error message indicating browser not found.
-
-**Solution**:
-1. Install Playwright browsers: `playwright install chromium`
-2. Or specify browser path:
+2. **Test the GUI interface**:
    ```bash
-   export AUTOMATON_BROWSER_PATH=/usr/bin/chromium
+   automaton-gui
    ```
 
-#### Permission Errors
-**Problem**: Permission denied when creating files or directories.
+3. **Test the CLI interface**:
+   ```bash
+   automaton-cli --help
+   ```
 
-**Solution**: Ensure you have write permissions in the project directory and download directory:
-```bash
-# Check permissions
-ls -la
-# Change ownership if needed (Linux/macOS)
-sudo chown -R $USER:$USER /path/to/automaton
+### Run a Simple Test
+
+Create a simple test automation file named `test_automation.json`:
+
+```json
+{
+  "name": "Test Automation",
+  "url": "https://example.com",
+  "headless": true,
+  "actions": [
+    {
+      "type": "WAIT_FOR_ELEMENT",
+      "selector": "h1",
+      "timeout": 10000,
+      "description": "Wait for page title"
+    },
+    {
+      "type": "CHECK_ELEMENT",
+      "selector": "h1",
+      "value": {
+        "check": "contains",
+        "value": "Example",
+        "attribute": "text"
+      },
+      "description": "Check page title"
+    }
+  ]
+}
 ```
+
+Run the test automation:
+
+```bash
+automaton-cli run test_automation.json
+```
+
+If the test runs successfully and reports "Automation completed: true", your installation is working correctly.
+
+## Troubleshooting Installation
+
+### Common Issues
+
+#### Python Version Compatibility
+**Issue**: Automaton requires Python 3.8 or later, but your system has an older version.
+
+**Solution**:
+1. Check your Python version:
+   ```bash
+   python --version
+   ```
+2. Install Python 3.11 or later using your system's package manager or from python.org.
+3. Use the specific Python version when installing:
+   ```bash
+   python3.11 -m pip install automaton
+   ```
+
+#### Playwright Browser Installation
+**Issue**: Playwright browsers are not installed or are outdated.
+
+**Solution**:
+1. Install Playwright browsers:
+   ```bash
+   python3.11 -m playwright install
+   ```
+2. If you encounter permission issues, try:
+   ```bash
+   python3.11 -m playwright install --with-deps
+   ```
+
+#### Missing Dependencies
+**Issue**: Some required packages are not installed.
+
+**Solution**:
+1. Install all dependencies from requirements.txt:
+   ```bash
+   pip install -r requirements.txt
+   ```
+2. If you're using a virtual environment, make sure it's activated:
+   ```bash
+   source venv/bin/activate  # Linux/macOS
+   # or
+   .\venv\Scripts\activate  # Windows
+   ```
+
+#### GUI Interface Issues
+**Issue**: The GUI interface fails to start or displays errors.
+
+**Solution**:
+1. Check if tkinter is installed:
+   ```bash
+   python -c "import tkinter; print('tkinter is available')"
+   ```
+2. If tkinter is not available, install it:
+   - **Ubuntu/Debian**: `sudo apt install python3-tk`
+   - **Fedora**: `sudo dnf install python3-tkinter`
+   - **macOS**: tkinter is usually included with Python
+   - **Windows**: tkinter is usually included with Python
+
+#### Permission Issues
+**Issue**: Permission denied errors when installing or running Automaton.
+
+**Solution**:
+1. Install Automaton for the current user only:
+   ```bash
+   pip install --user automaton
+   ```
+2. Ensure the user has write permissions to the installation directories.
+3. On Linux/macOS, consider using a virtual environment to avoid system-wide permission issues.
 
 ### Getting Help
 
 If you encounter issues not covered here:
 
-1. Check the [Troubleshooting Guide](8_troubleshooting_guide.md) for more detailed solutions
-2. Search existing issues on [GitHub Issues](https://github.com/yourusername/automaton/issues)
-3. Create a new issue with:
-   - Operating system and version
-   - Python version
-   - Complete error message
-   - Steps to reproduce the problem
+1. **Check the logs**:
+   ```bash
+   automaton-cli --log-level DEBUG run your_automation.json
+   ```
+
+2. **Report an issue**:
+   Visit the [GitHub Issues page](https://github.com/yourusername/automaton/issues) and create a new issue with:
+   - Your operating system and version
+   - Python version (`python --version`)
+   - Automaton version (`automaton --version`)
+   - Full error message and stack trace
+   - Steps to reproduce the issue
+
+3. **Community Support**:
+   Join our community forum or chat channel for help from other users and developers.
 
 ## Next Steps
 
-With Automaton successfully installed, you can:
+After successfully installing and setting up Automaton, you can:
 
-1. [Explore Core Concepts](3_core_concepts.md) to understand key terminology
-2. [Read the User Guide](4_user_guide.md) for basic usage instructions
-3. [Try Example Automations](../examples/) to see Automaton in action
-4. [Check API Reference](5_api_reference.md) for technical details
-
----
-
-*This document is part of the Automaton documentation series. For a complete list of documentation, see the [main README](../README.md).*
+1. Learn about [Core Concepts](3_core_concepts.md) to understand how Automaton works
+2. Follow the [User Guide](4_user_guide.md) to create your first automation
+3. Explore the [API Reference](5_api_reference.md) for advanced usage
+4. Check out the [Component Documentation](6_components_reference.md) for information on specific components
